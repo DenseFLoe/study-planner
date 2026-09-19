@@ -1,0 +1,22 @@
+.build/
+.swiftpm/
+dist/
+.DS_Store
+
+# Personal data, signing credentials, and local build products
+Android/backups/
+Android/signing/
+Android/build/
+Android/tools/
+Android/tools*/
+Tests/SyncVerification/
+*.log
+*.store
+*.store-wal
+*.store-shm
+*.jks
+
+# Editor and operating-system files
+.idea/
+.vscode/
+*.swp

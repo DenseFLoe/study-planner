@@ -1,0 +1,55 @@
+{
+  "schemaVersion": 1,
+  "courses": [],
+  "fixedEvents": [],
+  "tasks": [],
+  "completions": [],
+  "settings": {
+    "minimumScheduleUnit": 60,
+    "notificationMinute": 1260,
+    "availability": [
+      {
+        "id": "default-availability-1",
+        "weekday": 1,
+        "startMinute": 480,
+        "endMinute": 1380
+      },
+      {
+        "id": "default-availability-2",
+        "weekday": 2,
+        "startMinute": 480,
+        "endMinute": 1380
+      },
+      {
+        "id": "default-availability-3",
+        "weekday": 3,
+        "startMinute": 480,
+        "endMinute": 1380
+      },
+      {
+        "id": "default-availability-4",
+        "weekday": 4,
+        "startMinute": 480,
+        "endMinute": 1380
+      },
+      {
+        "id": "default-availability-5",
+        "weekday": 5,
+        "startMinute": 480,
+        "endMinute": 1380
+      },
+      {
+        "id": "default-availability-6",
+        "weekday": 6,
+        "startMinute": 480,
+        "endMinute": 1380
+      },
+      {
+        "id": "default-availability-7",
+        "weekday": 7,
+        "startMinute": 480,
+        "endMinute": 1380
+      }
+    ]
+  }
+}
