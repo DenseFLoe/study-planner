@@ -1,0 +1,15 @@
+#!/bin/zsh
+set -euo pipefail
+
+root="$(git rev-parse --show-toplevel)"
+cd "$root"
+
+git diff --cached --check
+
+blocked="$(git diff --cached --name-only --diff-filter=ACMR | grep -E '(^|/)(\.env($|\.)|signing/|backups/|build/|dist/|\.DS_Store$)|\.(jks|keystore|p12|mobileprovision|store|store-wal|store-shm)$' || true)"
+if [[ -n "$blocked" ]]; then
+  print -u2 "拒绝提交：下列文件可能包含个人数据、签名凭据或构建产物："
+  print -u2 -- "$blocked"
+  print -u2 "请将它们移出暂存区，或在确认可公开后调整 .gitignore 和此检查。"
+  exit 1
+fi

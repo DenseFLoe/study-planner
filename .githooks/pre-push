@@ -1,0 +1,12 @@
+#!/bin/zsh
+set -euo pipefail
+
+root="$(git rev-parse --show-toplevel)"
+cd "$root"
+
+print "推送前验证：Swift 单元测试"
+./Scripts/test.sh
+print "推送前验证：Android 排程核心测试"
+./Android/test.sh
+print "推送前验证：macOS 应用构建"
+./Scripts/build-app.sh debug
