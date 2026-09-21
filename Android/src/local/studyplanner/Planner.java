@@ -18,6 +18,20 @@ public final class Planner {
         } catch(Exception e){throw new IllegalStateException(e);}
     }
     public static String id(){return UUID.randomUUID().toString().toUpperCase(Locale.ROOT);}
+    static boolean canonicalID(String value){
+        try{return UUID.fromString(value).toString().toUpperCase(Locale.ROOT).equals(value);}catch(Exception ignored){return false;}
+    }
+    /** 1.2 shipped seven readable default IDs that Swift's UUID decoder cannot accept. */
+    static boolean migrateLegacyAvailabilityIDs(JSONObject state)throws Exception {
+        boolean changed=false;JSONArray availability=state.getJSONObject("settings").getJSONArray("availability");
+        for(int i=0;i<availability.length();i++){
+            JSONObject item=availability.getJSONObject(i);String value=item.optString("id","");
+            if(canonicalID(value))continue;
+            if(!value.matches("default-availability-[1-7]"))throw new IllegalArgumentException("可学习时段 ID 无效");
+            item.put("id",stableID("availability|legacy|"+value));changed=true;
+        }
+        return changed;
+    }
     public static double now(){return System.currentTimeMillis()/1000.0-EPOCH;}
     public static LocalDate day(double s){return Instant.ofEpochMilli((long)((s+EPOCH)*1000)).atZone(ZONE).toLocalDate();}
     public static double at(LocalDate d,int m){return d.atStartOfDay(ZONE).plusMinutes(m).toEpochSecond()-EPOCH;}
@@ -36,7 +50,7 @@ public final class Planner {
     public static void confirm(JSONObject s,String taskID,int actual,double now)throws Exception{JSONObject t=null;for(JSONObject v:list(s.getJSONArray("tasks")))if(v.getString("id").equals(taskID))t=v;if(t==null||!pending(t))throw new IllegalArgumentException("该任务已确认，请刷新后重试");if(actual<0||actual>t.getInt("durationMinutes"))throw new IllegalArgumentException("实际时长必须在 0 与计划时长之间");JSONObject c=course(s,t.getString("courseID"));if(c==null)throw new IllegalArgumentException("找不到课程");int credit=Math.min(actual,remaining(s,c));t.put("completedMinutes",credit).put("confirmedAt",now).put("status",actual==0?"missed":actual==t.getInt("durationMinutes")?"completed":"partial");s.getJSONArray("completions").put(new JSONObject().put("id",stableID("completion|"+taskID)).put("courseID",c.getString("id")).put("taskID",taskID).put("minutes",credit).put("recordedAt",now));}
     public static void undoConfirmation(JSONObject s,String taskID,double now)throws Exception{JSONObject t=null;for(JSONObject v:list(s.getJSONArray("tasks")))if(v.getString("id").equals(taskID))t=v;if(t==null||!t.has("confirmedAt"))throw new IllegalArgumentException("该任务尚未确认，无需撤销");JSONArray records=s.getJSONArray("completions");boolean removed=false;for(int i=records.length()-1;i>=0;i--)if(records.getJSONObject(i).optString("taskID").equals(taskID)){records.remove(i);removed=true;}if(!removed)throw new IllegalArgumentException("找不到该任务的完成记录");t.remove("confirmedAt");t.put("completedMinutes",0).put("status",day(t.getDouble("start")).equals(day(now))?"planned":"future");}
     public static void put(JSONArray a,JSONObject v)throws Exception{for(int i=0;i<a.length();i++)if(a.getJSONObject(i).getString("id").equals(v.getString("id"))){a.put(i,v);return;}a.put(v);}
-    public static void validate(JSONObject s)throws Exception{if(s.getInt("schemaVersion")!=1)throw new IllegalArgumentException("不支持此备份版本");for(String key:new String[]{"courses","fixedEvents","tasks","completions"}){Set<String> ids=new HashSet<>();for(JSONObject o:list(s.getJSONArray(key)))if(o==null||!ids.add(o.getString("id")))throw new IllegalArgumentException("数据缺少 ID 或重复");}JSONObject settings=s.getJSONObject("settings");if(settings.getInt("minimumScheduleUnit")<1)throw new IllegalArgumentException("最小时间块无效");settings.getJSONArray("availability");for(JSONObject t:list(s.getJSONArray("tasks")))if(course(s,t.getString("courseID"))==null||t.getInt("durationMinutes")<=0)throw new IllegalArgumentException("任务数据不完整");}
+    public static void validate(JSONObject s)throws Exception{if(s.getInt("schemaVersion")!=1)throw new IllegalArgumentException("不支持此备份版本");for(String key:new String[]{"courses","fixedEvents","tasks","completions"}){Set<String> ids=new HashSet<>();for(JSONObject o:list(s.getJSONArray(key)))if(o==null||!ids.add(o.getString("id")))throw new IllegalArgumentException("数据缺少 ID 或重复");}JSONObject settings=s.getJSONObject("settings");if(settings.getInt("minimumScheduleUnit")<1)throw new IllegalArgumentException("最小时间块无效");migrateLegacyAvailabilityIDs(s);Set<String> availabilityIDs=new HashSet<>();for(JSONObject a:list(settings.getJSONArray("availability")))if(a==null||!canonicalID(a.optString("id"))||!availabilityIDs.add(a.getString("id"))||a.getInt("weekday")<1||a.getInt("weekday")>7||a.getInt("startMinute")<0||a.getInt("endMinute")>1440||a.getInt("startMinute")>=a.getInt("endMinute"))throw new IllegalArgumentException("可学习时段数据无效");for(JSONObject t:list(s.getJSONArray("tasks")))if(course(s,t.getString("courseID"))==null||t.getInt("durationMinutes")<=0)throw new IllegalArgumentException("任务数据不完整");}
     public static void saveEvent(JSONObject s,JSONObject event,double now)throws Exception{
         int start=event.getInt("startMinute"),end=event.getInt("endMinute");if(start<0||end>1440||start>=end)throw new IllegalArgumentException("结束时间必须晚于开始时间");
         JSONObject old=null;JSONArray events=s.getJSONArray("fixedEvents");for(JSONObject e:list(events))if(e.getString("id").equals(event.getString("id")))old=e;

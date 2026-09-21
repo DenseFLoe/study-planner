@@ -157,7 +157,7 @@ struct SettingsView: View {
     @State private var settings = AppSettings()
     @State private var saved = false
     @State private var syncHost = ""
-    @State private var pairingText = ""
+    @State private var pairingRequest: PairingRequest?
     private var valid: Bool {
         (1...1440).contains(settings.minimumScheduleUnit) && settings.availability.allSatisfy { $0.startMinute >= 0 && $0.endMinute <= 1440 && $0.startMinute < $0.endMinute }
     }
@@ -197,12 +197,24 @@ struct SettingsView: View {
                     if store.syncLedger.lastSuccess > 0 {
                         Text("最后同步：" + Date(timeIntervalSince1970: store.syncLedger.lastSuccess).formatted())
                     }
-                    Text("先在 Android 开启接收窗口，再同步。自动同步在启动或回到前台时检查；完成后当天不再自动联网。").font(.caption).foregroundStyle(.secondary)
+                    Text("首次配对：Mac 生成二维码，Android 扫码后开启两分钟接收窗口；以后只需两端点击立即同步。自动同步在启动或回到前台时检查。").font(.caption).foregroundStyle(.secondary)
                     TextField("手机热点 IP", text: $syncHost)
                     Button("读取当前网关") { Task { syncHost = await SyncClient.gateway() ?? "" } }
-                    SecureField("首次配对信息（配对码.证书指纹）", text: $pairingText)
+                    if let pairingRequest {
+                        PairingQRCodeView(payload: pairingRequest.payload)
+                        Text("在 Android 的热点同步设置中点击“扫描 Mac 配对二维码”。二维码不包含日程内容，将在 (pairingRequest.expiresAt.formatted(date: .omitted, time: .shortened)) 失效。")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
                     HStack {
-                        Button("配对并同步") { store.startSync(host: syncHost, pairingText: pairingText) }.disabled(store.syncBusy || pairingText.isEmpty)
+                        Button(pairingRequest == nil ? "生成配对二维码" : "重新生成二维码") {
+                            do { pairingRequest = try SyncClient.makePairingRequest() }
+                            catch { store.errorMessage = error.localizedDescription }
+                            if syncHost.isEmpty { Task { syncHost = await SyncClient.gateway() ?? "" } }
+                        }
+                        if let pairingRequest {
+                            Button("扫码后配对并同步") { store.startSync(host: syncHost, pairingText: pairingRequest.payload) }
+                                .disabled(store.syncBusy || syncHost.isEmpty)
+                        }
                         Button(store.syncBusy ? "立即同步（排队）" : "立即同步") { store.startSync() }
                     }
                     DisclosureGroup("本次运行同步日志") {
@@ -223,7 +235,7 @@ struct SettingsView: View {
             }.padding(20)
         }.onAppear { settings = store.state.settings; syncHost = (try? PairingVault.load())?.host ?? "" }
         .onChange(of: settings) { _, _ in saved = false }
-        .onChange(of: store.syncLedger.lastSuccess) { _, _ in pairingText = "" }
+        .onChange(of: store.syncLedger.lastSuccess) { _, _ in pairingRequest = nil }
     }
 }
 struct CompletionEditor: View {

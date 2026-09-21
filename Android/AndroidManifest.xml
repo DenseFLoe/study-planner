@@ -1,10 +1,14 @@
-<manifest xmlns:android="http://schemas.android.com/apk/res/android" package="local.studyplanner.android" android:versionCode="3" android:versionName="1.2">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android" package="local.studyplanner.android" android:versionCode="4" android:versionName="1.3">
     <uses-sdk android:minSdkVersion="26" android:targetSdkVersion="35" />
     <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.CAMERA" />
+    <uses-feature android:name="android.hardware.camera" android:required="false" />
+    <uses-feature android:name="android.hardware.camera.any" android:required="false" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
     <application android:label="学习日程" android:theme="@style/AppTheme" android:icon="@drawable/app_icon" android:allowBackup="false" android:supportsRtl="true">
         <service android:name="local.studyplanner.SyncWindowService" android:exported="false" android:foregroundServiceType="dataSync" />
+        <activity android:name="local.studyplanner.QrScannerActivity" android:exported="false" android:screenOrientation="portrait" />
         <activity android:name="local.studyplanner.MainActivity" android:exported="true" android:windowSoftInputMode="adjustResize">
             <intent-filter><action android:name="android.intent.action.MAIN"/><category android:name="android.intent.category.LAUNCHER"/></intent-filter>
         </activity>

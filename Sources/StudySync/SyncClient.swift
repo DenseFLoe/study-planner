@@ -10,6 +10,34 @@ public struct Pairing: Codable, Sendable {
     public var token: String
     public var device: String
 }
+public struct PairingRequest: Equatable, Sendable {
+    public let secret: String
+    public let expiresAt: Date
+
+    public var payload: String {
+        var components = URLComponents()
+        components.scheme = "studyplanner"
+        components.host = "pair"
+        components.queryItems = [
+            URLQueryItem(name: "v", value: "2"),
+            URLQueryItem(name: "secret", value: secret),
+            URLQueryItem(name: "expires", value: String(Int(expiresAt.timeIntervalSince1970)))
+        ]
+        return components.string ?? ""
+    }
+
+    public static func parse(_ value: String, now: Date = Date()) -> PairingRequest? {
+        guard let components = URLComponents(string: value), components.scheme == "studyplanner", components.host == "pair",
+              components.queryItems?.first(where: { $0.name == "v" })?.value == "2",
+              let secret = components.queryItems?.first(where: { $0.name == "secret" })?.value,
+              secret.count == 64, secret.allSatisfy(\.isHexDigit),
+              let rawExpiry = components.queryItems?.first(where: { $0.name == "expires" })?.value,
+              let expiry = TimeInterval(rawExpiry) else { return nil }
+        let request = PairingRequest(secret: secret.lowercased(), expiresAt: Date(timeIntervalSince1970: expiry))
+        guard request.expiresAt > now, request.expiresAt.timeIntervalSince(now) <= 600 else { return nil }
+        return request
+    }
+}
 public enum PairingVault {
     private static var query: [String: Any] { [kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: "local.studyplanner.sync", kSecAttrAccount as String: "android"] }
     public static func load() throws -> Pairing? {
@@ -38,12 +66,12 @@ enum SyncDiagnostic {
         let code = (try? JSONSerialization.jsonObject(with: body) as? [String: Any])?["code"] as? String
         let detail: String
         switch code {
-        case "pairing_closed": detail = "手机当前没有有效配对窗口。请在手机开启‘首次配对 / 重新配对’，输入本次新生成的完整配对信息。"
-        case "pairing_mismatch": detail = "配对码不匹配或已失效。请重新开启手机配对窗口，并使用最新的配对信息。"
+        case "pairing_closed": detail = "手机当前没有有效配对窗口。请让 Android 重新扫描 Mac 上本次生成的二维码。"
+        case "pairing_mismatch": detail = "二维码配对密钥不匹配或已失效。请在 Mac 重新生成二维码并让 Android 扫描。"
         case "unauthorized": detail = "配对凭据已失效，请重新配对两台设备。"
         case "session_invalid": detail = "同步会话已结束，请在手机重新开启接收窗口。"
         case "data_rejected": detail = "手机未能处理同步数据，请提供手机同步日志中的失败原因。"
-        default: detail = phase == "首次配对" ? "手机拒绝配对。请使用手机当前‘首次配对 / 重新配对’窗口显示的最新配对信息；普通接收窗口不能使用旧配对码。" : "手机拒绝请求，请查看手机同步日志。"
+        default: detail = phase == "首次配对" ? "手机拒绝配对。请重新生成二维码、让 Android 扫描，并在两分钟内重试。" : "手机拒绝请求，请查看手机同步日志。"
         }
         return .message("\(phase)失败（HTTP \(status)）：\(detail)")
     }
@@ -54,17 +82,19 @@ enum SyncDiagnostic {
         case NSURLErrorCannotConnectToHost: detail = "手机 \(address):8765 未接受连接。请在手机重新开启接收窗口并保持 App 在前台，然后重试。"
         case NSURLErrorNotConnectedToInternet: detail = "系统未允许此次局域网连接。请确认 Mac 已连接手机热点，并在系统设置的‘隐私与安全性 → 本地网络’中允许学习日程；同步本身不需要互联网。"
         case NSURLErrorTimedOut: detail = "连接手机超时。请确认两端仍在同一热点，手机接收窗口尚未结束。"
-        case NSURLErrorSecureConnectionFailed, NSURLErrorServerCertificateUntrusted, NSURLErrorCancelled: detail = "加密连接未通过，可能是证书指纹不匹配或连接被取消。请使用手机当前显示的完整配对信息重新配对。"
+        case NSURLErrorSecureConnectionFailed, NSURLErrorServerCertificateUntrusted, NSURLErrorCancelled: detail = "加密连接未通过，可能是已配对手机的证书发生变化或连接被取消。请重新生成二维码配对。"
         default: detail = error.localizedDescription
         }
         return .message("\(phase)失败（\(value.domain) \(value.code)）：\(detail)")
     }
 }
 private final class PinnedSession: NSObject, URLSessionDelegate, URLSessionTaskDelegate, @unchecked Sendable {
-    let fingerprint: String
+    let fingerprint: String?
     private let lock = NSLock()
     private var completion: CheckedContinuation<Void, Never>?
-    init(_ fingerprint: String) { self.fingerprint = fingerprint }
+    private var observed: String?
+    init(_ fingerprint: String?) { self.fingerprint = fingerprint }
+    var observedFingerprint: String? { lock.lock(); defer { lock.unlock() }; return observed }
     func urlSession(_ session: URLSession, didReceive challenge: URLAuthenticationChallenge, completionHandler: @escaping @Sendable (URLSession.AuthChallengeDisposition, URLCredential?) -> Void) {
         guard challenge.protectionSpace.authenticationMethod == NSURLAuthenticationMethodServerTrust,
               let trust = challenge.protectionSpace.serverTrust,
@@ -72,7 +102,13 @@ private final class PinnedSession: NSObject, URLSessionDelegate, URLSessionTaskD
             completionHandler(.cancelAuthenticationChallenge, nil); return
         }
         let hash = SHA256.hash(data: SecCertificateCopyData(certificate) as Data).map { String(format: "%02x", $0) }.joined()
-        guard hash == fingerprint else { completionHandler(.cancelAuthenticationChallenge, nil); return }
+        lock.lock()
+        let accepted = fingerprint ?? observed
+        guard accepted == nil || hash == accepted else {
+            lock.unlock(); completionHandler(.cancelAuthenticationChallenge, nil); return
+        }
+        observed = hash
+        lock.unlock()
         completionHandler(.useCredential, URLCredential(trust: trust))
     }
     func urlSession(_ session: URLSession, task: URLSessionTask, willPerformHTTPRedirection response: HTTPURLResponse, newRequest request: URLRequest, completionHandler: @escaping @Sendable (URLRequest?) -> Void) { completionHandler(nil) }
@@ -133,6 +169,11 @@ struct SyncEnvironment: Sendable {
     }
 }
 public enum SyncClient {
+    public static func makePairingRequest(validFor seconds: TimeInterval = 300) throws -> PairingRequest {
+        var bytes = [UInt8](repeating: 0, count: 32)
+        guard SecRandomCopyBytes(kSecRandomDefault, bytes.count, &bytes) == errSecSuccess else { throw ClientError.message("无法生成安全的二维码配对密钥。") }
+        return PairingRequest(secret: bytes.map { String(format: "%02x", $0) }.joined(), expiresAt: Date().addingTimeInterval(seconds))
+    }
     public static func gateway() async -> String? {
         await Task.detached {
             let process = Process(); let pipe = Pipe()
@@ -159,21 +200,26 @@ public enum SyncClient {
         let now = Date(), date = SyncLedger.day(now)
         if automatic && !initial.permitsAutomatic(at: now) { return nil }
         var pairing = try environment.loadPairing()
-        let parts = pairingText?.trimmingCharacters(in: .whitespacesAndNewlines).split(separator: ".").map(String.init)
+        let supplied = pairingText?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let request = supplied.flatMap { PairingRequest.parse($0) }
+        let parts = request == nil ? supplied?.split(separator: ".").map(String.init) : nil
+        var pairingCode = request?.secret
         let address = host?.trimmingCharacters(in: .whitespacesAndNewlines) ?? pairing?.host ?? ""
         guard environment.acceptsHost(address) else { throw ClientError.message("请输入手机热点的局域网 IPv4 地址。") }
         if automatic {
-            guard (pairing != nil || parts != nil), await environment.gateway() == address else { return nil }
+            guard (pairing != nil || parts != nil || request != nil), await environment.gateway() == address else { return nil }
         }
         if let parts {
             guard parts.count == 2, parts[0].count == 8, parts[0].allSatisfy(\.isNumber), parts[1].count == 64,
-                  parts[1].allSatisfy({ $0.isHexDigit }) else { throw ClientError.message("请粘贴手机显示的完整配对信息（8 位码.证书指纹）。") }
+                  parts[1].allSatisfy({ $0.isHexDigit }) else { throw ClientError.message("二维码无效或已过期，请重新生成并扫描。") }
+            pairingCode = parts[0]
             pairing = Pairing(host: address, fingerprint: parts[1].lowercased(), token: "", device: "")
         }
-        guard var credentials = pairing else { throw ClientError.message("请先在手机开启配对窗口。") }
+        if request != nil { pairing = Pairing(host: address, fingerprint: "", token: "", device: "") }
+        guard var credentials = pairing else { throw ClientError.message("请先生成配对二维码并让 Android 扫描。") }
         if automatic { try await SyncDatabase.update(url: environment.databaseURL) { _, ledger in ledger.lastAttempt = now.timeIntervalSince1970 } }
         await log((automatic ? "自动" : "手动") + "同步开始；设备发现：\(address):8765")
-        let delegate = PinnedSession(credentials.fingerprint)
+        let delegate = PinnedSession(credentials.fingerprint.isEmpty ? nil : credentials.fingerprint)
         let config = URLSessionConfiguration.ephemeral
         config.timeoutIntervalForRequest = 12; config.timeoutIntervalForResource = 30
         config.urlCache = nil; config.httpCookieStorage = nil; config.httpShouldSetCookies = false; config.httpMaximumConnectionsPerHost = 1
@@ -197,8 +243,10 @@ public enum SyncClient {
             return body
         }
         do {
-            if let parts {
-                let reply = try JSONDecoder().decode(PairReply.self, from: await post("pair", JSONSerialization.data(withJSONObject: ["code": parts[0]]), token: ""))
+            if let pairingCode {
+                let reply = try JSONDecoder().decode(PairReply.self, from: await post("pair", JSONSerialization.data(withJSONObject: ["code": pairingCode]), token: ""))
+                guard let fingerprint = delegate.observedFingerprint else { throw ClientError.message("未能读取手机证书指纹，配对未保存。") }
+                credentials.fingerprint = fingerprint
                 credentials.token = reply.token; credentials.device = reply.device
                 try environment.savePairing(credentials)
                 try await SyncDatabase.update(url: environment.databaseURL) { _, ledger in ledger.peerCursor = 0; ledger.sentCursor = 0 }

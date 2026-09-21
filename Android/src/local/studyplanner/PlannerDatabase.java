@@ -17,7 +17,9 @@ public final class PlannerDatabase extends SQLiteOpenHelper {
         try(Cursor c=db.rawQuery("SELECT body FROM metadata WHERE id='sync'",null)){if(!c.moveToFirst())return new SyncLedger();meta=new JSONObject(c.getString(0));}
         JSONObject rows=new JSONObject();try(Cursor c=db.rawQuery("SELECT id,body FROM records",null)){while(c.moveToNext())rows.put(c.getString(0),new JSONObject(c.getString(1)));}meta.put("records",rows);return new SyncLedger(meta);
     }
-    public synchronized JSONObject load()throws Exception{return ledger().materialize();}
+    public synchronized JSONObject load()throws Exception{
+        SyncLedger l=ledger();long before=l.sequence();JSONObject state=l.materialize();l.capture(state);if(l.sequence()!=before)commit(l);return state;
+    }
     public synchronized void save(JSONObject state)throws Exception{Planner.validate(state);SyncLedger l=ledger();l.capture(state);commit(l);}
     public synchronized void commit(SyncLedger l)throws Exception{
         l.materialize();SQLiteDatabase db=getWritableDatabase();db.beginTransaction();try{

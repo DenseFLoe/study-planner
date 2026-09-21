@@ -38,7 +38,9 @@ public final class SyncWindowService extends Service {
         if(Build.VERSION.SDK_INT>=29)startForeground(NOTIFICATION,notification(),ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC);
         else startForeground(NOTIFICATION,notification());
         if(!started){started=true;main.postDelayed(timeout,120000);}
-        server.start(intent.getBooleanExtra("pairing",false),intent.getBooleanExtra("manual",false));
+        String secret=intent.getStringExtra("pairingSecret");
+        if(secret!=null&&!secret.isEmpty())server.startPairing(secret,intent.getBooleanExtra("manual",false));
+        else server.start(intent.getBooleanExtra("pairing",false),intent.getBooleanExtra("manual",false));
         if(!server.isRunning())stopSelf();
         return START_NOT_STICKY;
     }
