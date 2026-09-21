@@ -21,28 +21,6 @@ macOS 14 及以上（Apple Silicon）可使用 macOS 版本；Android 8.0 及以
 
 隔离预览：运行 `.build/debug/StudyPlanner --demo`，所有示例操作仅使用内存数据库。不会改动正式数据库。
 
-## GitHub 版本管理
-
-本项目默认连接 `https://github.com/DenseFLoe/study-planner.git`，并提供一组不改写公开历史的安全脚本：
-
-```sh
-# 首次设置：校验 origin，启用同步策略和安全钩子
-./Scripts/git-setup.sh
-
-# 工作区干净时，安全获取当前分支的 GitHub 更新
-./Scripts/git-sync.sh
-
-# 暂存全部非忽略改动、提交，通过测试后推送当前分支
-./Scripts/git-publish.sh "feat: 说明这次更新"
-
-# 恢复项目文件到某个旧版本，但保留完整公开历史
-git log --oneline --decorate
-./Scripts/git-rollback.sh <commit>
-git push
-```
-
-`git-publish.sh` 会调用版本库钩子：提交前拒绝个人数据、签名凭据和构建产物；推送前执行 Swift 测试、Android 核心测试和 macOS 应用构建。`Android/backups/`、`Android/signing/`、`dist/`、`.build/` 和本地个人数据已被忽略，不会进入公开仓库。
-
 ## 已实现
 
 - 学习课程新增、编辑、删除（内部归档保留历史）；总量、导入进度、截止日、开始日、优先级、颜色、备注、可选发布时间、自动排程开关。
@@ -52,6 +30,7 @@ git push
 - 完成、部分完成、未完成、提前完成；批量每日确认，跨天与下次启动补查未确认记录。
 - 自动重排、历史与正在进行的任务保护、容量风险提示与调整入口。
 - SwiftData 本地持久化、保存失败回滚、启动失败时明确报错且不覆盖已有数据。
+- 通过手机热点按需双向同步；首次配对由 Mac 生成一次性二维码、Android 扫描，不需要复制配对串。
 
 没有 EventKit、系统日历事件或云服务器。按需同步仅连接 Android 手机热点局域网，详见 [同步使用与实现报告](同步说明.md)。代码里的 `Foundation.Calendar` 仅用于日期和星期运算，与 macOS Calendar 应用无关。
 

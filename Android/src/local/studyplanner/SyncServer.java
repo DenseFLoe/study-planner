@@ -28,20 +28,27 @@ public final class SyncServer implements AutoCloseable {
     public synchronized String pairingText(){return pairingText;}
     private void log(String text){android.util.Log.i("PlannerSync",text);try{File f=new File(context.getFilesDir(),"sync.log");if(f.length()>131072)try(FileOutputStream clear=new FileOutputStream(f)){clear.write(new byte[0]);}try(FileOutputStream out=new FileOutputStream(f,true)){out.write((new Date()+" "+text+"\n").getBytes(StandardCharsets.UTF_8));}}catch(Exception ignored){}notice.accept(text);}
     public synchronized void start(boolean pairing,boolean manual){
+        start(pairing,manual,null);
+    }
+    public synchronized void startPairing(String secret,boolean manual){
+        if(secret==null||!secret.matches("[0-9a-fA-F]{64}")){notice.accept("二维码配对密钥无效");return;}
+        start(true,manual,secret.toLowerCase(Locale.ROOT));
+    }
+    private synchronized void start(boolean pairing,boolean manual,String suppliedCode){
         if(running || (thread!=null && thread.isAlive())){notice.accept("接收窗口已开启，请在 Mac 点击立即同步");return;}
         String today=java.time.LocalDate.now(Planner.ZONE).toString();long now=System.currentTimeMillis();
         if(!manual&&(today.equals(prefs.getString("autoDate",""))||now-prefs.getLong("lastWindow",0)<1800000||!prefs.contains("tokenHash")))return;
         if(!prefs.edit().putLong("lastWindow",now).commit()){notice.accept("无法保存同步状态");return;}
         running=true;lastFailure="";attempts=0;session="";code="";pairingText="";
         boolean needsPairing=pairing||!prefs.contains("tokenHash");
-        thread=new Thread(()->serve(needsPairing),"planner-sync-window");thread.start();
+        thread=new Thread(()->serve(needsPairing,suppliedCode),"planner-sync-window");thread.start();
     }
-    private void serve(boolean pairing){
+    private void serve(boolean pairing,String suppliedCode){
         try{
             SSLContext ssl=tls();ServerSocket socket=ssl.getServerSocketFactory().createServerSocket();
             synchronized(this){if(!running){socket.close();return;}socket.setReuseAddress(true);socket.bind(new InetSocketAddress(8765));listener=socket;deadline=Executors.newSingleThreadScheduledExecutor(r->new Thread(r,"planner-sync-deadline"));deadline.schedule(this::close,windowSeconds,TimeUnit.SECONDS);
-                if(pairing){code=String.format(Locale.ROOT,"%08d",new SecureRandom().nextInt(100000000));pairingText=code+"."+fingerprint();}}
-            log(pairing?"配对窗口已开启（120 秒）":"等待 Mac 同步（120 秒）；端口 8765");
+                if(pairing){code=suppliedCode==null?String.format(Locale.ROOT,"%08d",new SecureRandom().nextInt(100000000)):suppliedCode;if(suppliedCode==null)pairingText=code+"."+fingerprint();}}
+            log(pairing?(suppliedCode==null?"配对窗口已开启（120 秒）":"二维码已验证，配对窗口已开启（120 秒）"):"等待 Mac 同步（120 秒）；端口 8765");
             while(running){try(Socket connection=socket.accept()){
                 active=connection;connection.setSoTimeout(10000);((SSLSocket)connection).setEnabledProtocols(new String[]{"TLSv1.2"});((SSLSocket)connection).startHandshake();
                 Request request=read(connection.getInputStream());JSONObject result;boolean finish=false;

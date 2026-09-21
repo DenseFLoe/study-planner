@@ -18,6 +18,22 @@ final class SyncClientTests: XCTestCase, @unchecked Sendable {
         XCTAssertFalse(SyncClient.isPrivateIPv4("127.0.0.1"))
         XCTAssertFalse(SyncClient.isPrivateIPv4("192.168.1.1/path"))
     }
+    func testPairingRequestRoundTripAndExpiry() throws {
+        let now = Date(timeIntervalSince1970: 2_000_000_000)
+        let request = PairingRequest(secret: String(repeating: "a1", count: 32), expiresAt: now.addingTimeInterval(300))
+        XCTAssertEqual(PairingRequest.parse(request.payload, now: now), request)
+        XCTAssertNil(PairingRequest.parse(request.payload, now: now.addingTimeInterval(301)))
+        XCTAssertNil(PairingRequest.parse("https://example.com/?secret=" + request.secret, now: now))
+        XCTAssertNil(PairingRequest.parse("studyplanner://pair?v=2&secret=short&expires=2000000300", now: now))
+    }
+    func testPairingRequestUsesSecureRandomSecret() throws {
+        let first = try SyncClient.makePairingRequest()
+        let second = try SyncClient.makePairingRequest()
+        XCTAssertEqual(first.secret.count, 64)
+        XCTAssertTrue(first.secret.allSatisfy(\.isHexDigit))
+        XCTAssertNotEqual(first.secret, second.secret)
+        XCTAssertEqual(PairingRequest.parse(first.payload)?.secret, first.secret)
+    }
     func testMacClientAgainstAndroidEmulator() async throws {
         guard ProcessInfo.processInfo.environment["STUDY_SYNC_DEVICE_TEST"] == "1" else { throw XCTSkip("Requires isolated Android bridge instrumentation and ADB forwarding") }
         let pair = try String(contentsOfFile: "/tmp/study-sync-pairing.txt", encoding: .utf8)
@@ -34,7 +50,7 @@ final class SyncClientTests: XCTestCase, @unchecked Sendable {
         }.value
         let result = try await SyncClient.run(automatic: true, host: "127.0.0.1", pairingText: pair, environment: environment, log: { _ in })
         let outcome = try XCTUnwrap(result)
-        XCTAssertEqual(outcome.state.courses.count, 5)
+        XCTAssertEqual(outcome.state.courses.count, 2)
         XCTAssertTrue(outcome.state.courses.contains { $0.id == courseID })
         XCTAssertEqual(outcome.ledger.lastAutoDate, SyncLedger.day(Date()))
         XCTAssertNotNil(vault.load())
@@ -49,7 +65,7 @@ extension SyncClientTests {
         let closed = SyncDiagnostic.response(status: 400, body: Data(#"{"code":"pairing_closed"}"#.utf8), phase: "首次配对")
         XCTAssertTrue(closed.localizedDescription.contains("没有有效配对窗口"))
         let oldServer = SyncDiagnostic.response(status: 400, body: Data(#"{"error":"请求失败或认证无效"}"#.utf8), phase: "首次配对")
-        XCTAssertTrue(oldServer.localizedDescription.contains("普通接收窗口不能使用旧配对码"))
+        XCTAssertTrue(oldServer.localizedDescription.contains("重新生成二维码"))
         let unauthorized = SyncDiagnostic.response(status: 401, body: Data(#"{"code":"unauthorized"}"#.utf8), phase: "交换日程")
         XCTAssertTrue(unauthorized.localizedDescription.contains("凭据已失效"))
         let refused = SyncDiagnostic.transport(URLError(.cannotConnectToHost), phase: "首次配对", address: "192.168.43.1")

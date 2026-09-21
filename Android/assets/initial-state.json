@@ -9,43 +9,43 @@
     "notificationMinute": 1260,
     "availability": [
       {
-        "id": "default-availability-1",
+        "id": "5BD6AB5C-B06B-58E6-9138-EB744CECB4BC",
         "weekday": 1,
         "startMinute": 480,
         "endMinute": 1380
       },
       {
-        "id": "default-availability-2",
+        "id": "02F4B20D-F607-5CA9-A9BF-AB3CF2363FE8",
         "weekday": 2,
         "startMinute": 480,
         "endMinute": 1380
       },
       {
-        "id": "default-availability-3",
+        "id": "3A899E05-9CA9-5E0E-9645-664B360593C8",
         "weekday": 3,
         "startMinute": 480,
         "endMinute": 1380
       },
       {
-        "id": "default-availability-4",
+        "id": "A47ABF70-27D4-54C0-A7C1-B45D4E5F26F7",
         "weekday": 4,
         "startMinute": 480,
         "endMinute": 1380
       },
       {
-        "id": "default-availability-5",
+        "id": "6CF361F1-7C50-5B01-BD82-1A6309550B0E",
         "weekday": 5,
         "startMinute": 480,
         "endMinute": 1380
       },
       {
-        "id": "default-availability-6",
+        "id": "6DCD3FC7-A35C-51A9-91E6-79C406A506F3",
         "weekday": 6,
         "startMinute": 480,
         "endMinute": 1380
       },
       {
-        "id": "default-availability-7",
+        "id": "D474F16F-EF8D-5A2B-923C-E375F012B814",
         "weekday": 7,
         "startMinute": 480,
         "endMinute": 1380
