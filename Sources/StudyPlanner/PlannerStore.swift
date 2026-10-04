@@ -7,6 +7,7 @@ import StudySync
 final class PlannerStore {
     private(set) var state = PlannerState()
     private(set) var result = ScheduleResultPlaceholder.empty
+    private(set) var studyLoad: StudyLoadAssessment?
     var errorMessage: String?
     var pendingEventConflicts: [FixedEventConflict]?
     var isReady = false
@@ -41,23 +42,37 @@ final class PlannerStore {
         do {
             var next = state
             try mutation(&next)
+            next.removeArchivedCourses()
             let planned = shouldReplan ? next.replan(now: Date()) : ScheduleEngine().generate(state: next, now: Date())
             try repository.save(next)
             state = next; result = planned
+            studyLoad = StudyLoadAnalyzer().assess(state: next, now: Date())
             return true
         } catch { errorMessage = "操作未保存：\(error.localizedDescription)"; return false }
     }
     func replan() { change { _ in } }
+    func saveActualStudyStart(_ time: Date) -> Bool {
+        let calendar = Calendar.current
+        let minute = calendar.component(.hour, from: time) * 60 + calendar.component(.minute, from: time)
+        return change { try $0.recordActualStudyStart(minute: minute, now: Date(), calendar: calendar) }
+    }
     func saveCourse(_ course: Course) -> Bool {
         change { state in
-            if let i = state.courses.firstIndex(where: { $0.id == course.id }) { state.courses[i] = course }
-            else { state.courses.append(course) }
+            var saved = course
+            if saved.type == .lessonBasedRecorded, saved.lessonOrder == nil {
+                if let website = saved.webCourse {
+                    saved.lessonOrder = website.lessons.map(\.id)
+                    saved.lessonOrderCustomized = false
+                } else {
+                    saved.lessonOrder = LessonOrdering.intelligent(state.lessonWorkItems(for: saved)).map(\.id)
+                }
+            }
+            if let i = state.courses.firstIndex(where: { $0.id == saved.id }) { state.courses[i] = saved }
+            else { state.courses.append(saved) }
         }
     }
-    func deleteCourse(_ course: Course) {
-        change { state in
-            if let i = state.courses.firstIndex(where: { $0.id == course.id }) { state.courses[i].isArchived = true }
-        }
+    func deleteCourse(_ course: Course) -> Bool {
+        change { $0.removeCourse(id: course.id) }
     }
     func saveEvent(_ event: FixedEvent) -> Bool {
         saveEvent(event, skippingDates: [])
@@ -74,6 +89,7 @@ final class PlannerStore {
             let planned = next.replan(now: Date())
             try repository.save(next)
             state = next; result = planned
+            studyLoad = StudyLoadAnalyzer().assess(state: next, now: Date())
             pendingEventConflicts = nil
             errorMessage = nil
             return true
@@ -89,19 +105,21 @@ final class PlannerStore {
     func deleteEvent(_ event: FixedEvent) {
         change { $0.removeFixedEvent(id: event.id, now: Date()) }
     }
+    func setEventSkipped(_ event: FixedEvent, on day: Date, skipped: Bool) {
+        change { try $0.setFixedEventSkipped(id: event.id, on: day, skipped: skipped, now: Date()) }
+    }
     func confirm(_ task: ScheduledTask, minutes: Int) -> Bool {
-        // A fully completed block already has exactly the right remaining plan: the
-        // other untouched blocks add up to the new remaining amount. Replanning here
-        // can immediately put an identical-looking block back into the freed slot.
-        change(replan: minutes != task.durationMinutes) {
-            try $0.confirm(taskID: task.id, actualMinutes: minutes, now: Date())
+        // Preserve active/future full completions; ended tasks may already have
+        // replacement work scheduled, which must shrink when progress is credited.
+        let now = Date()
+        return change(replan: task.confirmationRequiresReplan(actualMinutes: minutes, now: now)) {
+            try $0.confirm(taskID: task.id, actualMinutes: minutes, now: now)
         }
     }
     func undoConfirmation(_ task: ScheduledTask) -> Bool {
-        // Full confirmations preserve the surrounding plan, so their undo can restore
-        // the original block directly. Partial/missed confirmations did replan and
-        // therefore still need a fresh schedule when undone.
-        change(replan: task.status != .completed) {
+        // Time, settings, or other confirmations may have changed the plan since
+        // completion. Recompute it when restoring the remaining learning amount.
+        change {
             try $0.undoConfirmation(taskID: task.id, now: Date())
         }
     }
@@ -140,6 +158,7 @@ final class PlannerStore {
                 let (loaded, ledger) = try await SyncDatabase.snapshot()
                 let calculated = await Task.detached { ScheduleEngine().generate(state: loaded, now: Date()) }.value
                 repository = try LocalRepository(); state = loaded; syncLedger = ledger; result = calculated
+                studyLoad = StudyLoadAnalyzer().assess(state: loaded, now: Date())
             } catch { errorMessage = "无法重新读取同步后的本地数据：" + error.localizedDescription; isReady = false }
             syncBusy = false
             if pendingManualSyncs > 0 { pendingManualSyncs -= 1; startSync() }
@@ -152,7 +171,7 @@ final class PlannerStore {
         await SyncFileLog.shared.append(message)
     }
     func loadExample() {
-        guard courses.isEmpty else { return }
+        guard state.canLoadExample else { return }
         change { state in
             let cal = Calendar.current, today = cal.startOfDay(for: Date())
             func after(_ days: Int) -> Date { cal.date(byAdding: .day, value: days, to: today)! }
@@ -168,6 +187,10 @@ final class PlannerStore {
                 .init(title: "午饭与休息", startMinute: 720, endMinute: 810, startDate: today, endDate: after(365), weekdays: Set(1...7)),
                 .init(title: "补习班", startMinute: 840, endMinute: 960, startDate: today, endDate: after(112), weekdays: [3,5]),
                 .init(title: "晚饭", startMinute: 1080, endMinute: 1140, startDate: today, endDate: after(365), weekdays: Set(1...7))]
+            var floating = FixedEvent(title: "散步与杂务", startMinute: 1140, endMinute: 1320, startDate: today, endDate: after(60), weekdays: Set(1...7))
+            floating.floatingDurationMinutes = 60
+            floating.color = "purple"
+            state.fixedEvents.append(floating)
         }
     }
 }

@@ -1,6 +1,7 @@
 #!/bin/zsh
 set -euo pipefail
 cd "${0:A:h:h}"
+source "$PWD/Scripts/version.env"
 export CLANG_MODULE_CACHE_PATH="${TMPDIR:-/tmp}/study-planner-clang"
 export SWIFTPM_MODULECACHE_OVERRIDE="${TMPDIR:-/tmp}/study-planner-swift"
 configuration="${1:-release}"
@@ -8,7 +9,13 @@ swift build --disable-sandbox -c "$configuration"
 app="${2:-$PWD/dist/学习日程.app}"
 mkdir -p "$app/Contents/MacOS"
 cp ".build/$configuration/StudyPlanner" "$app/Contents/MacOS/StudyPlanner"
-cat > "$app/Contents/Info.plist" <<'PLIST'
+# SwiftPM resources must accompany the packaged executable.
+for resource in .build/"$configuration"/*.bundle; do
+    [[ -d "$resource" ]] || continue
+    mkdir -p "$app/Contents/Resources"
+    cp -R "$resource" "$app/Contents/Resources/"
+done
+cat > "$app/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0"><dict>
@@ -17,8 +24,8 @@ cat > "$app/Contents/Info.plist" <<'PLIST'
 <key>CFBundleName</key><string>学习日程</string>
 <key>CFBundleDisplayName</key><string>学习日程</string>
 <key>CFBundlePackageType</key><string>APPL</string>
-<key>CFBundleShortVersionString</key><string>1.3.0</string>
-<key>CFBundleVersion</key><string>4</string>
+<key>CFBundleShortVersionString</key><string>$STUDYPLANNER_VERSION</string>
+<key>CFBundleVersion</key><string>$STUDYPLANNER_BUILD</string>
 <key>CFBundleIconFile</key><string>AppIcon</string>
 <key>LSMinimumSystemVersion</key><string>14.0</string>
 <key>NSHighResolutionCapable</key><true/>

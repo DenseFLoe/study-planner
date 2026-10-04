@@ -38,6 +38,8 @@ public struct SyncLedger: Codable, Sendable {
         records.values.filter { $0.sequence > cursor }.sorted { $0.sequence < $1.sequence }
     }
     public mutating func capture(_ state: PlannerState) throws {
+        var state = state
+        state.removeArchivedCourses()
         let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys]
         var desired: [String: SyncRecord] = [:]
         func add<T: Encodable>(_ kind: String, _ id: String, _ value: T) throws {
@@ -99,6 +101,19 @@ public struct SyncLedger: Codable, Sendable {
             default: throw SyncFailure.invalidData
             }
         }
+        // A peer can confirm a task while its course is being deleted elsewhere.
+        // Merges transfer those records; actual deletions still remove them.
+        let deletedIDs = Set(records.values.filter { $0.kind == "courses" && $0.deleted }.compactMap { UUID(uuidString: $0.id) })
+            .union(state.courses.filter(\.isArchived).map(\.id))
+        let confirmationTasks = Set(state.completions.map(\.taskID))
+        let deletedTasks = try records.values.filter {
+            $0.kind == "tasks" && $0.deleted && UUID(uuidString: $0.id).map(confirmationTasks.contains) == true
+        }.map {
+            try decoder.decode(ScheduledTask.self, from: $0.payload)
+        }
+        try state.reconcileMergedCourseProgress(deletedIDs: deletedIDs, deletedTasks: deletedTasks)
+        state.removeArchivedCourses()
+        state.removeCourses(ids: deletedIDs)
         let ids = Set(state.courses.map(\.id))
         guard state.settings.minimumScheduleUnit > 0,
               state.tasks.allSatisfy({ ids.contains($0.courseID) && $0.durationMinutes > 0 }),

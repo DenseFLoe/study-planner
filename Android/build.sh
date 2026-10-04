@@ -1,6 +1,7 @@
 #!/bin/bash
 set -euo pipefail
 cd "$(dirname "$0")"
+source "$PWD/../Scripts/version.env"
 JDK="$(/usr/libexec/java_home -v 11)"
 BT="$PWD/tools/sdk35/android-15"
 PLATFORM="$PWD/tools/sdk/android-35/android.jar"
@@ -8,8 +9,9 @@ KEYSTORE="${STUDYPLANNER_KEYSTORE_PATH:-$PWD/signing/release.jks}"
 OUTPUT="${STUDYPLANNER_APK_OUTPUT:-$PWD/../dist/学习日程-安卓版.apk}"
 rm -rf build/classes build/dex build/resources.zip build/base.apk build/unsigned.apk build/aligned.apk
 mkdir -p build/classes build/dex signing
+sed -E "s/android:versionCode=\"[0-9]+\"/android:versionCode=\"$STUDYPLANNER_BUILD\"/; s/android:versionName=\"[^\"]+\"/android:versionName=\"$STUDYPLANNER_VERSION\"/" AndroidManifest.xml > build/AndroidManifest.xml
 "$PWD/tools/sdk35/android-15/aapt2" compile --dir res -o build/resources.zip
-"$PWD/tools/sdk35/android-15/aapt2" link -o build/base.apk -I "$PLATFORM" --manifest AndroidManifest.xml -A assets build/resources.zip
+"$PWD/tools/sdk35/android-15/aapt2" link -o build/base.apk -I "$PLATFORM" --manifest build/AndroidManifest.xml -A assets build/resources.zip
 "$JDK/bin/javac" --release 8 -encoding UTF-8 -classpath "$PLATFORM:$PWD/lib/zxing-core-3.5.3.jar" -d build/classes src/local/studyplanner/*.java
 "$JDK/bin/java" -cp "$BT/lib/d8.jar" com.android.tools.r8.D8 --min-api 26 --lib "$PLATFORM" --output build/dex build/classes/local/studyplanner/*.class "$PWD/lib/zxing-core-3.5.3.jar"
 cp build/base.apk build/unsigned.apk

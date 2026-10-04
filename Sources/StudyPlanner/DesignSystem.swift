@@ -162,12 +162,15 @@ struct CircularIconButtonStyle: ButtonStyle {
     var prominent = false
 
     func makeBody(configuration: Configuration) -> some View {
+        let shape = Circle()
+
         configuration.label
             .font(.system(size: prominent ? 17 : 13, weight: .semibold))
             .frame(width: prominent ? 42 : 32, height: prominent ? 42 : 32)
+            .contentShape(shape)
             .foregroundStyle(prominent ? Color.white : Color.primary.opacity(0.72))
             .liquidGlass(
-                in: Circle(),
+                in: shape,
                 tint: prominent ? PlannerTheme.accent : nil,
                 interactive: true,
                 fallbackMaterial: .thinMaterial
@@ -186,13 +189,16 @@ struct SoftButtonStyle: ButtonStyle {
     var prominent = false
 
     func makeBody(configuration: Configuration) -> some View {
+        let shape = Capsule(style: .continuous)
+
         configuration.label
             .font(.system(size: 13, weight: .semibold))
             .padding(.horizontal, 15)
             .frame(height: 34)
+            .contentShape(shape)
             .foregroundStyle(prominent ? Color.white : Color.primary.opacity(0.78))
             .liquidGlass(
-                in: Capsule(style: .continuous),
+                in: shape,
                 tint: prominent ? PlannerTheme.accent : nil,
                 interactive: true,
                 fallbackMaterial: .thinMaterial

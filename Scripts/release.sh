@@ -3,7 +3,8 @@ set -euo pipefail
 
 cd "${0:A:h:h}"
 
-version="1.3.0"
+source "$PWD/Scripts/version.env"
+version="$STUDYPLANNER_VERSION"
 dist_dir="$PWD/dist"
 app="$dist_dir/学习日程.app"
 apk="$dist_dir/StudyPlanner-Android-v$version.apk"

@@ -9,8 +9,9 @@ let package = Package(
         .target(name: "StudyCore"),
         .target(name: "StudyPersistence", dependencies: ["StudyCore"]),
         .target(name: "StudySync", dependencies: ["StudyCore", "StudyPersistence"]),
-        .executableTarget(name: "StudyPlanner", dependencies: ["StudyCore", "StudyPersistence", "StudySync"]),
+        .executableTarget(name: "StudyPlanner", dependencies: ["StudyCore", "StudyPersistence", "StudySync"], resources: [.process("Resources")]),
         .testTarget(name: "StudyCoreTests", dependencies: ["StudyCore"]),
+        .testTarget(name: "StudyPlannerTests", dependencies: ["StudyPlanner"]),
         .testTarget(name: "StudySyncTests", dependencies: ["StudySync", "StudyCore", "StudyPersistence"]),
         .testTarget(name: "StudyPersistenceTests", dependencies: ["StudyPersistence", "StudyCore"])
     ]

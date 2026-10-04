@@ -59,6 +59,13 @@ final class SyncLedgerTests: XCTestCase {
         XCTAssertEqual(Set(s.tasks.map(\.id)).count, s.tasks.count)
     }
     func testWireFixtureAndJavaResponse() throws {
+        let floatingPath = URL(fileURLWithPath: "/tmp/study-floating-java-fixture.json")
+        if FileManager.default.fileExists(atPath: floatingPath.path) {
+            let ledger = try JSONDecoder().decode(SyncLedger.self, from: Data(contentsOf: floatingPath))
+            let state = try ledger.materialize()
+            XCTAssertEqual(state.fixedEvents.first?.floatingDurationMinutes, 60)
+            XCTAssertTrue(state.tasks.allSatisfy(\.isFloating))
+        }
         var s = fixture(); s.courses[0].id = UUID(uuidString: "AAAAAAAA-AAAA-4AAA-8AAA-AAAAAAAAAAAA")!
         var l = SyncLedger(); l.device = "MAC-FIXTURE"; try l.capture(s)
         try JSONEncoder().encode(l).write(to: URL(fileURLWithPath: "/tmp/study-sync-swift-fixture.json"))

@@ -26,6 +26,12 @@ public struct ScheduleResult: Sendable {
 /// Pure, minute-based local scheduling. No persistence, UI, system Calendar, or EventKit dependencies.
 /// Calendar below is Foundation date arithmetic only.
 public struct ScheduleEngine: Sendable {
+    public static let breakMinutes = 15
+    private var breakSeconds: TimeInterval { Double(Self.breakMinutes * 60) }
+    // Reserve both sides because repair and balancing can insert a task before an existing one.
+    private func buffered(start: Date, end: Date) -> Span {
+        .init(start: start.addingTimeInterval(-breakSeconds), end: end.addingTimeInterval(breakSeconds))
+    }
     public var calendar: Calendar
     public init(calendar: Calendar = .current) { self.calendar = calendar }
     private struct Span {
@@ -65,12 +71,12 @@ public struct ScheduleEngine: Sendable {
     }
     public func generate(state: PlannerState, now: Date) -> ScheduleResult {
         let today = calendar.startOfDay(for: now)
-        let nextMinute = Date(timeIntervalSince1970: ceil(now.timeIntervalSince1970 / 60) * 60)
-        let active = state.tasks.filter { $0.start < now && $0.end > now && $0.isUnconfirmed }
+        let actualStart = state.settings.actualStudyStart(on: now, calendar: calendar)
+        let nextMinute = Date(timeIntervalSince1970: ceil((actualStart ?? now).timeIntervalSince1970 / 60) * 60)
         let courses = state.courses.filter { !$0.isArchived && $0.autoScheduleEnabled && state.remainingMinutes(for: $0) > 0 }
         var diagnostics: [String] = []
         let validEvents = state.fixedEvents.filter {
-            let valid = $0.startMinute >= 0 && $0.endMinute <= 1440 && $0.endMinute > $0.startMinute && $0.endDate >= calendar.startOfDay(for: $0.startDate)
+            let valid = $0.validDuration && $0.startMinute >= 0 && $0.endMinute <= 1440 && $0.endMinute > $0.startMinute && $0.endDate >= calendar.startOfDay(for: $0.startDate)
             if !valid { diagnostics.append("固定事项「\($0.title)」的时间无效，请修改。") }
             return valid
         }
@@ -80,6 +86,7 @@ public struct ScheduleEngine: Sendable {
             return valid
         }
         var days: [Day] = []
+        var floatingRegions: [Span] = []
         let lastDay = max(today, courses.map { calendar.startOfDay(for: $0.deadline) }.max() ?? today)
         // A bounded horizon protects the UI from accidentally entered dates thousands of years away.
         let limit = calendar.date(byAdding: .year, value: 10, to: today)!
@@ -91,25 +98,78 @@ public struct ScheduleEngine: Sendable {
             let windows = availability.filter { $0.weekday == weekday }.map {
                 Span(start: max(nextMinute, instant(day: day, minute: $0.startMinute)), end: instant(day: day, minute: $0.endMinute))
             }
-            var blocks = validEvents.filter { $0.occurs(on: day, calendar: calendar) }.map {
+            let events = validEvents.filter { $0.occurs(on: day, calendar: calendar) }
+            let exact = events.filter { !$0.isFloating }.map {
                 Span(start: instant(day: day, minute: $0.startMinute), end: instant(day: day, minute: $0.endMinute))
             }
-            blocks += active.map { Span(start: $0.start, end: $0.end) }
+            let regions = merged(events.filter(\.isFloating).map {
+                Span(start: instant(day: day, minute: $0.startMinute), end: instant(day: day, minute: $0.endMinute))
+            })
+            // Clip uncertainty to contiguous learnable intervals; exact appointments remain pinned.
+            for span in subtract(exact, from: windows) {
+                for region in regions {
+                    let clipped = Span(start: max(span.start, region.start), end: min(span.end, region.end))
+                    if clipped.minutes > 0 { floatingRegions.append(clipped) }
+                }
+            }
+            var blocks = exact
+            let studyMinutes = Set(availability.filter { $0.weekday == weekday }.flatMap { Array($0.startMinute..<$0.endMinute) })
+            if let placements = FloatingPlacement.reserve(events, studyMinutes: studyMinutes) {
+                for event in events where event.isFloating {
+                    let start = placements[event.id]!
+                    blocks.append(.init(start: instant(day: day, minute: start), end: instant(day: day, minute: start + event.occupiedMinutes)))
+                }
+            } else {
+                diagnostics.append("浮动事项的连续时长无法排入，或组合过于复杂；请调整时段。")
+                blocks += regions
+            }
+            // Only retained history reserves time; a planned start is not evidence of actual study.
+            blocks += state.tasks.filter {
+                let replacingToday = actualStart != nil && calendar.isDate($0.start, inSameDayAs: now)
+                return $0.planningStart < now && (($0.isUnconfirmed && $0.planningEnd <= now && !replacingToday) || $0.completedMinutes > 0)
+            }
+                .map { buffered(start: min($0.planningStart, $0.confirmedAt ?? $0.planningStart),
+                                end: min($0.planningEnd, $0.confirmedAt ?? $0.planningEnd)) }
             days.append(.init(date: day, free: subtract(blocks, from: windows)))
             day = calendar.date(byAdding: .day, value: 1, to: day)!
         }
         let originalDays = days
         var demands: [UUID: CourseDemand] = [:]
         var required: [UUID: Int] = [:]
+        struct Work {
+            var minutes: Int
+            var lessonID: String? = nil
+            var lessonName: String? = nil
+        }
+        var pending: [UUID: [Work]] = [:]
         func unit(_ course: Course) -> Int { max(1, course.minimumBlockMinutes > 0 ? course.minimumBlockMinutes : state.settings.minimumScheduleUnit) }
         func eligible(_ course: Course, _ day: Date) -> Bool {
             day >= calendar.startOfDay(for: course.startDate) && day <= calendar.startOfDay(for: course.deadline)
         }
         for course in courses {
-            let reserved = active.filter { $0.courseID == course.id }.reduce(0) { $0 + $1.durationMinutes }
-            let remaining = max(0, state.remainingMinutes(for: course) - reserved)
+            let remaining = state.remainingMinutes(for: course)
+            var work: [Work] = []
+            let lessons = state.lessonWorkItems(for: course)
+            if !lessons.isEmpty {
+                let lessonWork = lessons.map { Work(minutes: $0.remainingMinutes, lessonID: $0.id, lessonName: $0.name) }
+                work = lessonWork.filter { $0.minutes > 0 }
+                if work.reduce(0, { $0 + $1.minutes }) != remaining {
+                    diagnostics.append("「\(course.name)」的课节进度与课程总进度不一致，暂按普通时间块排程；请重新抓取。")
+                    work = []
+                }
+            }
+            if work.isEmpty && remaining > 0 {
+                var left = remaining
+                while left > 0 {
+                    let size = min(unit(course), left)
+                    work.append(.init(minutes: size))
+                    left -= size
+                }
+            }
+            pending[course.id] = work
             required[course.id] = remaining
-            let count = days.filter { eligible(course, $0.date) && $0.free.contains(where: { $0.minutes >= min(unit(course), remaining) && remaining > 0 }) }.count
+            let shortest = work.map(\.minutes).min() ?? 0
+            let count = days.filter { eligible(course, $0.date) && $0.free.contains(where: { shortest > 0 && $0.minutes >= shortest }) }.count
             demands[course.id] = .init(remainingMinutes: remaining, learnableDays: count)
         }
         let ordered = courses.sorted {
@@ -123,43 +183,62 @@ public struct ScheduleEngine: Sendable {
         }
         var tasks: [ScheduledTask] = []
         var missing: [UUID: Int] = [:]
-        func take(_ minutes: Int, on index: Int) -> Date? {
-            guard let slot = days[index].free.firstIndex(where: { $0.minutes >= minutes }) else { return nil }
-            let start = days[index].free[slot].start
-            days[index].free[slot].start = start.addingTimeInterval(Double(minutes) * 60)
-            if days[index].free[slot].minutes == 0 { days[index].free.remove(at: slot) }
+        func take(_ minutes: Int, on index: Int, earliest: Date = .distantPast) -> Date? {
+            guard let span = days[index].free.first(where: {
+                $0.end.timeIntervalSince(max($0.start, earliest)) >= Double(minutes * 60)
+            }) else { return nil }
+            let start = max(span.start, earliest)
+            let occupied = buffered(start: start, end: start.addingTimeInterval(Double(minutes) * 60))
+            for d in days.indices { days[d].free = subtract([occupied], from: days[d].free) }
             return start
         }
         // Feasibility first: allocate earliest deadlines before distributing load across later days.
         for course in ordered {
-            var remaining = required[course.id]!
+            var lessonStart = Date.distantPast
             for index in days.indices where eligible(course, days[index].date) {
-                while remaining > 0 {
-                    let size = min(unit(course), remaining)
-                    guard let start = take(size, on: index) else { break }
-                    tasks.append(.init(courseID: course.id, start: start, durationMinutes: size))
-                    remaining -= size
+                while let work = pending[course.id]?.first {
+                    guard let start = take(work.minutes, on: index, earliest: work.lessonID == nil ? .distantPast : lessonStart) else { break }
+                    tasks.append(.init(courseID: course.id, start: start, durationMinutes: work.minutes,
+                                       lessonID: work.lessonID, lessonName: work.lessonName))
+                    if work.lessonID != nil { lessonStart = start.addingTimeInterval(Double(work.minutes * 60) + breakSeconds) }
+                    pending[course.id]!.removeFirst()
                 }
             }
-            missing[course.id] = remaining
+            missing[course.id] = pending[course.id]!.reduce(0) { $0 + $1.minutes }
         }
         // Repair fragmented capacity: evacuate blocking small chunks to other free intervals
         // before declaring a larger chunk unplaceable. A failed attempt rolls back completely.
+        let lessonRanks = Dictionary(uniqueKeysWithValues: courses.map { course in
+            (course.id, Dictionary(uniqueKeysWithValues: state.lessonWorkItems(for: course).enumerated().map { ($0.element.id, $0.offset) }))
+        })
+        func preservesLessonOrder(_ booked: [ScheduledTask]) -> Bool {
+            for course in courses {
+                let lessons = booked.filter { $0.courseID == course.id && $0.lessonID != nil }.sorted { $0.start < $1.start }
+                for (a, b) in zip(lessons, lessons.dropFirst()) {
+                    guard let first = lessonRanks[course.id]?[a.lessonID!], let next = lessonRanks[course.id]?[b.lessonID!],
+                          first < next, a.end.addingTimeInterval(breakSeconds) <= b.start else { return false }
+                }
+            }
+            return true
+        }
         var repairAttempts = 0
         for course in ordered {
-            var remaining = missing[course.id, default: 0]
-            while remaining > 0 && repairAttempts < 200 {
-                let size = min(unit(course), remaining)
+            while let work = pending[course.id]?.first, repairAttempts < 200 {
+                let size = work.minutes
                 var repaired = false
                 search: for dayIndex in originalDays.indices where eligible(course, originalDays[dayIndex].date) {
                     for span in originalDays[dayIndex].free where span.minutes >= size {
-                        let starts = ([span.start] + tasks.filter { $0.start >= span.start && $0.end < span.end }.map(\.end)).sorted()
+                        let starts = ([span.start] + tasks.filter { $0.start >= span.start && $0.end < span.end }.map { $0.end.addingTimeInterval(breakSeconds) }).sorted()
                         for start in starts {
+                            if work.lessonID != nil,
+                               let last = tasks.filter({ $0.courseID == course.id }).map(\.end).max(),
+                               start < last.addingTimeInterval(breakSeconds) { continue }
                             repairAttempts += 1
                             if repairAttempts > 200 { break search }
                             let reserved = Span(start: start, end: start.addingTimeInterval(Double(size) * 60))
                             guard reserved.end <= span.end else { continue }
-                            let blockers = tasks.indices.filter { tasks[$0].start < reserved.end && tasks[$0].end > reserved.start }
+                            let reservation = buffered(start: reserved.start, end: reserved.end)
+                            let blockers = tasks.indices.filter { tasks[$0].start < reservation.end && tasks[$0].end > reservation.start }
                             // If an existing block has no alternate destination, rebuilding all
                             // free intervals cannot evacuate it. Skip this expensive failed search.
                             let immovable = blockers.contains { index in
@@ -172,8 +251,8 @@ public struct ScheduleEngine: Sendable {
                             let blockerIDs = Set(blockers.map { tasks[$0].id })
                             let untouched = tasks.filter { !blockerIDs.contains($0.id) }
                             for d in days.indices {
-                                let occupied = untouched.filter { calendar.isDate($0.start, inSameDayAs: days[d].date) }.map { Span(start: $0.start, end: $0.end) }
-                                days[d].free = subtract(occupied + [reserved], from: originalDays[d].free)
+                                let occupied = untouched.map { buffered(start: $0.start, end: $0.end) }
+                                days[d].free = subtract(occupied + [reservation], from: originalDays[d].free)
                             }
                             var canMove = true
                             for index in blockers.sorted(by: { tasks[$0].durationMinutes > tasks[$1].durationMinutes }) {
@@ -187,9 +266,13 @@ public struct ScheduleEngine: Sendable {
                                 tasks[index].start = replacement
                             }
                             if canMove {
-                                tasks.append(.init(courseID: course.id, start: start, durationMinutes: size))
-                                remaining -= size; repaired = true
-                                break search
+                                let added = ScheduledTask(courseID: course.id, start: start, durationMinutes: size,
+                                                          lessonID: work.lessonID, lessonName: work.lessonName)
+                                if preservesLessonOrder(tasks + [added]) {
+                                    tasks.append(added)
+                                    pending[course.id]!.removeFirst(); repaired = true
+                                    break search
+                                }
                             }
                             days = oldDays; tasks = oldTasks
                         }
@@ -197,7 +280,77 @@ public struct ScheduleEngine: Sendable {
                 }
                 if !repaired { break }
             }
-            missing[course.id] = remaining
+            missing[course.id] = pending[course.id]!.reduce(0) { $0 + $1.minutes }
+        }
+        // Rebuild the feasible allocation day by day. Unlike merely shuffling one interval,
+        // this gives equal-priority courses a share of days that were filled by a single course.
+        // Keep the original allocation unless every booked block fits in the new arrangement.
+        if Set(courses.map(\.priority)).count < courses.count {
+            var queues: [UUID: [ScheduledTask]] = [:]
+            var positions: [UUID: Int] = [:], remaining: [UUID: Int] = [:], booked: [UUID: Int] = [:]
+            var futureCapacity: [UUID: [Int]] = [:]
+            for course in ordered {
+                let ranks = Dictionary(uniqueKeysWithValues: state.lessonWorkItems(for: course).enumerated().map { ($0.element.id, $0.offset) })
+                let queue = tasks.filter { $0.courseID == course.id }.sorted {
+                    if let a = $0.lessonID, let b = $1.lessonID, let ra = ranks[a], let rb = ranks[b], ra != rb { return ra < rb }
+                    return $0.start < $1.start
+                }
+                queues[course.id] = queue; positions[course.id] = 0
+                let minutes = queue.reduce(0) { $0 + $1.durationMinutes }
+                remaining[course.id] = minutes; booked[course.id] = minutes
+                var capacity = [Int](repeating: 0, count: originalDays.count + 1)
+                for index in originalDays.indices.reversed() {
+                    capacity[index] = capacity[index + 1] + (eligible(course, originalDays[index].date)
+                        ? originalDays[index].free.reduce(0) { $0 + $1.minutes } : 0)
+                }
+                futureCapacity[course.id] = capacity
+            }
+            var mixed: [ScheduledTask] = []
+            var nextStart = Date.distantPast
+            for (index, day) in originalDays.enumerated() {
+                var daily: [UUID: Int] = [:]
+                var previous: UUID?
+                for span in day.free {
+                    var time = max(span.start, nextStart)
+                    while time < span.end {
+                        let available = Int(span.end.timeIntervalSince(time) / 60)
+                        let candidates = ordered.filter { course in
+                            let position = positions[course.id]!
+                            return eligible(course, day.date) && position < queues[course.id]!.count
+                                && queues[course.id]![position].durationMinutes <= available
+                        }
+                        let selected = candidates.min { a, b in
+                            let urgentA = remaining[a.id]! > futureCapacity[a.id]![index + 1]
+                            let urgentB = remaining[b.id]! > futureCapacity[b.id]![index + 1]
+                            if urgentA != urgentB { return urgentA }
+                            if urgentA && calendar.startOfDay(for: a.deadline) != calendar.startOfDay(for: b.deadline) {
+                                return a.deadline < b.deadline
+                            }
+                            if a.priority != b.priority { return a.priority > b.priority }
+                            let loadA = daily[a.id, default: 0], loadB = daily[b.id, default: 0]
+                            if loadA != loadB { return loadA < loadB }
+                            if (a.id == previous) != (b.id == previous) { return a.id != previous }
+                            let progressA = Double(booked[a.id]! - remaining[a.id]!) / Double(max(1, booked[a.id]!))
+                            let progressB = Double(booked[b.id]! - remaining[b.id]!) / Double(max(1, booked[b.id]!))
+                            if progressA != progressB { return progressA < progressB }
+                            // `ordered` supplies a stable deadline/demand/ID tie-break.
+                            return false
+                        }
+                        guard let selected else { break }
+                        var task = queues[selected.id]![positions[selected.id]!]
+                        task.start = time; mixed.append(task); time = task.end.addingTimeInterval(breakSeconds); nextStart = time
+                        positions[selected.id]! += 1; remaining[selected.id]! -= task.durationMinutes
+                        daily[selected.id, default: 0] += task.durationMinutes; previous = selected.id
+                    }
+                }
+            }
+            if mixed.count == tasks.count {
+                tasks = mixed
+                for index in days.indices {
+                    let occupied = tasks.map { buffered(start: $0.start, end: $0.end) }
+                    days[index].free = subtract(occupied, from: originalDays[index].free)
+                }
+            }
         }
         let dateIndices = Dictionary(uniqueKeysWithValues: days.enumerated().map { ($0.element.date, $0.offset) })
         var totals = [Int](repeating: 0, count: days.count)
@@ -214,6 +367,7 @@ public struct ScheduleEngine: Sendable {
             changed = false
             for t in tasks.indices {
                 let task = tasks[t]
+                if task.lessonID != nil { continue }
                 let course = courses.first { $0.id == task.courseID }!
                 let source = dateIndices[calendar.startOfDay(for: task.start)]!
                 let size = task.durationMinutes
@@ -229,8 +383,9 @@ public struct ScheduleEngine: Sendable {
                     return $0 < $1
                 }
                 if let target, let start = take(size, on: target) {
-                    days[source].free = merged(days[source].free + [.init(start: task.start, end: task.end)])
                     tasks[t].start = start
+                    let occupied = tasks.map { buffered(start: $0.start, end: $0.end) }
+                    for d in days.indices { days[d].free = subtract(occupied, from: originalDays[d].free) }
                     totals[source] -= size; totals[target] += size
                     loads[course.id]![source] -= size; loads[course.id]![target] += size
                     changed = true
@@ -240,29 +395,55 @@ public struct ScheduleEngine: Sendable {
         // Compact and interleave within each original free interval. Moving blocks during
         // balancing may leave holes; compacting keeps a day's schedule useful and predictable.
         var packed: [ScheduledTask] = []
+        var nextStart = Date.distantPast
         for day in originalDays {
+            var previous: UUID?
             for span in day.free {
                 var pool = tasks.filter { $0.start >= span.start && $0.end <= span.end }.sorted { $0.start < $1.start }
-                var time = span.start
-                var previous: UUID?
+                var time = max(span.start, nextStart)
                 while !pool.isEmpty {
-                    let pick = pool.firstIndex { $0.courseID != previous } ?? 0
+                    let priority = courses.first { $0.id == pool[0].courseID }!.priority
+                    let pick = pool.firstIndex { task in
+                        task.courseID != previous && courses.first { $0.id == task.courseID }!.priority == priority
+                    } ?? 0
                     var item = pool.remove(at: pick)
-                    item.start = time; time = item.end; previous = item.courseID
+                    item.start = time; time = item.end.addingTimeInterval(breakSeconds); nextStart = time; previous = item.courseID
                     packed.append(item)
                 }
             }
         }
         tasks = packed.sorted { $0.start < $1.start }
+        // A recorded start should produce a usable timetable from the first free
+        // window, even if daily balancing emptied earlier windows. Pull today's
+        // tasks forward in their existing order; every move ends no later than
+        // the old placement, preserving feasibility and lesson order.
+        if actualStart != nil, let todayPlan = originalDays.first {
+            var cursor = Date.distantPast
+            for i in tasks.indices where calendar.isDate(tasks[i].start, inSameDayAs: today) {
+                let seconds = Double(tasks[i].durationMinutes * 60)
+                if let span = todayPlan.free.first(where: { max($0.start, cursor).addingTimeInterval(seconds) <= $0.end }) {
+                    tasks[i].start = max(span.start, cursor)
+                    cursor = tasks[i].end.addingTimeInterval(breakSeconds)
+                }
+            }
+        }
         for i in tasks.indices {
             let t = tasks[i]
-            let base = "task|\(t.courseID.uuidString)|\(Int64(t.start.timeIntervalSinceReferenceDate))|\(t.durationMinutes)"
+            let base = "task|\(t.courseID.uuidString)|\(Int64(t.start.timeIntervalSinceReferenceDate))|\(t.durationMinutes)" + (t.lessonID.map { "|" + $0 } ?? "")
             var generated = stablePlannerID(base)
             if state.tasks.contains(where: { !$0.isUnconfirmed && $0.id == generated }) {
                 generated = stablePlannerID(base + "|confirmed|" + state.tasks.filter { !$0.isUnconfirmed && $0.courseID == t.courseID }.map { $0.id.uuidString }.sorted().joined(separator: ","))
             }
-            tasks[i].id = state.tasks.first(where: { $0.isUnconfirmed && $0.courseID == t.courseID && $0.start == t.start && $0.durationMinutes == t.durationMinutes })?.id
+            tasks[i].id = state.tasks.first(where: { $0.isUnconfirmed && $0.courseID == t.courseID && $0.start == t.start && $0.durationMinutes == t.durationMinutes && $0.lessonID == t.lessonID })?.id
                 ?? generated
+        }
+        for i in tasks.indices {
+            let task = tasks[i]
+            let affected = floatingRegions.filter { $0.start < task.end && $0.end > task.start }
+            if !affected.isEmpty {
+                tasks[i].floatingWindowStart = min(task.start, affected.map(\.start).min()!)
+                tasks[i].floatingWindowEnd = max(task.end, affected.map(\.end).max()!)
+            }
         }
         for i in tasks.indices { tasks[i].status = calendar.isDate(tasks[i].start, inSameDayAs: today) ? .planned : .future }
         var risks: [ScheduleRisk] = []

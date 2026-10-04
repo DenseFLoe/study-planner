@@ -63,6 +63,7 @@ public final class LocalRepository: PlannerRepository {
             default: throw CocoaError(.coderReadCorrupt)
             }
         }
+        state.removeArchivedCourses()
         state.courses.sort { $0.startDate < $1.startDate }
         state.tasks.sort { $0.start < $1.start }
         return state
@@ -84,6 +85,10 @@ public final class LocalRepository: PlannerRepository {
         try save(state, ledger: ledger)
     }
     public func save(_ state: PlannerState, ledger: SyncLedger) throws {
+        var state = state
+        state.removeArchivedCourses()
+        var ledger = ledger
+        try ledger.capture(state)
         var desired: [String: (String, Data)] = ["sync": ("sync", try encoder.encode(ledger))]
         for value in state.courses { desired["course/\(value.id)"] = ("course", try encoder.encode(value)) }
         for value in state.fixedEvents { desired["fixed/\(value.id)"] = ("fixed", try encoder.encode(value)) }

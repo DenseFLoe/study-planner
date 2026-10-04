@@ -24,7 +24,11 @@ final class ScheduleEngineTests: XCTestCase {
         let sorted = r.tasks.sorted { $0.start < $1.start }
         for (index, task) in sorted.enumerated() {
             XCTAssertGreaterThanOrEqual(task.start, now ?? date(14, 8), file: file, line: line)
-            if index > 0 { XCTAssertLessThanOrEqual(sorted[index-1].end, task.start, file: file, line: line) }
+            if index > 0 { XCTAssertLessThanOrEqual(sorted[index-1].end.addingTimeInterval(15 * 60), task.start, file: file, line: line) }
+            let weekday = cal.component(.weekday, from: task.start)
+            let allowed = Set(s.settings.availability.filter { $0.weekday == weekday }.flatMap { Array($0.startMinute..<$0.endMinute) })
+            let firstMinute = cal.component(.hour, from: task.start) * 60 + cal.component(.minute, from: task.start)
+            XCTAssertTrue((firstMinute..<(firstMinute + task.durationMinutes)).allSatisfy { allowed.contains($0) }, file: file, line: line)
             let course = s.courses.first { $0.id == task.courseID }!
             XCTAssertGreaterThanOrEqual(task.start, cal.startOfDay(for: course.startDate), file: file, line: line)
             XCTAssertLessThanOrEqual(task.end, cal.date(byAdding: .day, value: 1, to: cal.startOfDay(for: course.deadline))!, file: file, line: line)
@@ -37,6 +41,42 @@ final class ScheduleEngineTests: XCTestCase {
         }
         for course in s.courses {
             XCTAssertLessThanOrEqual(minutes(r.tasks.filter { $0.courseID == course.id }), s.remainingMinutes(for: course), file: file, line: line)
+        }
+    }
+    func testBreakCapacityBoundaryAndNoTrailingBreakRequired() {
+        for available in [120, 134, 135] {
+            var s = state(hours: 2, deadline: 14)
+            s.settings.availability = [.init(weekday: 2, startMinute: 480, endMinute: 480 + available)]
+            let r = result(s)
+            XCTAssertEqual(minutes(r.tasks), available < 135 ? 60 : 120)
+            XCTAssertEqual(r.risks.first?.unscheduledMinutes ?? 0, available < 135 ? 60 : 0)
+            if available == 135 { XCTAssertEqual(r.tasks.last?.end, date(14, 10, 15)) }
+            assertValid(r, s)
+        }
+    }
+    func testBreakAcrossShortUnavailableWindow() {
+        var s = state(hours: 2, deadline: 14)
+        s.settings.availability = [.init(weekday: 2, startMinute: 480, endMinute: 540),
+                                   .init(weekday: 2, startMinute: 545, endMinute: 615)]
+        let r = result(s)
+        XCTAssertEqual(r.tasks.map(\.start), [date(14, 8), date(14, 9, 15)])
+        assertValid(r, s)
+    }
+    func testBreakAcrossMidnight() {
+        var s = state(hours: 2, deadline: 15)
+        s.settings.availability = [.init(weekday: 2, startMinute: 1380, endMinute: 1440),
+                                   .init(weekday: 3, startMinute: 0, endMinute: 75)]
+        let r = result(s, now: date(14, 23))
+        XCTAssertEqual(r.tasks.map(\.start), [date(14, 23), date(15, 0, 15)])
+        assertValid(r, s, now: date(14, 23))
+    }
+    func testReplanReplacesActiveButKeepsBreakAfterEndedLesson() {
+        for now in [date(14, 8, 30), date(14, 9), date(14, 9, 5)] {
+            var s = state(hours: 2, deadline: 14)
+            s.tasks = [.init(courseID: s.courses[0].id, start: date(14, 8), durationMinutes: 60)]
+            let r = result(s, now: now)
+            XCTAssertEqual(r.tasks.first?.start, now < date(14, 9) ? now : date(14, 9, 15))
+            assertValid(r, s, now: now)
         }
     }
     func testEvenDistribution() {
@@ -53,8 +93,8 @@ final class ScheduleEngineTests: XCTestCase {
             .init(title: "会议", startMinute: 540, endMinute: 630, startDate: date(14), endDate: date(14)),
             .init(title: "补习", startMinute: 840, endMinute: 960, startDate: date(14), endDate: date(14))]
         let r = result(s); assertValid(r,s)
-        XCTAssertEqual(minutes(r.tasks), 300)
-        XCTAssertEqual(r.risks.first?.unscheduledMinutes, 60)
+        XCTAssertEqual(minutes(r.tasks), 240)
+        XCTAssertEqual(r.risks.first?.unscheduledMinutes, 120)
     }
     func testMissedDayRedistributesWithoutAddingDebtTwice() throws {
         var s = state(); _ = s.replan(now: date(14, 8), calendar: cal)
@@ -79,11 +119,78 @@ final class ScheduleEngineTests: XCTestCase {
         XCTAssertEqual(s.tasks.first { $0.id == future.id }?.status, .completed)
         assertValid(r,s)
     }
+    func testHistoricalFullConfirmationsShrinkRedistributedPlan() throws {
+        // Cover both single confirmation and an all-completed daily review,
+        // including tasks that ended earlier today rather than yesterday.
+        for now in [date(14, 12), date(15, 7)] {
+            for count in [1, 2] {
+                var s = state(hours: 4)
+                let old = (0..<count).map {
+                    ScheduledTask(courseID: s.courses[0].id, start: date(14, 8 + $0), durationMinutes: 60)
+                }
+                s.tasks = old
+                _ = s.replan(now: now, calendar: cal)
+                XCTAssertEqual(minutes(s.tasks.filter { $0.isUnconfirmed && $0.planningStart >= now }), 240)
+                let needsReplan = old.contains { $0.confirmationRequiresReplan(actualMinutes: 60, now: now) }
+                for task in old { try s.confirm(taskID: task.id, actualMinutes: 60, now: now) }
+                if needsReplan { _ = s.replan(now: now, calendar: cal) }
+                XCTAssertEqual(s.remainingMinutes(for: s.courses[0]), 240 - count * 60)
+                XCTAssertEqual(minutes(s.tasks.filter { $0.isUnconfirmed && $0.planningStart >= now }), 240 - count * 60)
+                XCTAssertEqual(s.tasks.filter { $0.status == .completed }.count, count)
+                XCTAssertEqual(s.completions.count, count)
+                XCTAssertThrowsError(try s.confirm(taskID: old[0].id, actualMinutes: 60, now: now))
+            }
+        }
+    }
+    func testUndoHistoricalCompletionRestoresFutureWorkAfterReplan() throws {
+        var s = state(hours: 2)
+        let task = ScheduledTask(courseID: s.courses[0].id, start: date(14, 8), durationMinutes: 60)
+        s.tasks = [task]
+        try s.confirm(taskID: task.id, actualMinutes: 60, now: date(14, 9))
+        let now = date(15, 7)
+        _ = s.replan(now: now, calendar: cal)
+        XCTAssertEqual(minutes(s.tasks.filter(\.isUnconfirmed)), 60)
+        try s.undoConfirmation(taskID: task.id, now: now, calendar: cal)
+        _ = s.replan(now: now, calendar: cal)
+        XCTAssertEqual(s.remainingMinutes(for: s.courses[0]), 120)
+        XCTAssertEqual(minutes(s.tasks.filter { $0.isUnconfirmed && $0.planningStart >= now }), 120)
+        XCTAssertTrue(s.tasks.first { $0.id == task.id }?.isUnconfirmed == true)
+        XCTAssertTrue(s.completions.isEmpty)
+    }
+    func testExampleRequiresNoExistingUserData() {
+        let empty = PlannerState()
+        XCTAssertTrue(empty.canLoadExample)
+        var s = state()
+        XCTAssertFalse(s.canLoadExample)
+        s.courses[0].isArchived = true
+        XCTAssertFalse(s.canLoadExample)
+        s = empty
+        s.fixedEvents = [.init(title: "原课表", startMinute: 480, endMinute: 540, startDate: date(14), endDate: date(18))]
+        XCTAssertFalse(s.canLoadExample)
+        let task = ScheduledTask(courseID: UUID(), start: date(14, 8), durationMinutes: 60)
+        s = empty; s.tasks = [task]
+        XCTAssertFalse(s.canLoadExample)
+        s = empty; s.completions = [.init(courseID: task.courseID, taskID: task.id, minutes: 60, recordedAt: date(14, 9))]
+        XCTAssertFalse(s.canLoadExample)
+    }
+    func testConfirmationReplanUsesWholeFloatingWindow() {
+        var task = ScheduledTask(courseID: UUID(), start: date(14, 8), durationMinutes: 60)
+        XCTAssertFalse(task.confirmationRequiresReplan(actualMinutes: 60, now: date(14, 8, 30)))
+        XCTAssertTrue(task.confirmationRequiresReplan(actualMinutes: 60, now: date(14, 9)))
+        task.floatingWindowStart = date(14, 8)
+        task.floatingWindowEnd = date(14, 12)
+        XCTAssertFalse(task.confirmationRequiresReplan(actualMinutes: 60, now: date(14, 10)))
+        XCTAssertTrue(task.confirmationRequiresReplan(actualMinutes: 60, now: date(14, 12)))
+        XCTAssertTrue(task.confirmationRequiresReplan(actualMinutes: 30, now: date(14, 10)))
+    }
     func testFullCompletionRemovesOnlySelectedBlockAndUndoRestoresIt() throws {
         var s = state(); _ = s.replan(now: date(14, 8), calendar: cal)
         let original = s.tasks
         let selected = original[0]
         try s.confirm(taskID: selected.id, actualMinutes: selected.durationMinutes, now: date(14, 8))
+        if selected.confirmationRequiresReplan(actualMinutes: selected.durationMinutes, now: date(14, 8)) {
+            _ = s.replan(now: date(14, 8), calendar: cal)
+        }
         // The completion flow saves the existing schedule without immediately filling
         // the newly freed slot with a different block from the same course.
         XCTAssertEqual(s.tasks.filter(\.isUnconfirmed), original.filter { $0.id != selected.id })
@@ -120,14 +227,59 @@ final class ScheduleEngineTests: XCTestCase {
         XCTAssertEqual(s.tasks.first { $0.id == t.id }?.status, .partial)
         XCTAssertTrue(r.tasks.contains { $0.durationMinutes == 30 })
     }
-    func testPastAndActiveTasksRemainUnchanged() {
+    func testActivePlansAreReplacedFromCurrentTimeWithoutAddingWork() {
         var s = state(); _ = s.replan(now: date(14, 8), calendar: cal)
         let old = s.tasks.filter { $0.start < date(14, 8, 30) }
-        let r = s.replan(now:date(14,8,30), calendar:cal)
-        for t in old { XCTAssertEqual(s.tasks.first { $0.id == t.id }, t) }
-        XCTAssertEqual(minutes(r.tasks), 600 - minutes(old))
-        XCTAssertTrue(r.tasks.allSatisfy { $0.start >= old.last!.end })
-        assertValid(r,s,now:date(14,8,30))
+        let r = s.replan(now: date(14, 8, 30), calendar: cal)
+        for t in old { XCTAssertNil(s.tasks.first { $0.id == t.id }) }
+        XCTAssertEqual(minutes(r.tasks), 600)
+        XCTAssertEqual(r.tasks.first?.start, date(14, 8, 30))
+        XCTAssertEqual(s.tasks.count, r.tasks.count)
+        assertValid(r, s, now: date(14, 8, 30))
+        let again = s.replan(now: date(14, 8, 30), calendar: cal)
+        XCTAssertEqual(s.tasks, r.tasks)
+        XCTAssertEqual(minutes(again.tasks), 600)
+    }
+    func testConfirmedFloatingTaskReleasesUnusedWindow() throws {
+        var s = state(hours: 2, deadline: 14)
+        var task = ScheduledTask(courseID: s.courses[0].id, start: date(14, 8), durationMinutes: 60)
+        task.floatingWindowStart = date(14, 8)
+        task.floatingWindowEnd = date(14, 18)
+        s.tasks = [task]
+        try s.confirm(taskID: task.id, actualMinutes: 30, now: date(14, 8, 30))
+        let r = s.replan(now: date(14, 8, 30), calendar: cal)
+        XCTAssertEqual(r.tasks.first?.start, date(14, 8, 45))
+        XCTAssertEqual(minutes(r.tasks), 90)
+        XCTAssertEqual(s.tasks.first { $0.id == task.id }?.completedMinutes, 30)
+        assertValid(r, s, now: date(14, 8, 30))
+    }
+    func testLessonOrderChangeImmediatelyReplacesTodayIncludingStartedWindow() throws {
+        for floating in [false, true] {
+            var s = state(hours: 3, deadline: 14)
+            s.courses[0].type = .lessonBasedRecorded
+            s.courses[0].manualLessons = ["a", "b", "c"].map { .init(id: $0, name: $0, durationMinutes: 60) }
+            let history = ScheduledTask(courseID: s.courses[0].id, start: date(14, 6), durationMinutes: 60, lessonID: "c")
+            s.tasks = [history]
+            try s.confirm(taskID: history.id, actualMinutes: 60, now: date(14, 7))
+            let confirmed = s.tasks[0]
+            _ = s.replan(now: date(14, 8), calendar: cal)
+            if floating {
+                for i in s.tasks.indices where s.tasks[i].isUnconfirmed {
+                    s.tasks[i].floatingWindowStart = date(14, 8)
+                    s.tasks[i].floatingWindowEnd = date(14, 18)
+                }
+            }
+            s.courses[0].lessonOrder = ["b", "a", "c"]
+            let r = s.replan(now: date(14, 8, 30), calendar: cal)
+            XCTAssertEqual(r.tasks.map(\.lessonID), ["b", "a"])
+            XCTAssertEqual(r.tasks.first?.start, date(14, 8, 30))
+            XCTAssertEqual(s.tasks.first { $0.id == history.id }, confirmed)
+            XCTAssertEqual(minutes(s.tasks.filter(\.isUnconfirmed)), 120)
+            assertValid(r, s, now: date(14, 8, 30))
+            s.courses[0].autoScheduleEnabled = false
+            _ = s.replan(now: date(14, 8, 31), calendar: cal)
+            XCTAssertEqual(s.tasks, [confirmed])
+        }
     }
     func testDeadlineCapacityWarningAcrossCourses() {
         var s = state(hours:8,deadline:14)
@@ -137,16 +289,16 @@ final class ScheduleEngineTests: XCTestCase {
         XCTAssertEqual(r.risks[0].requiredMinutes,960)
         XCTAssertEqual(r.risks[0].availableMinutes,600)
         XCTAssertEqual(r.risks[0].capacityDeficit,360)
-        XCTAssertEqual(r.risks[0].unscheduledMinutes,360)
+        XCTAssertEqual(r.risks[0].unscheduledMinutes,480)
         assertValid(r,s)
     }
     func testEarlierDeadlineWins() {
-        var s = state(hours: 10, deadline: 15)
-        let urgent = Course(name:"考试",totalMinutes:600,startDate:date(14),deadline:date(14))
+        var s = state(hours: 8, deadline: 15)
+        let urgent = Course(name:"考试",totalMinutes:480,startDate:date(14),deadline:date(14))
         s.courses.append(urgent)
         let r = result(s)
         XCTAssertTrue(r.risks.isEmpty)
-        XCTAssertEqual(minutes(r.tasks.filter { $0.courseID == urgent.id && cal.isDate($0.start,inSameDayAs:date(14)) }),600)
+        XCTAssertEqual(minutes(r.tasks.filter { $0.courseID == urgent.id && cal.isDate($0.start,inSameDayAs:date(14)) }),480)
         assertValid(r,s)
     }
     func testWeeklyRecurrenceInclusiveSemesterBounds() {
@@ -178,10 +330,63 @@ final class ScheduleEngineTests: XCTestCase {
         s.courses[0].minimumBlockMinutes = 30
         XCTAssertEqual(minutes(result(s).tasks),60)
     }
+    func testImportedLessonsUseIndividualRemainingDurationsAndPartialCompletion() throws {
+        var s = state(hours: 1, deadline: 15)
+        s.courses = []
+        let lessons: [WebCourseLesson] = [
+            .init(id: "a", name: "导论", subject: "英语", stage: "基础", chapter: "一", kind: "video", published: true, durationSeconds: 5400, watchedPercent: 0, markedFinished: false, requiresDuration: true),
+            .init(id: "b", name: "阅读", subject: "英语", stage: "基础", chapter: "一", kind: "video", published: true, durationSeconds: 2700, watchedPercent: 50, markedFinished: false, requiresDuration: true),
+            .init(id: "c", name: "写作", subject: "英语", stage: "进阶", chapter: "二", kind: "video", published: true, durationSeconds: 4500, watchedPercent: 0, markedFinished: false, requiresDuration: true)
+        ]
+        let snapshot = WebCourseSnapshot(packageID: "english", name: "英语", sourceURL: "https://example.com/course",
+                                         fetchedAt: date(14, 7), expectedOutlines: 1, fetchedOutlines: 1, lessons: lessons, issues: [])
+        try s.importWebCourses([snapshot], deadline: date(15), now: date(14, 8))
+        XCTAssertEqual(s.courses[0].type, .lessonBasedRecorded)
+        XCTAssertEqual(s.lessonWorkItems(for: s.courses[0]).map(\.remainingMinutes), [90, 23, 75])
+        let first = s.replan(now: date(14, 8), calendar: cal)
+        XCTAssertEqual(first.tasks.map(\.lessonID), ["a", "b", "c"])
+        XCTAssertEqual(first.tasks.map(\.durationMinutes), [90, 23, 75])
+        try s.confirm(taskID: first.tasks[0].id, actualMinutes: 30, now: date(14, 8, 1))
+        let replanned = s.replan(now: date(14, 8, 1), calendar: cal)
+        XCTAssertEqual(s.lessonWorkItems(for: s.courses[0]).map(\.remainingMinutes), [60, 23, 75])
+        XCTAssertEqual(replanned.tasks.first(where: { $0.lessonID == "a" })?.durationMinutes, 60)
+        XCTAssertEqual(minutes(replanned.tasks), 158)
+    }
+    func testLessonNeedsContinuousSlot() throws {
+        var s = state(hours: 1, deadline: 14)
+        s.courses = []
+        s.settings.availability = [.init(weekday: 2, startMinute: 480, endMinute: 540),
+                                   .init(weekday: 2, startMinute: 600, endMinute: 660)]
+        let lesson = WebCourseLesson(id: "long", name: "长课", subject: "", stage: "", chapter: "", kind: "video",
+                                     published: true, durationSeconds: 5400, watchedPercent: 0, markedFinished: false, requiresDuration: true)
+        let snapshot = WebCourseSnapshot(packageID: "long", name: "长课", sourceURL: "https://example.com/course",
+                                         fetchedAt: date(14, 7), expectedOutlines: 1, fetchedOutlines: 1, lessons: [lesson], issues: [])
+        try s.importWebCourses([snapshot], deadline: date(14), now: date(14, 8))
+        let plan = result(s)
+        XCTAssertTrue(plan.tasks.isEmpty)
+        XCTAssertEqual(plan.risks.first?.unscheduledMinutes, 90)
+    }
+    func testManualLessonCourseUsesEnteredDurations() {
+        var s = state(hours: 1, deadline: 14)
+        s.courses[0].type = .lessonBasedRecorded
+        s.courses[0].manualLessons = [.init(id: "one", name: "第一节", durationMinutes: 35),
+                                      .init(id: "two", name: "第二节", durationMinutes: 85)]
+        s.courses[0].totalMinutes = 120
+        let plan = result(s)
+        XCTAssertEqual(plan.tasks.map(\.lessonID), ["one", "two"])
+        XCTAssertEqual(plan.tasks.map(\.durationMinutes), [35, 85])
+        XCTAssertEqual(plan.tasks.map(\.lessonName), ["第一节", "第二节"])
+        XCTAssertEqual(plan.tasks[1].start.timeIntervalSince(plan.tasks[0].end), 15 * 60)
+        assertValid(plan, s)
+        s.courses[0].lessonOrder = ["two", "one"]
+        let reordered = result(s)
+        XCTAssertEqual(reordered.tasks.map(\.lessonID), ["two", "one"])
+        XCTAssertEqual(reordered.tasks.map(\.durationMinutes), [85, 35])
+    }
     func testOverlappingAvailabilityIsNotDoubleCounted() {
         var s = state(hours:5,deadline:14)
         s.settings.availability = [.init(weekday:2,startMinute:480,endMinute:600),.init(weekday:2,startMinute:540,endMinute:660)]
-        let r = result(s); XCTAssertEqual(minutes(r.tasks),180); assertValid(r,s)
+        let r = result(s); XCTAssertEqual(minutes(r.tasks),120); assertValid(r,s)
     }
     func testDisabledAndCompletedCoursesGenerateNothing() {
         var s = state(); s.courses[0].autoScheduleEnabled = false
@@ -192,7 +397,7 @@ final class ScheduleEngineTests: XCTestCase {
     func testSettingsDeadlineAndDurationEditsTriggerNewPlan() {
         var s = state(); _ = s.replan(now:date(14,8),calendar:cal)
         s.courses[0].totalMinutes = 120; s.courses[0].deadline = date(14)
-        s.settings.availability = [.init(weekday:2,startMinute:960,endMinute:1080)]
+        s.settings.availability = [.init(weekday:2,startMinute:960,endMinute:1095)]
         let r = s.replan(now:date(14,8),calendar:cal)
         XCTAssertEqual(minutes(r.tasks),120); XCTAssertEqual(r.tasks.first?.start,date(14,16))
     }
@@ -210,6 +415,80 @@ final class ScheduleEngineTests: XCTestCase {
         XCTAssertGreaterThan(today.count,2)
         XCTAssertNotEqual(today[0].courseID,today[1].courseID)
         assertValid(r,s)
+    }
+    func testFullDaysMixEqualPriorityCoursesIncludingWholeLessons() {
+        for lessonBased in [false, true] {
+            var s = state(hours: 4, deadline: 15)
+            s.settings.availability = (1...7).map { .init(weekday: $0, startMinute: 480, endMinute: 765) }
+            s.courses.append(.init(name: "英语", totalMinutes: 240, startDate: date(14), deadline: date(15)))
+            if lessonBased {
+                for index in s.courses.indices {
+                    s.courses[index].type = .lessonBasedRecorded
+                    s.courses[index].manualLessons = (0..<4).map { .init(id: "lesson\($0)", name: "课\($0)", durationMinutes: 60) }
+                    s.courses[index].lessonOrder = ["lesson3", "lesson1", "lesson2", "lesson0"]
+                }
+            }
+            let r = result(s)
+            XCTAssertTrue(r.risks.isEmpty); XCTAssertEqual(minutes(r.tasks), 480)
+            for day in 14...15 {
+                let daily = r.tasks.filter { cal.isDate($0.start, inSameDayAs: date(day)) }
+                XCTAssertEqual(Set(daily.map(\.courseID)).count, 2)
+                for pair in zip(daily, daily.dropFirst()) { XCTAssertNotEqual(pair.0.courseID, pair.1.courseID) }
+            }
+            if lessonBased {
+                for course in s.courses { XCTAssertEqual(r.tasks.filter { $0.courseID == course.id }.map { $0.lessonID! }, course.lessonOrder!) }
+            }
+            assertValid(r, s)
+        }
+    }
+
+    func testRotationSpansSeparateWindowsAndRespectsPriority() {
+        var s = state(hours: 2, deadline: 14)
+        s.courses.append(.init(name: "英语", totalMinutes: 120, startDate: date(14), deadline: date(14)))
+        s.settings.availability = [480, 600, 780, 900].map { .init(weekday: 2, startMinute: $0, endMinute: $0 + 60) }
+        let r = result(s)
+        XCTAssertEqual(r.tasks.count, 4)
+        for pair in zip(r.tasks, r.tasks.dropFirst()) { XCTAssertNotEqual(pair.0.courseID, pair.1.courseID) }
+        assertValid(r, s)
+        // A lower-priority course does not interrupt an equal-deadline high-priority block.
+        s.courses[0].priority = 3
+        let prioritized = result(s)
+        XCTAssertEqual(prioritized.tasks.prefix(2).map(\.courseID), [s.courses[0].id, s.courses[0].id])
+    }
+
+    func testMixedVariableLessonsKeepSequenceAndTotal() {
+        var s = state(hours: 4, deadline: 15)
+        s.settings.availability = (1...7).map { .init(weekday: $0, startMinute: 480, endMinute: 765) }
+        s.courses.append(.init(name: "英语", totalMinutes: 240, startDate: date(14), deadline: date(15)))
+        for index in s.courses.indices {
+            s.courses[index].type = .lessonBasedRecorded
+            s.courses[index].manualLessons = [90, 30, 90, 30].enumerated().map { .init(id: "\($0.offset)", name: "课\($0.offset)", durationMinutes: $0.element) }
+        }
+        let r = result(s)
+        XCTAssertTrue(r.risks.isEmpty); XCTAssertEqual(minutes(r.tasks), 480)
+        for course in s.courses {
+            let lessons = r.tasks.filter { $0.courseID == course.id }
+            XCTAssertEqual(lessons.map(\.lessonID), ["0", "1", "2", "3"])
+            XCTAssertEqual(lessons.map(\.durationMinutes), [90, 30, 90, 30])
+        }
+        for day in 14...15 { XCTAssertEqual(Set(r.tasks.filter { cal.isDate($0.start, inSameDayAs: date(day)) }.map(\.courseID)).count, 2) }
+        assertValid(r, s)
+    }
+
+    func testReplanReportsCapacityForWholeUnconfirmedActiveWork() {
+        var s = state(hours: 2, deadline: 15)
+        s.courses[0].totalMinutes = 150
+        s.courses[0].minimumBlockMinutes = 120
+        // An unconfirmed active task does not reduce remaining learning demand.
+        s.tasks = [.init(courseID: s.courses[0].id, start: date(14, 7, 45), durationMinutes: 30)]
+        s.courses.append(.init(name: "短课", totalMinutes: 120, startDate: date(14), deadline: date(15), minimumBlockMinutes: 60))
+        s.settings.availability = [.init(weekday: 2, startMinute: 510, endMinute: 630),
+                                   .init(weekday: 3, startMinute: 480, endMinute: 540),
+                                   .init(weekday: 3, startMinute: 600, endMinute: 660)]
+        let r = result(s)
+        XCTAssertEqual(r.risks.first?.unscheduledMinutes, 60); XCTAssertEqual(minutes(r.tasks), 210)
+        XCTAssertEqual(r.tasks.first?.durationMinutes, 120)
+        assertValid(r, s)
     }
     func testGeneratedScenariosPreserveConservationAndNoConflicts() {
         for seed in 1...40 {
@@ -257,11 +536,13 @@ final class ScheduleEngineTests: XCTestCase {
         s.removeFixedEvent(id:e.id,now:date(14,9),calendar:cal)
         XCTAssertTrue(s.fixedEvents.contains { $0.occurs(on:date(14),calendar:cal) && $0.startMinute == 480 })
     }
-    func testFixedEventCannotCollideWithActiveTask() {
+    func testFixedEventReplacesActivePlanToday() throws {
         var s = state(); _ = s.replan(now:date(14,8),calendar:cal)
         let event = FixedEvent(title:"会议",startMinute:480,endMinute:600,startDate:date(14),endDate:date(14))
-        XCTAssertThrowsError(try s.updateFixedEvent(event,now:date(14,8,30),calendar:cal))
-        XCTAssertTrue(s.fixedEvents.isEmpty)
+        try s.updateFixedEvent(event,now:date(14,8,30),calendar:cal)
+        let r = s.replan(now: date(14,8,30), calendar: cal)
+        XCTAssertEqual(r.tasks.first?.start, date(14,10))
+        assertValid(r, s, now: date(14,8,30))
     }
     func testArchivedCourseKeepsHistoryAndStopsFuturePlans() throws {
         var s = state(); _ = s.replan(now:date(14,8),calendar:cal)

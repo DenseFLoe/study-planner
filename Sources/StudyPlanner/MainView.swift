@@ -9,15 +9,21 @@ enum Page: String, CaseIterable {
     case settings = "学习设置"
 }
 enum EditorSheet: Identifiable {
-    case course(Course), fixed(FixedEvent), completion(ScheduledTask), review, risks
+    case scheduleSearch
+    case course(Course), lessonOrder(Course), fixed(FixedEvent), completion(ScheduledTask), review, risks, webImport, netdiskImport, mergeCourses
 
     var id: String {
         switch self {
+        case .scheduleSearch: "scheduleSearch"
         case .course(let course): "course\(course.id)"
+        case .lessonOrder(let course): "lessonOrder\(course.id)"
         case .fixed(let event): "fixed\(event.id)"
         case .completion(let task): "task\(task.id)"
         case .review: "review"
         case .risks: "risks"
+        case .webImport: "webImport"
+        case .netdiskImport: "netdiskImport"
+        case .mergeCourses: "mergeCourses"
         }
     }
 }
@@ -32,7 +38,6 @@ struct MainView: View {
     @Namespace private var navigationSelection
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    private let timer = Timer.publish(every: 30, on: .main, in: .common).autoconnect()
 
     var body: some View {
         HStack(spacing: 0) {
@@ -68,7 +73,18 @@ struct MainView: View {
         }
         .sheet(item: $sheet, onDismiss: { store.showDailyReview = false }) { selection in
             switch selection {
+            case .scheduleSearch:
+                ScheduleSearchView(tasks: store.state.tasks, courses: store.state.courses) { date in
+                    selectedDay = Calendar.current.startOfDay(for: date)
+                    month = selectedDay
+                    page = .calendar
+                    sheet = nil
+                }
+            case .mergeCourses: CourseMergeEditor(store: store)
+            case .webImport: WebCourseImportSheet(store: store)
+            case .netdiskImport: NetdiskImportSheet(store: store)
             case .course(let course): CourseEditor(store: store, course: course)
+            case .lessonOrder(let course): LessonOrderEditor(store: store, course: course)
             case .fixed(let event): FixedEventEditor(store: store, event: event)
             case .completion(let task): CompletionEditor(store: store, task: task)
             case .review: DailyReviewView(store: store)
@@ -104,7 +120,13 @@ struct MainView: View {
                 store.triggerAutomaticSync()
             }
         }
-        .onReceive(timer) { _ in store.checkDay() }
+        .task {
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(30))
+                guard !Task.isCancelled else { break }
+                store.checkDay()
+            }
+        }
     }
 
     @ViewBuilder
@@ -304,6 +326,22 @@ struct MainView: View {
                     }
 
                     AddMenuActionRow(
+                        title: "从网站导入课程",
+                        systemImage: "globe"
+                    ) {
+                        showingAddMenu = false
+                        sheet = .webImport
+                    }
+
+                    AddMenuActionRow(
+                        title: "从夸克网盘导入课程",
+                        systemImage: "externaldrive"
+                    ) {
+                        showingAddMenu = false
+                        sheet = .netdiskImport
+                    }
+
+                    AddMenuActionRow(
                         title: "固定课程 / 其他事项",
                         systemImage: "calendar.badge.clock"
                     ) {
@@ -339,7 +377,7 @@ struct MainView: View {
         switch page {
         case .calendar: "固定课表优先，学习任务随进度自动调整。"
         case .courses: "管理学习量、截止日期和每门课程的进度。"
-        case .fixed: "为不可移动的课程、休息和事项保留时间。"
+        case .fixed: "为课程和事项保留固定时间或时段内的固定时长。"
         case .settings: "设置可学习时段、排程规则与本地同步。"
         }
     }
@@ -355,11 +393,49 @@ struct MainView: View {
         store.state.fixedEvents.filter { $0.occurs(on: selectedDay, calendar: .current) }
     }
 
+    private var skippedDayEvents: [FixedEvent] {
+        store.state.fixedEvents.filter {
+            $0.occurs(on: selectedDay, calendar: .current, includingExcluded: true) &&
+            !$0.occurs(on: selectedDay, calendar: .current)
+        }.sorted { $0.startMinute < $1.startMinute }
+    }
+
+    private var canChangeDayEvents: Bool {
+        Calendar.current.startOfDay(for: selectedDay) >= Calendar.current.startOfDay(for: Date()) &&
+        store.isReady && !store.syncBusy
+    }
+
     private var agenda: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 26) {
+                ActualStudyStartEntry(store: store) {
+                    selectedDay = Calendar.current.startOfDay(for: Date())
+                    month = selectedDay
+                }
+                Button { sheet = .scheduleSearch } label: {
+                    HStack {
+                        Image(systemName: "magnifyingglass")
+                        Text("搜索课程或课时，查找安排日期")
+                        Spacer()
+                        Text("⌘F").font(.caption)
+                    }
+                    .foregroundStyle(.secondary)
+                    .padding(14)
+                    .plannerSurface(radius: 14, material: .thinMaterial, shadow: false)
+                }
+                .buttonStyle(.plain)
+                .keyboardShortcut("f", modifiers: .command)
                 summaryBand
-                PlannerSectionTitle(title: "今天的安排", detail: "\(timelineItems.count) 项任务")
+                if dayEvents.contains(where: \.isFloating) {
+                    Label("浮动事项已预留 " + hours(dayEvents.filter(\.isFloating).reduce(0) { $0 + $1.occupiedMinutes }) + "；虚线学习卡片在标注时段内完成，先后可调整。", systemImage: "arrow.left.arrow.right")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+                PlannerSectionTitle(
+                    title: Calendar.current.isDateInToday(selectedDay)
+                        ? (store.state.settings.actualStudyStart(on: Date()) == nil ? "今天的安排" : "新课表 · 今天")
+                        : "当天的安排",
+                    detail: "\(timelineItems.count) 项任务"
+                )
 
                 if dayTasks.isEmpty && dayEvents.isEmpty {
                     emptyAgenda
@@ -372,7 +448,9 @@ struct MainView: View {
                                 isLast: index == timelineItems.count - 1,
                                 confirm: { task in _ = store.confirm(task, minutes: task.durationMinutes) },
                                 editTask: { sheet = .completion($0) },
-                                editEvent: { sheet = .fixed($0) }
+                                editEvent: { sheet = .fixed($0) },
+                                skipEvent: { store.setEventSkipped($0, on: selectedDay, skipped: true) },
+                                canSkipEvent: canChangeDayEvents
                             )
                         }
                     }
@@ -395,6 +473,25 @@ struct MainView: View {
                         .font(.caption)
                         .foregroundStyle(.tertiary)
                         .padding(.leading, 76)
+                }
+                if !skippedDayEvents.isEmpty {
+                    PlannerSectionTitle(title: "本日已临时移除", detail: "仅影响这一天，其他日期照常安排")
+                    ForEach(skippedDayEvents) { event in
+                        HStack {
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text(event.title).font(.headline)
+                                Text("\(clockTime(event.startMinute))–\(clockTime(event.endMinute)) · 本日不占用时间")
+                                    .font(.caption).foregroundStyle(.secondary)
+                            }
+                            Spacer()
+                            Button("恢复本日并重排", systemImage: "arrow.uturn.backward") {
+                                store.setEventSkipped(event, on: selectedDay, skipped: false)
+                            }
+                            .disabled(!canChangeDayEvents)
+                        }
+                        .padding(14)
+                        .plannerSurface(radius: 14, material: .thinMaterial, shadow: false)
+                    }
                 }
             }
             .padding(.horizontal, PlannerTheme.pagePadding)
@@ -453,7 +550,7 @@ struct MainView: View {
                 .foregroundStyle(.secondary)
             Button("添加学习课程") { newCourse() }
                 .buttonStyle(SoftButtonStyle(prominent: true))
-            if store.courses.isEmpty {
+            if store.state.canLoadExample {
                 Button("载入示例，体验自动排程") { store.loadExample() }.buttonStyle(.link)
             }
         }
@@ -472,6 +569,8 @@ struct MainView: View {
 
                 CourseProgressPanel(
                     courses: store.courses,
+                    demands: store.result.demands,
+                    studyLoad: store.studyLoad,
                     completedMinutes: { store.state.completedMinutes(for: $0) },
                     edit: { sheet = .course($0) }
                 )
@@ -493,8 +592,12 @@ struct MainView: View {
     private var courseList: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
+                PlannerSectionTitle(title: "可调度课程", detail: "\(store.courses.count) 门")
                 HStack {
-                    PlannerSectionTitle(title: "可调度课程", detail: "\(store.courses.count) 门")
+                    Button("合并课程", systemImage: "arrow.triangle.merge") { sheet = .mergeCourses }
+                        .disabled(store.courses.count < 2)
+                    Button("从网站抓取全部课程", systemImage: "globe") { sheet = .webImport }
+                    Button("从夸克网盘导入", systemImage: "externaldrive") { sheet = .netdiskImport }
                     Button("添加课程", systemImage: "plus") { newCourse() }
                         .buttonStyle(SoftButtonStyle(prominent: true))
                 }
@@ -506,7 +609,9 @@ struct MainView: View {
                         minimumBlock: course.minimumBlockMinutes == 0
                             ? store.state.settings.minimumScheduleUnit
                             : course.minimumBlockMinutes,
-                        edit: { sheet = .course(course) }
+                        edit: { sheet = .course(course) },
+                        reorder: store.state.lessonWorkItems(for: course).count > 1
+                            ? { sheet = .lessonOrder(course) } : nil
                     )
                 }
 
@@ -560,7 +665,7 @@ struct MainView: View {
 
     private var timelineItems: [TimelineItem] {
         (dayTasks.filter(\.isUnconfirmed).map {
-            TimelineItem(id: $0.id, start: $0.start, end: $0.end, task: $0)
+            TimelineItem(id: $0.id, start: $0.planningStart, end: $0.planningEnd, task: $0)
         } + dayEvents.map {
             TimelineItem(
                 id: $0.id,
@@ -685,7 +790,11 @@ private struct TimelineRow: View {
     var confirm: (ScheduledTask) -> Void
     var editTask: (ScheduledTask) -> Void
     var editEvent: (FixedEvent) -> Void
+    var skipEvent: (FixedEvent) -> Void
+    var canSkipEvent: Bool
     @State private var hovering = false
+
+    private var floating: Bool { item.event?.isFloating == true || item.task?.isFloating == true }
 
     private var tint: Color {
         if item.task != nil { return courseColor(course?.color ?? "blue") }
@@ -697,6 +806,7 @@ private struct TimelineRow: View {
             VStack(alignment: .trailing, spacing: 3) {
                 Text(item.start.formatted(date: .omitted, time: .shortened))
                     .font(.system(size: 13, weight: .semibold, design: .rounded))
+                if floating { Image(systemName: "arrow.up.arrow.down").font(.caption2).foregroundStyle(tint) }
                 Text(item.end.formatted(date: .omitted, time: .shortened))
                     .font(.caption2)
                     .foregroundStyle(.tertiary)
@@ -724,7 +834,7 @@ private struct TimelineRow: View {
 
                 ZStack {
                     Circle().fill(tint.opacity(0.11))
-                    Image(systemName: item.task == nil ? "lock.fill" : "book.closed.fill")
+                    Image(systemName: floating ? "arrow.left.arrow.right" : (item.task == nil ? "lock.fill" : "book.closed.fill"))
                         .font(.system(size: 15, weight: .semibold))
                         .foregroundStyle(tint)
                 }
@@ -734,13 +844,22 @@ private struct TimelineRow: View {
                     Text(item.task == nil ? (item.event?.title ?? "固定事项") : (course?.name ?? "已删除课程"))
                         .font(.system(size: 15, weight: .semibold))
                     if let task = item.task {
-                        Text("\(hours(task.durationMinutes)) · \(task.end < Date() ? "待确认" : "可调度学习")")
+                        if let lessonName = task.lessonName, !lessonName.isEmpty {
+                            Text(lessonName)
+                                .font(.system(size: 18, weight: .semibold))
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                        Text([hours(task.durationMinutes), task.isFloating ? "时段内完成 · 顺序可调" : (task.end < Date() ? "待确认" : "可调度学习")].joined(separator: " · "))
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     } else {
-                        Text("固定事项 · 不参与自动移动")
+                        Text(item.event?.isFloating == true ? "时段内浮动 · 固定占用 " + hours(item.event!.occupiedMinutes) : "固定事项 · 不参与自动移动")
                             .font(.caption)
                             .foregroundStyle(.secondary)
+                    }
+                    if let event = item.event, event.isFloating {
+                        FloatingWindowIndicator(occupied: event.occupiedMinutes, window: event.endMinute - event.startMinute, tint: tint)
+                            .frame(maxWidth: 280)
                     }
                 }
 
@@ -754,18 +873,23 @@ private struct TimelineRow: View {
                         Image(systemName: "checkmark")
                             .font(.system(size: 13, weight: .bold))
                             .frame(width: 30, height: 30)
+                            .contentShape(Circle())
                             .foregroundStyle(hovering ? Color.white : tint)
                             .background(hovering ? tint : Color.clear, in: Circle())
                             .overlay(Circle().strokeBorder(tint.opacity(hovering ? 0 : 0.55), lineWidth: 1.5))
                     }
                     .buttonStyle(.plain)
-                    .help(task.start > Date() ? "提前完成此任务" : "确认全部完成")
-                    .accessibilityLabel(task.start > Date() ? "提前完成\(course?.name ?? "任务")" : "完成\(course?.name ?? "任务")")
+                    .help(task.planningStart > Date() ? "提前完成此任务" : "确认全部完成")
+                    .accessibilityLabel(task.planningStart > Date() ? "提前完成\(course?.name ?? "任务")" : "完成\(course?.name ?? "任务")")
                     Button { editTask(task) } label: { Image(systemName: "ellipsis") }
                         .buttonStyle(.plain)
                         .foregroundStyle(.secondary)
                         .help("部分完成或未完成")
                 } else if let event = item.event {
+                    Button("仅此日移除并重排", systemImage: "calendar.badge.minus") { skipEvent(event) }
+                        .font(.caption)
+                        .disabled(!canSkipEvent)
+                        .help("临时移除本日这一次固定事项，重排今天及未来未确认任务；其他日期照常安排")
                     Button { editEvent(event) } label: { Image(systemName: "pencil") }
                         .buttonStyle(.plain)
                         .foregroundStyle(.secondary)
@@ -773,6 +897,7 @@ private struct TimelineRow: View {
                 }
             }
             .padding(.horizontal, 14)
+            .padding(.vertical, 12)
             .frame(minHeight: 76)
             .liquidGlass(
                 in: RoundedRectangle(cornerRadius: 17, style: .continuous),
@@ -790,6 +915,11 @@ private struct TimelineRow: View {
                         ),
                         lineWidth: 0.8
                     )
+            }
+            .overlay {
+                if floating {
+                    RoundedRectangle(cornerRadius: 17).strokeBorder(tint.opacity(0.55), style: StrokeStyle(lineWidth: 1, dash: [5, 4]))
+                }
             }
             .shadow(color: hovering ? tint.opacity(0.10) : .clear, radius: 12, y: 5)
             .scaleEffect(hovering ? 1.004 : 1, anchor: .center)
@@ -813,6 +943,9 @@ private struct CompletedTaskRow: View {
                 .foregroundStyle(task.status == .missed ? Color.orange : Color.teal)
             VStack(alignment: .leading, spacing: 3) {
                 Text(course?.name ?? "已删除课程").fontWeight(.semibold)
+                if let lessonName = task.lessonName, !lessonName.isEmpty {
+                    Text(lessonName).font(.system(size: 18, weight: .semibold))
+                }
                 Text(statusLabel(task)).font(.caption).foregroundStyle(.secondary)
             }
             Spacer()
@@ -823,12 +956,23 @@ private struct CompletedTaskRow: View {
     }
 }
 
-private struct WeeklyBarSegment: Identifiable {
+struct WeeklyBarSegment: Identifiable, Equatable {
     let dayIndex: Int
     let dayLabel: String
     let courseName: String
     let minutes: Int
     var id: String { "\(dayIndex)-\(courseName)" }
+}
+
+/// Swift Charts traps unless the foreground-style scale domain covers every
+/// value present in the data. Truncating the domain to a fixed legend size
+/// crashed the app as soon as a fifth course had work in the same week, so the
+/// domain is always derived from the full data set.
+enum WeeklyChartSeries {
+    static func names(in segments: [WeeklyBarSegment]) -> [String] {
+        var seen = Set<String>()
+        return segments.map(\.courseName).filter { seen.insert($0).inserted }
+    }
 }
 
 private struct WeeklyStudyChart: View {
@@ -872,10 +1016,22 @@ private struct WeeklyStudyChart: View {
         .sorted { $0.dayIndex == $1.dayIndex ? $0.courseName < $1.courseName : $0.dayIndex < $1.dayIndex }
     }
 
-    private var visibleCourses: [Course] {
-        let names = Set(segments.map(\.courseName))
+    /// The scale domain must cover every series in the data; see `WeeklyChartSeries`.
+    private var seriesNames: [String] { WeeklyChartSeries.names(in: segments) }
+
+    private var seriesColors: [Color] {
+        seriesNames.map { name in
+            courseColor(courses.first { $0.name == name }?.color ?? "blue")
+        }
+    }
+
+    /// The legend stays capped for readability, independently of the scale domain.
+    private var legendCourses: [Course] {
+        let names = Set(seriesNames)
         return Array(courses.filter { names.contains($0.name) }.prefix(4))
     }
+
+    private var legendOverflow: Int { max(0, seriesNames.count - legendCourses.count) }
 
     private var totalMinutes: Int { segments.reduce(0) { $0 + $1.minutes } }
 
@@ -902,10 +1058,7 @@ private struct WeeklyStudyChart: View {
                     .foregroundStyle(by: .value("课程", segment.courseName))
                     .cornerRadius(4)
                 }
-                .chartForegroundStyleScale(
-                    domain: visibleCourses.map(\.name),
-                    range: visibleCourses.map { courseColor($0.color) }
-                )
+                .chartForegroundStyleScale(domain: seriesNames, range: seriesColors)
                 .chartLegend(.hidden)
                 .chartYScale(domain: dayNames)
                 .chartXAxis {
@@ -927,7 +1080,7 @@ private struct WeeklyStudyChart: View {
                 .frame(height: 190)
                 .animation(.easeOut(duration: 0.7), value: appeared)
 
-                FlowLegend(courses: visibleCourses)
+                FlowLegend(courses: legendCourses, overflow: legendOverflow)
             }
         }
         .padding(18)
@@ -942,6 +1095,7 @@ private struct WeeklyStudyChart: View {
 
 private struct FlowLegend: View {
     var courses: [Course]
+    var overflow: Int = 0
 
     var body: some View {
         HStack(spacing: 12) {
@@ -953,6 +1107,9 @@ private struct FlowLegend: View {
                 .font(.caption2)
                 .foregroundStyle(.secondary)
             }
+            if overflow > 0 {
+                Text("另有 \(overflow) 门").font(.caption2).foregroundStyle(.tertiary)
+            }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
     }
@@ -960,12 +1117,18 @@ private struct FlowLegend: View {
 
 private struct CourseProgressPanel: View {
     var courses: [Course]
+    var demands: [UUID: CourseDemand]
+    var studyLoad: StudyLoadAssessment?
     var completedMinutes: (Course) -> Int
     var edit: (Course) -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
             PlannerSectionTitle(title: "课程进度", detail: "\(courses.count) 门")
+
+            if let studyLoad {
+                StudyLoadWarning(load: studyLoad)
+            }
 
             if courses.isEmpty {
                 Text("添加课程后，可在这里查看进度和每日学习建议。")
@@ -996,10 +1159,14 @@ private struct CourseProgressPanel: View {
                             }
                             .frame(height: 7)
 
-                            Text("\(Int(progress(course) * 100))%")
-                                .font(.caption2)
-                                .foregroundStyle(.tertiary)
-                                .frame(maxWidth: .infinity, alignment: .trailing)
+                            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                                Text(dailyRecommendation(course))
+                                    .foregroundStyle(.secondary)
+                                Spacer(minLength: 0)
+                                Text("\(Int(progress(course) * 100))%")
+                                    .foregroundStyle(.tertiary)
+                            }
+                            .font(.caption2)
                         }
                         .contentShape(Rectangle())
                     }
@@ -1014,6 +1181,15 @@ private struct CourseProgressPanel: View {
     private func progress(_ course: Course) -> Double {
         min(1, Double(completedMinutes(course)) / Double(max(1, course.totalMinutes)))
     }
+
+    private func dailyRecommendation(_ course: Course) -> String {
+        guard completedMinutes(course) < course.totalMinutes else { return "已完成学习目标" }
+        guard course.autoScheduleEnabled else { return "已暂停自动排程" }
+        guard let demand = demands[course.id] else { return "暂无每日学习建议" }
+        guard demand.remainingMinutes > 0 else { return "剩余学习量已安排在进行中的任务" }
+        guard demand.learnableDays > 0 else { return "无可用学习日，请调整时间或截止日期" }
+        return "推荐每日学习 \(hours(Int(ceil(demand.averageMinutesPerDay))))"
+    }
 }
 
 private struct CourseListRow: View {
@@ -1021,6 +1197,7 @@ private struct CourseListRow: View {
     var completed: Int
     var minimumBlock: Int
     var edit: () -> Void
+    var reorder: (() -> Void)?
     @State private var hovering = false
 
     private var progress: Double { min(1, Double(completed) / Double(max(1, course.totalMinutes))) }
@@ -1037,11 +1214,11 @@ private struct CourseListRow: View {
             .frame(width: 50, height: 50)
 
             VStack(alignment: .leading, spacing: 6) {
-                Text(course.name).font(.headline)
+                Text(course.name).font(.system(size: 18, weight: .bold))
                 Text("\(course.type.rawValue) · 截止 \(course.deadline.formatted(date: .abbreviated, time: .omitted))")
                     .font(.callout)
                     .foregroundStyle(.secondary)
-                Text("已学 \(hours(completed)) / 共 \(hours(course.totalMinutes)) · 最小时间块 \(minimumBlock) 分钟")
+                Text("已学 \(hours(completed)) / 共 \(hours(course.totalMinutes)) · \(course.type == .lessonBasedRecorded && (course.mergedSources != nil || course.webCourse != nil || course.manualLessons != nil) ? "按课节排程" : "最小时间块 \(minimumBlock) 分钟")")
                     .font(.caption)
                     .foregroundStyle(.tertiary)
             }
@@ -1060,7 +1237,10 @@ private struct CourseListRow: View {
                     .foregroundStyle(.tertiary)
             }
 
-            Button("编辑", action: edit).buttonStyle(SoftButtonStyle())
+            VStack(spacing: 6) {
+                if let reorder { Button("调整课节顺序", action: reorder).buttonStyle(SoftButtonStyle()) }
+                Button("编辑", action: edit).buttonStyle(SoftButtonStyle())
+            }
         }
         .padding(18)
         .plannerSurface(radius: 18, material: .thinMaterial, shadow: hovering)
@@ -1078,7 +1258,7 @@ private struct FixedEventListRow: View {
             ZStack {
                 RoundedRectangle(cornerRadius: 15, style: .continuous)
                     .fill(courseColor(event.color).opacity(0.12))
-                Image(systemName: "calendar.badge.clock")
+                Image(systemName: event.isFloating ? "arrow.left.arrow.right" : "calendar.badge.clock")
                     .font(.system(size: 18, weight: .semibold))
                     .foregroundStyle(courseColor(event.color))
             }
@@ -1086,6 +1266,12 @@ private struct FixedEventListRow: View {
 
             VStack(alignment: .leading, spacing: 6) {
                 Text(event.title).font(.headline)
+                if event.isFloating {
+                    Label("时段内浮动 · 固定占用 " + hours(event.occupiedMinutes), systemImage: "arrow.left.arrow.right")
+                        .font(.caption).foregroundStyle(courseColor(event.color))
+                    FloatingWindowIndicator(occupied: event.occupiedMinutes, window: event.endMinute - event.startMinute, tint: courseColor(event.color))
+                        .frame(maxWidth: 320)
+                }
                 Text("\(clockTime(event.startMinute))–\(clockTime(event.endMinute)) · \(repeatLabel(event.weekdays))")
                     .font(.callout)
                     .foregroundStyle(.secondary)
@@ -1109,7 +1295,7 @@ private struct FixedEventListRow: View {
 
 func statusLabel(_ task: ScheduledTask) -> String {
     switch task.status {
-    case .completed: return task.confirmedAt.map { $0 < task.start } == true ? "已提前完成" : "已完成"
+    case .completed: return task.confirmedAt.map { $0 < task.planningStart } == true ? "已提前完成" : "已完成"
     case .partial: return "已完成 \(hours(task.completedMinutes)) · 余量已重排"
     case .missed, .rescheduled: return "未完成 · 已重新排程"
     case .planned: return "已计划"
@@ -1203,6 +1389,7 @@ struct MonthCalendar: View {
                             )
                             .foregroundStyle(chosen ? Color.white : Color.primary.opacity(0.82))
                             .shadow(color: chosen ? PlannerTheme.accent.opacity(0.25) : .clear, radius: 6, y: 3)
+                            .contentShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
                         }
                         .buttonStyle(.plain)
                         .accessibilityLabel(day.formatted(date: .complete, time: .omitted))

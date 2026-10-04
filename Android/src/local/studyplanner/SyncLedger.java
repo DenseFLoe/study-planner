@@ -22,6 +22,7 @@ public final class SyncLedger {
     }
     static JSONObject payload(JSONObject row)throws Exception{return new JSONObject(new String(Base64.getDecoder().decode(row.getString("payload")),StandardCharsets.UTF_8));}
     public void capture(JSONObject state)throws Exception{
+        state=new JSONObject(state.toString());Planner.removeArchivedCourses(state);
         JSONObject desired=new JSONObject(),records=records();List<JSONObject> changes=new ArrayList<>();
         for(String kind:KINDS){List<JSONObject> values=kind.equals("settings")?Collections.singletonList(state.getJSONObject(kind)):Planner.list(state.getJSONArray(kind));
             for(JSONObject source:values){JSONObject data=new JSONObject(source.toString());
@@ -44,6 +45,12 @@ public final class SyncLedger {
         JSONObject s=new JSONObject().put("schemaVersion",1);for(String kind:KINDS)if(!kind.equals("settings"))s.put(kind,new JSONArray());
         List<String> keys=new ArrayList<>();Iterator<String> it=records().keys();while(it.hasNext())keys.add(it.next());Collections.sort(keys);
         for(String k:keys){JSONObject r=records().getJSONObject(k);if(r.getBoolean("deleted"))continue;String kind=r.getString("kind");JSONObject p=payload(r);if(kind.equals("settings"))s.put(kind,p);else{if(!r.getString("id").equals(p.getString("id")))throw new IllegalArgumentException("记录 ID 不匹配");s.getJSONArray(kind).put(p);}}
+        Set<String> deletedIDs=new HashSet<>();for(String k:keys){JSONObject r=records().getJSONObject(k);if(r.getString("kind").equals("courses")&&r.getBoolean("deleted"))deletedIDs.add(r.getString("id"));}
+        for(JSONObject course:Planner.list(s.getJSONArray("courses")))if(course.optBoolean("isArchived"))deletedIDs.add(course.getString("id"));
+        Set<String> confirmationTasks=new HashSet<>();for(JSONObject record:Planner.list(s.getJSONArray("completions")))confirmationTasks.add(record.getString("taskID"));
+        Map<String,JSONObject> deletedTasks=new HashMap<>();for(String k:keys){JSONObject row=records().getJSONObject(k);if(row.getString("kind").equals("tasks")&&row.getBoolean("deleted")&&confirmationTasks.contains(row.getString("id")))deletedTasks.put(row.getString("id"),payload(row));}
+        Planner.reconcileMergedCourseProgress(s,deletedIDs,deletedTasks);
+        Planner.removeArchivedCourses(s);Planner.removeCourses(s,deletedIDs);
         Planner.validate(s);return s;
     }
 }
