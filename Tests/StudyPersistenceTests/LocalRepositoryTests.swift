@@ -4,6 +4,27 @@ import SwiftData
 @testable import StudyPersistence
 
 final class LocalRepositoryTests: XCTestCase {
+    @MainActor func testBackgroundSaveRefreshesContextBeforeNextTransaction() async throws {
+        let repo = try LocalRepository(inMemory: true)
+        var state = PlannerState()
+        let day = Calendar.current.startOfDay(for: Date())
+        let course = Course(name: "课程", totalMinutes: 120, startDate: day, deadline: day)
+        state.courses = [course]
+        state.tasks = [.init(courseID: course.id, start: day.addingTimeInterval(8 * 3600), durationMinutes: 60)]
+        try repo.save(state)
+        _ = try repo.load() // Register old rows in the UI context.
+        state.tasks[0].start = day.addingTimeInterval(10 * 3600)
+        state.settings.minimumScheduleUnit = 30
+        try await repo.saveForInteraction(state)
+        XCTAssertEqual(try repo.load(), state)
+        let sequence = try repo.loadLedger().sequence
+        try repo.save(state)
+        XCTAssertEqual(try repo.loadLedger().sequence, sequence)
+        state.tasks[0].durationMinutes = 30
+        try repo.save(state)
+        XCTAssertEqual(try repo.load(), state)
+    }
+
     @MainActor func testLegacyCourseDeletionIsCleanedOnLoadAndPersistsAfterReopen() throws {
         let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)

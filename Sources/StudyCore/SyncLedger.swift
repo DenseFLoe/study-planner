@@ -73,6 +73,8 @@ public struct SyncLedger: Codable, Sendable {
         }
     }
     static func equivalent(_ a: Data, _ b: Data) throws -> Bool {
+        // Local payloads use canonical JSON; most records are unchanged on a swap.
+        if a == b { return true }
         let x = try JSONSerialization.jsonObject(with: a) as? NSDictionary
         let y = try JSONSerialization.jsonObject(with: b) as? NSDictionary
         return x == y

@@ -428,6 +428,15 @@ public struct ScheduleEngine: Sendable {
             }
         }
         for i in tasks.indices {
+            let task = tasks[i]
+            let affected = floatingRegions.filter { $0.start < task.end && $0.end > task.start }
+            if !affected.isEmpty {
+                tasks[i].floatingWindowStart = min(task.start, affected.map(\.start).min()!)
+                tasks[i].floatingWindowEnd = max(task.end, affected.map(\.end).max()!)
+            }
+        }
+        tasks = state.applyingDailyTaskOrders(to: tasks, calendar: calendar)
+        for i in tasks.indices {
             let t = tasks[i]
             let base = "task|\(t.courseID.uuidString)|\(Int64(t.start.timeIntervalSinceReferenceDate))|\(t.durationMinutes)" + (t.lessonID.map { "|" + $0 } ?? "")
             var generated = stablePlannerID(base)
@@ -436,14 +445,6 @@ public struct ScheduleEngine: Sendable {
             }
             tasks[i].id = state.tasks.first(where: { $0.isUnconfirmed && $0.courseID == t.courseID && $0.start == t.start && $0.durationMinutes == t.durationMinutes && $0.lessonID == t.lessonID })?.id
                 ?? generated
-        }
-        for i in tasks.indices {
-            let task = tasks[i]
-            let affected = floatingRegions.filter { $0.start < task.end && $0.end > task.start }
-            if !affected.isEmpty {
-                tasks[i].floatingWindowStart = min(task.start, affected.map(\.start).min()!)
-                tasks[i].floatingWindowEnd = max(task.end, affected.map(\.end).max()!)
-            }
         }
         for i in tasks.indices { tasks[i].status = calendar.isDate(tasks[i].start, inSameDayAs: today) ? .planned : .future }
         var risks: [ScheduleRisk] = []

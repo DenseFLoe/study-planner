@@ -383,8 +383,10 @@ struct MainView: View {
     }
 
     private var dayTasks: [ScheduledTask] {
-        store.state.tasks.filter {
-            Calendar.current.isDate($0.start, inSameDayAs: selectedDay) &&
+        let start = Calendar.current.startOfDay(for: selectedDay)
+        let end = Calendar.current.date(byAdding: .day, value: 1, to: start)!
+        return store.state.tasks.filter {
+            $0.start >= start && $0.start < end &&
             (store.course($0.courseID)?.isArchived == false || !$0.isUnconfirmed)
         }
     }
@@ -406,7 +408,8 @@ struct MainView: View {
     }
 
     private var agenda: some View {
-        ScrollView {
+        let items = timelineItems
+        return ScrollView {
             VStack(alignment: .leading, spacing: 26) {
                 ActualStudyStartEntry(store: store) {
                     selectedDay = Calendar.current.startOfDay(for: Date())
@@ -434,26 +437,19 @@ struct MainView: View {
                     title: Calendar.current.isDateInToday(selectedDay)
                         ? (store.state.settings.actualStudyStart(on: Date()) == nil ? "今天的安排" : "新课表 · 今天")
                         : "当天的安排",
-                    detail: "\(timelineItems.count) 项任务"
+                    detail: "\(items.count) 项任务 · 长按课程可拖动交换"
                 )
 
                 if dayTasks.isEmpty && dayEvents.isEmpty {
                     emptyAgenda
                 } else {
-                    VStack(spacing: 0) {
-                        ForEach(Array(timelineItems.enumerated()), id: \.element.id) { index, item in
-                            TimelineRow(
-                                item: item,
-                                course: item.task.flatMap { store.course($0.courseID) },
-                                isLast: index == timelineItems.count - 1,
-                                confirm: { task in _ = store.confirm(task, minutes: task.durationMinutes) },
-                                editTask: { sheet = .completion($0) },
-                                editEvent: { sheet = .fixed($0) },
-                                skipEvent: { store.setEventSkipped($0, on: selectedDay, skipped: true) },
-                                canSkipEvent: canChangeDayEvents
-                            )
-                        }
-                    }
+                    DailyTaskTimeline(
+                        store: store, items: items, canEdit: canChangeDayEvents,
+                        editTask: { sheet = .completion($0) },
+                        editEvent: { sheet = .fixed($0) },
+                        skipEvent: { store.setEventSkipped($0, on: selectedDay, skipped: true) }
+                    )
+                    .id(selectedDay)
 
                     if dayTasks.contains(where: { !$0.isUnconfirmed }) {
                         PlannerSectionTitle(title: "完成记录", detail: "不再占用时间")
@@ -673,7 +669,11 @@ struct MainView: View {
                 end: ScheduleEngine().instant(day: selectedDay, minute: $0.endMinute),
                 event: $0
             )
-        }).sorted { $0.start < $1.start }
+        }).sorted {
+            let lhs = $0.task?.start ?? $0.start
+            let rhs = $1.task?.start ?? $1.start
+            return lhs != rhs ? lhs < rhs : $0.id.uuidString < $1.id.uuidString
+        }
     }
 
     private func moveDay(_ step: Int) {
@@ -783,6 +783,149 @@ private struct SummaryMetric: View {
     }
 }
 
+/// Pointer movement only invalidates this list, not the chart, calendar or summaries.
+private struct DailyTaskTimeline: View {
+    @Bindable var store: PlannerStore
+    let items: [TimelineItem]
+    let canEdit: Bool
+    let editTask: (ScheduledTask) -> Void
+    let editEvent: (FixedEvent) -> Void
+    let skipEvent: (FixedEvent) -> Void
+    @State private var frames: [UUID: CGRect] = [:]
+    /// The drop targets measured when the drag started. Measuring mid-drag would
+    /// feed the moving cards' own layout back into hit testing and make the
+    /// highlight flicker between candidates, so the set stays frozen until the
+    /// settle animation finishes.
+    @State private var frozenFrames: [UUID: CGRect]?
+    @State private var pendingFrames: [UUID: CGRect]?
+    @State private var dragging: UUID?
+    @State private var target: UUID?
+    /// Holds the releasing card's id until the settle animation completes, so the
+    /// card keeps its zIndex instead of dropping behind the cards it swapped with
+    /// the instant the pointer is released.
+    @State private var settling: UUID?
+    /// Identifies the settle in flight. A newer drag clears it, which is what keeps
+    /// a stale completion from wiping the new drag's state.
+    @State private var settleToken: UUID?
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    private var hitFrames: [UUID: CGRect] { frozenFrames ?? frames }
+
+    private func target(at point: CGPoint, source: UUID) -> UUID? {
+        hitFrames
+            .filter { $0.key != source && $0.value.contains(point) }
+            .min { $0.value.minY < $1.value.minY }?
+            .key
+    }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            ForEach(Array(items.enumerated()), id: \.element.id) { index, item in
+                TimelineRow(
+                    item: item, course: item.task.flatMap { store.course($0.courseID) },
+                    isLast: index == items.count - 1,
+                    confirm: { _ = store.confirm($0, minutes: $0.durationMinutes) },
+                    editTask: editTask, editEvent: editEvent, skipEvent: skipEvent,
+                    canSkipEvent: canEdit && !store.orderSaveBusy,
+                    canReorder: canEdit && !store.orderSaveBusy && item.task != nil,
+                    targeted: target == item.id,
+                    dragChanged: { point in dragChanged(item.id, point: point) },
+                    dragEnded: { point in dragEnded(item.id, point: point) }
+                )
+                .zIndex(dragging == item.id || settling == item.id ? 1 : 0)
+            }
+        }
+        .coordinateSpace(name: "dailyTaskTimeline")
+        .onPreferenceChange(DailyTaskFrames.self) { next in
+            // Everything measured while the set is frozen is only kept aside and
+            // applied once the settle finishes.
+            guard frozenFrames == nil else {
+                pendingFrames = next
+                return
+            }
+            // The dragged card's translated frame is not a drop target.
+            let stationary = next.filter { $0.key != dragging }
+            let previous = frames.filter { $0.key != dragging }
+            if stationary != previous { frames = next }
+        }
+    }
+
+    private func dragChanged(_ id: UUID, point: CGPoint?) {
+        guard let point else {
+            cancelDrag(id)
+            return
+        }
+        if dragging != id {
+            // Supersede any settle still in flight: its completion must not clear
+            // this drag's frozen targets or zIndex.
+            settleToken = nil
+            dragging = id
+            target = nil
+            frozenFrames = pendingFrames ?? frames
+            pendingFrames = nil
+        }
+        let next = target(at: point, source: id)
+        if target != next { target = next }
+    }
+
+    /// A cancelled drag never reaches `dragEnded`, so it releases the frozen set
+    /// straight away. A normal release has already cleared `dragging`, which keeps
+    /// this from touching the settle that release started.
+    private func cancelDrag(_ id: UUID) {
+        guard dragging == id else { return }
+        dragging = nil
+        target = nil
+        pendingFrames = nil
+        frozenFrames = nil
+    }
+
+    private func dragEnded(_ id: UUID, point: CGPoint?) {
+        // `onEnded` also fires for a long press that never turned into a drag.
+        guard dragging == id else { return }
+        let destination = point.flatMap { target(at: $0, source: id) }
+        guard !reduceMotion else {
+            var transaction = Transaction()
+            transaction.disablesAnimations = true
+            withTransaction(transaction) {
+                if let destination { store.swapDailyTasks(id, destination) }
+                dragging = nil
+                target = nil
+                settling = nil
+                settleToken = nil
+                pendingFrames = nil
+                frozenFrames = nil
+            }
+            return
+        }
+        let token = UUID()
+        settleToken = token
+        // The same settle spring as the card's offset, in one transaction: the
+        // offset returning to zero and the list reorder interpolate continuously
+        // from the release point.
+        withAnimation(DailyTaskMotion.settle, completionCriteria: .logicallyComplete) {
+            if let destination { store.swapDailyTasks(id, destination) }
+            dragging = nil
+            target = nil
+            settling = id
+        } completion: {
+            finishSettle(token: token, source: id)
+        }
+    }
+
+    private func finishSettle(token: UUID, source: UUID) {
+        guard settleToken == token else { return }
+        settleToken = nil
+        var transaction = Transaction()
+        transaction.disablesAnimations = true
+        withTransaction(transaction) {
+            if settling == source { settling = nil }
+            if let pendingFrames { frames = pendingFrames }
+            pendingFrames = nil
+            frozenFrames = nil
+        }
+    }
+}
+
 private struct TimelineRow: View {
     var item: TimelineItem
     var course: Course?
@@ -792,7 +935,12 @@ private struct TimelineRow: View {
     var editEvent: (FixedEvent) -> Void
     var skipEvent: (FixedEvent) -> Void
     var canSkipEvent: Bool
+    var canReorder: Bool
+    var targeted: Bool
+    var dragChanged: (CGPoint?) -> Void
+    var dragEnded: (CGPoint?) -> Void
     @State private var hovering = false
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     private var floating: Bool { item.event?.isFloating == true || item.task?.isFloating == true }
 
@@ -922,10 +1070,12 @@ private struct TimelineRow: View {
                 }
             }
             .shadow(color: hovering ? tint.opacity(0.10) : .clear, radius: 12, y: 5)
-            .scaleEffect(hovering ? 1.004 : 1, anchor: .center)
+            .scaleEffect(hovering && !reduceMotion ? 1.004 : 1, anchor: .center)
             .onHover { value in
-                withAnimation(.spring(response: 0.28, dampingFraction: 0.82)) { hovering = value }
+                withAnimation(reduceMotion ? nil : DailyTaskMotion.hover) { hovering = value }
             }
+            .modifier(DailyTaskDrag(id: item.id, enabled: canReorder, targeted: targeted,
+                                    changed: dragChanged, ended: dragEnded))
             .padding(.bottom, isLast ? 0 : 12)
         }
     }
@@ -991,6 +1141,7 @@ private struct WeeklyStudyChart: View {
     }
 
     private var segments: [WeeklyBarSegment] {
+        let weekStart = self.weekStart
         let end = calendar.date(byAdding: .day, value: 7, to: weekStart)!
         var grouped: [String: Int] = [:]
         for task in tasks where task.start >= weekStart && task.start < end {
@@ -1016,26 +1167,17 @@ private struct WeeklyStudyChart: View {
         .sorted { $0.dayIndex == $1.dayIndex ? $0.courseName < $1.courseName : $0.dayIndex < $1.dayIndex }
     }
 
-    /// The scale domain must cover every series in the data; see `WeeklyChartSeries`.
-    private var seriesNames: [String] { WeeklyChartSeries.names(in: segments) }
-
-    private var seriesColors: [Color] {
-        seriesNames.map { name in
+    var body: some View {
+        // Each aggregation runs once per render, rather than once per chart/legend property.
+        let segments = self.segments
+        let seriesNames = WeeklyChartSeries.names(in: segments)
+        let seriesColors = seriesNames.map { name in
             courseColor(courses.first { $0.name == name }?.color ?? "blue")
         }
-    }
-
-    /// The legend stays capped for readability, independently of the scale domain.
-    private var legendCourses: [Course] {
         let names = Set(seriesNames)
-        return Array(courses.filter { names.contains($0.name) }.prefix(4))
-    }
-
-    private var legendOverflow: Int { max(0, seriesNames.count - legendCourses.count) }
-
-    private var totalMinutes: Int { segments.reduce(0) { $0 + $1.minutes } }
-
-    var body: some View {
+        let legendCourses = Array(courses.filter { names.contains($0.name) }.prefix(4))
+        let legendOverflow = max(0, seriesNames.count - legendCourses.count)
+        let totalMinutes = segments.reduce(0) { $0 + $1.minutes }
         VStack(alignment: .leading, spacing: 16) {
             PlannerSectionTitle(title: "本周学习", detail: "总计 \(hours(totalMinutes))")
 
@@ -1331,6 +1473,10 @@ struct MonthCalendar: View {
     }
 
     var body: some View {
+        let cells = self.cells
+        let interval = calendar.dateInterval(of: .month, for: month)!
+        let occupiedDays = Set(tasks.lazy.filter { $0.start >= interval.start && $0.start < interval.end }
+            .map { calendar.startOfDay(for: $0.start) })
         VStack(spacing: 12) {
             HStack {
                 Text(month.formatted(.dateTime.year().month(.wide)))
@@ -1365,7 +1511,7 @@ struct MonthCalendar: View {
                 ForEach(cells.indices, id: \.self) { index in
                     if let day = cells[index] {
                         let chosen = calendar.isDate(day, inSameDayAs: selectedDay)
-                        let occupied = tasks.contains { calendar.isDate($0.start, inSameDayAs: day) } ||
+                        let occupied = occupiedDays.contains(day) ||
                             fixed.contains { $0.occurs(on: day, calendar: calendar) }
 
                         Button {

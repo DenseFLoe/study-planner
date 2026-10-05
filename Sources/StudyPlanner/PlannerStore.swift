@@ -13,6 +13,8 @@ final class PlannerStore {
     var isReady = false
     var showDailyReview = false
     var syncBusy = false
+    private(set) var orderSaveBusy = false
+    @ObservationIgnored private var orderSaveTask: Task<Bool, Never>?
     var syncStatus = "尚未同步"
     var syncLedger = SyncLedger()
     var syncLog: [String] = []
@@ -33,11 +35,21 @@ final class PlannerStore {
             checkDay()
         } catch { errorMessage = "无法打开本地数据库：\(error.localizedDescription)\n为保护已有数据，未创建替代数据库。" }
     }
+    init(state: PlannerState, repository: any PlannerRepository, result: ScheduleResult,
+         studyLoad: StudyLoadAssessment? = nil) {
+        self.state = state
+        self.repository = repository
+        self.result = result
+        self.studyLoad = studyLoad
+        self.demo = true
+        self.isReady = true
+    }
     var courses: [Course] { state.courses.filter { !$0.isArchived }.sorted { $0.deadline < $1.deadline } }
     func course(_ id: UUID) -> Course? { state.courses.first { $0.id == id } }
     @discardableResult
     func change(replan shouldReplan: Bool = true, _ mutation: (inout PlannerState) throws -> Void) -> Bool {
         guard !syncBusy else { errorMessage = "正在同步，请等待完成后再保存修改。"; return false }
+        guard !orderSaveBusy else { errorMessage = "正在保存课程顺序，请稍后再试。"; return false }
         guard let repository, isReady else { return false }
         do {
             var next = state
@@ -50,6 +62,38 @@ final class PlannerStore {
             return true
         } catch { errorMessage = "操作未保存：\(error.localizedDescription)"; return false }
     }
+    func swapDailyTasks(_ source: UUID, _ target: UUID) {
+        guard !syncBusy, !orderSaveBusy, let repository, isReady else { return }
+        do {
+            let previous = state
+            let previousResult = result
+            var next = state
+            try next.swapDailyTasks(source, target)
+            let updated = Dictionary(uniqueKeysWithValues: next.tasks.map { ($0.id, $0) })
+            var planned = result
+            planned.tasks = planned.tasks.map { updated[$0.id] ?? $0 }.sorted { $0.start < $1.start }
+            // Publish inside the caller's animation transaction. Disk/ledger work
+            // runs separately, with other writes gated until this snapshot commits.
+            state = next
+            result = planned
+            orderSaveBusy = true
+            orderSaveTask = Task { @MainActor in
+                defer { orderSaveBusy = false; orderSaveTask = nil }
+                do {
+                    try await repository.saveForInteraction(next)
+                    return true
+                } catch {
+                    withAnimation(.easeOut(duration: 0.18)) {
+                        state = previous
+                        result = previousResult
+                    }
+                    errorMessage = "顺序未保存，已恢复原安排：\(error.localizedDescription)"
+                    return false
+                }
+            }
+        } catch { errorMessage = "操作未保存：\(error.localizedDescription)" }
+    }
+    func waitForOrderSave() async -> Bool { await orderSaveTask?.value ?? true }
     func replan() { change { _ in } }
     func saveActualStudyStart(_ time: Date) -> Bool {
         let calendar = Calendar.current
@@ -80,6 +124,7 @@ final class PlannerStore {
     @discardableResult
     func saveEvent(_ event: FixedEvent, skippingDates: Set<Date>) -> Bool {
         guard !syncBusy else { errorMessage = "正在同步，请等待完成后再保存修改。"; return false }
+        guard !orderSaveBusy else { errorMessage = "正在保存课程顺序，请稍后再试。"; return false }
         guard let repository, isReady else { return false }
         pendingEventConflicts = nil
         errorMessage = nil
@@ -127,7 +172,7 @@ final class PlannerStore {
         state.confirmationCandidates(at: Date())
     }
     func checkDay() {
-        guard isReady, !syncBusy else { return }
+        guard isReady, !syncBusy, !orderSaveBusy else { return }
         let today = Calendar.current.startOfDay(for: Date())
         if today != lastDay { lastDay = today; reviewPrompted = false; replan() }
         if !reviewTasks.isEmpty && !reviewPrompted { showDailyReview = true; reviewPrompted = true }
@@ -138,6 +183,10 @@ final class PlannerStore {
     }
     func startSync(automatic: Bool = false, host: String? = nil, pairingText: String? = nil) {
         guard !demo, isReady else { return }
+        if orderSaveBusy {
+            Task { if await waitForOrderSave() { startSync(automatic: automatic, host: host, pairingText: pairingText) } }
+            return
+        }
         if syncBusy {
             if !automatic && pairingText == nil { pendingManualSyncs += 1; syncStatus = "已排队，等待上一次同步释放资源" }
             return

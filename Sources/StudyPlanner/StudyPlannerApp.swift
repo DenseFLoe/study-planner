@@ -7,6 +7,12 @@ import StudyCore
         NSApp.setActivationPolicy(.regular)
         NSApp.activate(ignoringOtherApps: true)
     }
+    weak var store: PlannerStore?
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        guard let store, store.orderSaveBusy else { return .terminateNow }
+        Task { sender.reply(toApplicationShouldTerminate: await store.waitForOrderSave()) }
+        return .terminateLater
+    }
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { true }
 }
 struct StudyPlannerApp: App {
@@ -15,6 +21,7 @@ struct StudyPlannerApp: App {
     var body: some Scene {
         WindowGroup("学习日程") {
             MainView(store: store).frame(minWidth: 1060, minHeight: 700).tint(.blue)
+                .onAppear { delegate.store = store }
         }.defaultSize(width: 1280, height: 820)
         .commands {
             CommandGroup(replacing: .newItem) {}

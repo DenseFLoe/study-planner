@@ -21,3 +21,5 @@ Tests/SyncVerification/
 .vscode/
 *.swp
 开源上传/
+.audit/
+.workbuddy/

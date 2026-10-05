@@ -16,11 +16,16 @@ final class LocalRecord {
 public protocol PlannerRepository {
     func load() throws -> PlannerState
     func save(_ state: PlannerState) throws
+    @MainActor func saveForInteraction(_ state: PlannerState) async throws
+}
+
+extension PlannerRepository {
+    @MainActor public func saveForInteraction(_ state: PlannerState) async throws { try save(state) }
 }
 
 public final class LocalRepository: PlannerRepository {
     private let container: ModelContainer
-    private let context: ModelContext
+    private var context: ModelContext
     private let encoder: JSONEncoder
     private let migrationBackupURL: URL?
     private struct SettingsPayload: Codable {
@@ -46,6 +51,28 @@ public final class LocalRepository: PlannerRepository {
         context.autosaveEnabled = false
         encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys]
     }
+    private init(container: ModelContainer, migrationBackupURL: URL?) {
+        self.container = container
+        self.migrationBackupURL = migrationBackupURL
+        context = ModelContext(container)
+        context.autosaveEnabled = false
+        encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+    }
+
+    @MainActor public func saveForInteraction(_ state: PlannerState) async throws {
+        let container = container
+        let backup = migrationBackupURL
+        // A fresh context stays on the worker; UI models never cross threads.
+        try await Task.detached(priority: .userInitiated) {
+            let worker = LocalRepository(container: container, migrationBackupURL: backup)
+            try worker.save(state)
+        }.value
+        // Discard registered objects so the next UI transaction sees the new rows.
+        context = ModelContext(container)
+        context.autosaveEnabled = false
+    }
+
     public func load() throws -> PlannerState {
         var state = PlannerState()
         let decoder = JSONDecoder()
@@ -80,9 +107,8 @@ public final class LocalRepository: PlannerRepository {
             try encoder.encode(load()).write(to: backup, options: .atomic)
             try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: backup.path)
         }
-        var ledger = try loadLedger()
-        try ledger.capture(state)
-        try save(state, ledger: ledger)
+        // The transactional overload captures the state once.
+        try save(state, ledger: loadLedger())
     }
     public func save(_ state: PlannerState, ledger: SyncLedger) throws {
         var state = state

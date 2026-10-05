@@ -192,6 +192,7 @@ public struct AppSettings: Codable, Equatable, Sendable {
     public var notificationMinute = 21 * 60
     /// A dated override; it expires automatically on the next local day.
     public var actualStudyStart: Date? = nil
+    public var dailyTaskOrders: [DailyTaskOrder]? = nil
     public var availability: [DailyAvailability] = (1...7).map { .init(weekday: $0, startMinute: 8 * 60, endMinute: 23 * 60) }
     public init() {}
     public func actualStudyStart(on day: Date, calendar: Calendar = .current) -> Date? {
