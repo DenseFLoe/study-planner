@@ -1,0 +1,288 @@
+{
+  "courses": [
+    {
+      "notes": "",
+      "color": "blue",
+      "lessonOrderCustomized": false,
+      "webCompletionOverlaps": {},
+      "initialCompletedMinutes": 30,
+      "isArchived": false,
+      "lessonOrder": [
+        "1",
+        "2"
+      ],
+      "autoScheduleEnabled": true,
+      "type": "不定时录播课程",
+      "minimumBlockMinutes": 60,
+      "priority": 2,
+      "totalMinutes": 120,
+      "name": "测试课程",
+      "id": "14DFB36F-CC6F-4D22-B38C-B586301292D3",
+      "deadline": 8.129952E8,
+      "startDate": 8.13024E+8,
+      "webCourse": {
+        "sourceURL": "https://example.test/course",
+        "packageID": "synthetic-package",
+        "name": "测试课程",
+        "fetchedAt": 8.13024E+8,
+        "expectedOutlines": 1,
+        "fetchedOutlines": 1,
+        "issues": [],
+        "lessons": [
+          {
+            "markedFinished": false,
+            "chapter": "",
+            "stage": "",
+            "durationSeconds": 3600,
+            "subject": "",
+            "kind": "video",
+            "name": "第1讲",
+            "requiresDuration": true,
+            "id": "1",
+            "published": true,
+            "watchedPercent": 50
+          },
+          {
+            "markedFinished": false,
+            "chapter": "",
+            "stage": "",
+            "durationSeconds": 3600,
+            "subject": "",
+            "kind": "video",
+            "name": "第2讲",
+            "requiresDuration": true,
+            "id": "2",
+            "published": true,
+            "watchedPercent": 0
+          }
+        ]
+      }
+    },
+    {
+      "netdisk": {
+        "folderPath": "视频课程",
+        "videoCount": 3,
+        "sourceURL": "https://pan.quark.cn/s/synthetic-share",
+        "duplicates": {
+          "relatedCourses": [],
+          "requiresReview": [],
+          "relatedPackages": [],
+          "removedVideos": 0,
+          "groups": []
+        },
+        "detection": "课程判定 86 分 · 视频 3 个",
+        "shareTitle": "模拟分享",
+        "pwdID": "synthetic-share",
+        "totalBytes": 300000000,
+        "fetchedAt": 8.13024E8,
+        "unknownDurations": 0
+      },
+      "notes": "",
+      "color": "blue",
+      "lessonOrderCustomized": false,
+      "webCompletionOverlaps": {},
+      "initialCompletedMinutes": 0,
+      "isArchived": false,
+      "lessonOrder": [
+        "quark:synthetic-share:a",
+        "quark:synthetic-share:c",
+        "quark:synthetic-share:b"
+      ],
+      "netdiskLessons": {
+        "quark:synthetic-share:b": {
+          "fid": "b",
+          "path": "视频课程/第二讲.mp4",
+          "size": 100000000,
+          "estimatedDuration": false
+        },
+        "quark:synthetic-share:a": {
+          "fid": "a",
+          "path": "视频课程/第一讲.mp4",
+          "size": 100000000,
+          "estimatedDuration": false
+        },
+        "quark:synthetic-share:c": {
+          "fid": "c",
+          "path": "视频课程/第三讲.mp4",
+          "size": 100000000,
+          "estimatedDuration": false
+        }
+      },
+      "autoScheduleEnabled": true,
+      "type": "不定时录播课程",
+      "minimumBlockMinutes": 60,
+      "priority": 2,
+      "totalMinutes": 30,
+      "name": "视频课程",
+      "id": "43E8B32C-546F-48C0-AAE1-6C85706DF42B",
+      "deadline": 8.129952E8,
+      "startDate": 8.13024E+8,
+      "webCourse": {
+        "sourceURL": "https://pan.quark.cn/s/synthetic-share",
+        "packageID": "quark:synthetic-share:folder-视频课程",
+        "name": "视频课程",
+        "fetchedAt": 8.13024E8,
+        "expectedOutlines": 1,
+        "fetchedOutlines": 1,
+        "issues": [],
+        "lessons": [
+          {
+            "markedFinished": false,
+            "chapter": "视频课程",
+            "stage": "",
+            "durationSeconds": 600,
+            "subject": "",
+            "kind": "video",
+            "name": "第一讲",
+            "requiresDuration": true,
+            "id": "quark:synthetic-share:a",
+            "published": true,
+            "watchedPercent": 0
+          },
+          {
+            "markedFinished": false,
+            "chapter": "视频课程",
+            "stage": "",
+            "durationSeconds": 600,
+            "subject": "",
+            "kind": "video",
+            "name": "第三讲",
+            "requiresDuration": true,
+            "id": "quark:synthetic-share:c",
+            "published": true,
+            "watchedPercent": 0
+          },
+          {
+            "markedFinished": false,
+            "chapter": "视频课程",
+            "stage": "",
+            "durationSeconds": 600,
+            "subject": "",
+            "kind": "video",
+            "name": "第二讲",
+            "requiresDuration": true,
+            "id": "quark:synthetic-share:b",
+            "published": true,
+            "watchedPercent": 0
+          }
+        ]
+      }
+    }
+  ],
+  "settings": {
+    "notificationMinute": 1260,
+    "dailyTaskOrders": [{
+      "keys": [
+        "43E8B32C-546F-48C0-AAE1-6C85706DF42B|quark:synthetic-share:a|10|0",
+        "14DFB36F-CC6F-4D22-B38C-B586301292D3|1|30|0",
+        "14DFB36F-CC6F-4D22-B38C-B586301292D3|2|60|0",
+        "43E8B32C-546F-48C0-AAE1-6C85706DF42B|quark:synthetic-share:c|10|0",
+        "43E8B32C-546F-48C0-AAE1-6C85706DF42B|quark:synthetic-share:b|10|0"
+      ],
+      "day": 8.129952E8
+    }],
+    "availability": [
+      {
+        "weekday": 1,
+        "id": "F4F1F08B-D400-4B18-BE58-E58BA9D2C7F3",
+        "startMinute": 480,
+        "endMinute": 1320
+      },
+      {
+        "weekday": 2,
+        "id": "0AFD9D73-B9C4-4345-A71C-D6102E1CAA7A",
+        "startMinute": 480,
+        "endMinute": 1320
+      },
+      {
+        "weekday": 3,
+        "id": "32B667E3-CAC2-445D-BD9B-73ACE49CF9E2",
+        "startMinute": 480,
+        "endMinute": 1320
+      },
+      {
+        "weekday": 4,
+        "id": "8E4A9153-A7B3-49F0-801F-DA20D00A28AB",
+        "startMinute": 480,
+        "endMinute": 1320
+      },
+      {
+        "weekday": 5,
+        "id": "7E49F506-7E42-42ED-90F5-29EB4B016FB9",
+        "startMinute": 480,
+        "endMinute": 1320
+      },
+      {
+        "weekday": 6,
+        "id": "D2F51F7D-A75F-49C9-B8AD-CD0104D4BA0C",
+        "startMinute": 480,
+        "endMinute": 1320
+      },
+      {
+        "weekday": 7,
+        "id": "3CA22B39-E2E1-44FF-953A-39F2425BF6C5",
+        "startMinute": 480,
+        "endMinute": 1320
+      }
+    ],
+    "minimumScheduleUnit": 60,
+    "actualStudyStart": 8.13024E8
+  },
+  "schemaVersion": 1,
+  "fixedEvents": [],
+  "completions": [],
+  "androidRisks": [],
+  "tasks": [
+    {
+      "durationMinutes": 10,
+      "start": 8.13024E8,
+      "lessonID": "quark:synthetic-share:a",
+      "id": "324FE7DE-3360-5A98-86FF-19F424C8E96D",
+      "completedMinutes": 0,
+      "courseID": "43E8B32C-546F-48C0-AAE1-6C85706DF42B",
+      "status": "planned",
+      "lessonName": "第一讲"
+    },
+    {
+      "durationMinutes": 30,
+      "start": 8.130255E8,
+      "lessonID": "1",
+      "id": "41C36EB1-A797-5267-B8F7-1176476E7444",
+      "completedMinutes": 0,
+      "courseID": "14DFB36F-CC6F-4D22-B38C-B586301292D3",
+      "status": "planned",
+      "lessonName": "第1讲"
+    },
+    {
+      "durationMinutes": 60,
+      "start": 8.130282E8,
+      "lessonID": "2",
+      "id": "0E8CA1F7-579E-51C3-9399-90EB647BE9BC",
+      "completedMinutes": 0,
+      "courseID": "14DFB36F-CC6F-4D22-B38C-B586301292D3",
+      "status": "planned",
+      "lessonName": "第2讲"
+    },
+    {
+      "durationMinutes": 10,
+      "start": 8.130327E8,
+      "lessonID": "quark:synthetic-share:c",
+      "id": "FA3B9F8D-2090-50EA-85B3-2F95DCF4A6F4",
+      "completedMinutes": 0,
+      "courseID": "43E8B32C-546F-48C0-AAE1-6C85706DF42B",
+      "status": "planned",
+      "lessonName": "第三讲"
+    },
+    {
+      "durationMinutes": 10,
+      "start": 8.130342E8,
+      "lessonID": "quark:synthetic-share:b",
+      "id": "CD2D5728-94F7-5196-B680-DDDED82B3AB7",
+      "completedMinutes": 0,
+      "courseID": "43E8B32C-546F-48C0-AAE1-6C85706DF42B",
+      "status": "planned",
+      "lessonName": "第二讲"
+    }
+  ],
+  "androidWarnings": []
+}

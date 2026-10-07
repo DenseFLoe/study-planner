@@ -1,0 +1,42 @@
+package local.studyplanner;
+
+import org.json.*;
+import java.text.Normalizer;
+import java.util.*;
+import java.util.regex.*;
+
+/** Course/lesson operations use the same Codable fields as the Mac. */
+public final class CourseTools {
+    static JSONObject copy(JSONObject value)throws Exception{return new JSONObject(value.toString());}
+    static int chinese(String text){String digits="零一二三四五六七八九";int total=0,pending=0;for(char c:text.toCharArray()){int n=digits.indexOf(c);if(c=='〇')n=0;if(c=='两')n=2;if(n>=0)pending=n;else{total+=Math.max(1,pending)*(c=='百'?100:10);pending=0;}}return total+pending;}
+    static class SortKey {
+        List<String> numbers=new ArrayList<>();String text;int part;
+        SortKey(String raw){String value=Normalizer.normalize(raw,Normalizer.Form.NFKC).toLowerCase(Locale.ROOT).replaceAll("\\.(mp4|mkv|mov|avi|flv|webm|m4v|ts|mp3|pdf)$","").replaceAll("(?<![0-9])(?:2160|1440|1080|720|480)[pi]|[248]k|[hx]26[45]|\\d+fps","");
+            Matcher chinese=Pattern.compile("第?([零〇一二三四五六七八九十百两]+)([章节讲课集部分])").matcher(value);StringBuffer converted=new StringBuffer();while(chinese.find())chinese.appendReplacement(converted,Matcher.quoteReplacement(chinese.group().replace(chinese.group(1),String.valueOf(chinese(chinese.group(1))))));chinese.appendTail(converted);value=converted.toString();
+            for(int i=0;i<3;i++){Matcher marker=Pattern.compile("[（(【\\[]"+"上中下".charAt(i)+"[）)】\\]]|"+"上中下".charAt(i)+"[篇部集]$").matcher(value);if(marker.find()){part=i+1;value=marker.replaceFirst("");break;}}
+            text=value.replaceAll("[0-9]+|[\\s._\\-—、()\\[\\]]","");int tail=0;Matcher counters=Pattern.compile("第\\s*([0-9]+)\\s*[章节讲课集]").matcher(value);while(counters.find()){numbers.add(clean(counters.group(1)));tail=counters.end();}Matcher other=Pattern.compile("[0-9]+").matcher(value.substring(tail));while(other.find())numbers.add(clean(other.group()));
+        }
+        static String clean(String n){String clean=n.replaceFirst("^0+","");return clean.isEmpty()?"0":clean;}
+        int compare(SortKey other){for(int i=0;i<Math.min(numbers.size(),other.numbers.size());i++){String a=numbers.get(i),b=other.numbers.get(i);int v=Integer.compare(a.length(),b.length());if(v==0)v=a.compareTo(b);if(v!=0)return v;}int v=Integer.compare(numbers.size(),other.numbers.size());if(v==0)v=natural(text,other.text);return v!=0?v:Integer.compare(part,other.part);}
+    }
+    public static int natural(String a,String b){Matcher left=Pattern.compile("[0-9]+|[^0-9]+").matcher(Normalizer.normalize(a,Normalizer.Form.NFKC).toLowerCase(Locale.ROOT)),right=Pattern.compile("[0-9]+|[^0-9]+").matcher(Normalizer.normalize(b,Normalizer.Form.NFKC).toLowerCase(Locale.ROOT));while(true){boolean x=left.find(),y=right.find();if(!x||!y)return Boolean.compare(x,y);String p=left.group(),q=right.group();int v;if(Character.isDigit(p.charAt(0))&&Character.isDigit(q.charAt(0))){int pl=p.length(),ql=q.length();p=SortKey.clean(p);q=SortKey.clean(q);v=Integer.compare(p.length(),q.length());if(v==0)v=p.compareTo(q);if(v==0)v=Integer.compare(pl,ql);}else v=p.compareTo(q);if(v!=0)return v;}}
+    public static List<JSONObject> intelligent(List<JSONObject> lessons){List<JSONObject> sorted=new ArrayList<>(lessons);Map<JSONObject,List<SortKey>> keys=new IdentityHashMap<>();for(JSONObject lesson:sorted){List<SortKey> values=new ArrayList<>();for(String field:new String[]{"subject","stage","chapter","name"})values.add(new SortKey(lesson.optString(field)));keys.put(lesson,values);}sorted.sort((a,b)->{for(int i=0;i<4;i++){int v=keys.get(a).get(i).compare(keys.get(b).get(i));if(v!=0)return v;}return a.optString("id").compareTo(b.optString("id"));});return sorted;}
+    public static List<JSONObject> lessons(JSONObject course)throws Exception {
+        List<JSONObject> result=new ArrayList<>();JSONArray sources=course.optJSONArray("mergedSources");
+        if(sources!=null){for(JSONObject source:Planner.list(sources)){List<JSONObject> items=lessons(source);if(items.isEmpty())items.add(new JSONObject().put("id","whole").put("name",source.getString("name")).put("durationMinutes",source.getInt("totalMinutes")));for(JSONObject raw:items){JSONObject lesson=copy(raw);lesson.put("id",source.getString("id")+"/"+raw.getString("id"));if(lesson.optString("subject").isEmpty())lesson.put("subject",source.getString("name"));result.add(lesson);}}return intelligent(result);}
+        JSONObject web=course.optJSONObject("webCourse");JSONArray raw=web==null?course.optJSONArray("manualLessons"):web.optJSONArray("lessons");if(raw!=null)for(JSONObject item:Planner.list(raw))if(web==null||item.optBoolean("published")&&item.optBoolean("requiresDuration"))result.add(copy(item));return result;
+    }
+    public static List<String> order(JSONObject course)throws Exception {List<String> ids=new ArrayList<>();for(JSONObject lesson:lessons(course))ids.add(lesson.getString("id"));List<String> result=new ArrayList<>();JSONArray preferred=course.optJSONArray("lessonOrder");if(preferred!=null)for(int i=0;i<preferred.length();i++){String id=preferred.getString(i);if(ids.contains(id)&&!result.contains(id))result.add(id);}for(String id:ids)if(!result.contains(id))result.add(id);return result;}
+    public static JSONObject merge(JSONObject state,Set<String> ids,String name)throws Exception {
+        String title=name.trim();List<JSONObject> sources=new ArrayList<>();for(JSONObject c:Planner.list(state.getJSONArray("courses")))if(ids.contains(c.getString("id"))&&!c.optBoolean("isArchived"))sources.add(copy(c));sources.sort((a,b)->{int v=natural(a.optString("name"),b.optString("name"));return v!=0?v:a.optString("id").compareTo(b.optString("id"));});
+        if(sources.size()<2||sources.size()!=ids.size()||title.isEmpty())throw new IllegalArgumentException("请选择至少两门现有课程，并填写合并后的名称。");
+        Set<String> taskIDs=new HashSet<>();for(JSONObject task:Planner.list(state.getJSONArray("tasks")))if(ids.contains(task.getString("courseID")))taskIDs.add(task.getString("id"));for(JSONObject record:Planner.list(state.getJSONArray("completions")))if(ids.contains(record.getString("courseID"))&&!taskIDs.contains(record.getString("taskID")))throw new IllegalArgumentException("部分完成记录缺少关联任务，暂不能安全合并这些课程。");
+        int total=0,initial=0,priority=0;double start=Double.POSITIVE_INFINITY,deadline=start;boolean auto=false;for(JSONObject c:sources){total+=c.getInt("totalMinutes");initial+=c.optInt("initialCompletedMinutes");priority=Math.max(priority,c.optInt("priority",2));start=Math.min(start,c.getDouble("startDate"));deadline=Math.min(deadline,c.getDouble("deadline"));auto|=c.optBoolean("autoScheduleEnabled",true);}
+        if(total<=0||total>600000)throw new IllegalArgumentException("合并后的总时长须在 10,000 小时以内。");
+        JSONObject merged=new JSONObject().put("id",Planner.id()).put("name",title).put("type","不定时录播课程").put("totalMinutes",total).put("initialCompletedMinutes",initial).put("startDate",start).put("deadline",deadline).put("priority",priority).put("color",sources.get(0).optString("color","blue")).put("minimumBlockMinutes",60).put("autoScheduleEnabled",auto).put("isArchived",false).put("notes","").put("mergedSources",new JSONArray(sources));
+        List<String> order=new ArrayList<>();for(JSONObject lesson:lessons(merged))order.add(lesson.getString("id"));merged.put("lessonOrder",new JSONArray(order));
+        for(JSONObject task:Planner.list(state.getJSONArray("tasks")))if(ids.contains(task.getString("courseID")))task.put("lessonID",task.getString("courseID")+"/"+task.optString("lessonID","whole")).put("courseID",merged.getString("id"));for(JSONObject record:Planner.list(state.getJSONArray("completions")))if(ids.contains(record.getString("courseID")))record.put("courseID",merged.getString("id"));
+        JSONArray courses=new JSONArray();for(JSONObject course:Planner.list(state.getJSONArray("courses")))if(!ids.contains(course.getString("id")))courses.put(course);courses.put(merged);state.put("courses",courses);return merged;
+    }
+    public static List<JSONObject> preview(JSONObject state,JSONObject course,double now)throws Exception {JSONObject next=copy(state);Planner.put(next.getJSONArray("courses"),copy(course));Planner.replan(next,now);List<JSONObject> tasks=new ArrayList<>();for(JSONObject task:Planner.list(next.getJSONArray("tasks")))if(task.optString("courseID").equals(course.getString("id"))&&Planner.pending(task))tasks.add(task);return tasks;}
+}

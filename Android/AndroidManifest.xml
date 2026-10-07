@@ -1,4 +1,4 @@
-<manifest xmlns:android="http://schemas.android.com/apk/res/android" package="local.studyplanner.android" android:versionCode="9" android:versionName="1.4.4">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android" package="local.studyplanner.android" android:versionCode="10" android:versionName="1.5.0">
     <uses-sdk android:minSdkVersion="26" android:targetSdkVersion="35" />
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.CAMERA" />
@@ -7,6 +7,7 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
     <application android:label="学习日程" android:theme="@style/AppTheme" android:icon="@drawable/app_icon" android:allowBackup="false" android:supportsRtl="true">
+        <activity android:name="local.studyplanner.CourseImportActivity" android:exported="false" android:process=":importer" android:windowSoftInputMode="adjustResize" />
         <service android:name="local.studyplanner.SyncWindowService" android:exported="false" android:foregroundServiceType="dataSync" />
         <activity android:name="local.studyplanner.QrScannerActivity" android:exported="false" android:screenOrientation="portrait" />
         <activity android:name="local.studyplanner.MainActivity" android:exported="true" android:windowSoftInputMode="adjustResize">

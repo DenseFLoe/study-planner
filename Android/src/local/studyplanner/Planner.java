@@ -45,6 +45,8 @@ public final class Planner {
     public static int occupied(JSONObject e){return floating(e)?e.optInt("floatingDurationMinutes"):e.optInt("endMinute")-e.optInt("startMinute");}
     public static double planningStart(JSONObject t){return t.optDouble("floatingWindowStart",t.optDouble("start"));}
     public static double planningEnd(JSONObject t){return t.optDouble("floatingWindowEnd",end(t));}
+    public static double retainedHistoryStart(JSONObject t){return Math.min(planningStart(t),t.optDouble("confirmedAt",planningStart(t)));}
+    public static double retainedHistoryEnd(JSONObject t){return Math.min(planningEnd(t),t.optDouble("confirmedAt",planningEnd(t)));}
     public static boolean floatingTask(JSONObject t){return t.has("floatingWindowStart")&&t.has("floatingWindowEnd");}
     static Map<String,Integer> reserve(List<JSONObject> events){return reserve(events,new boolean[1440]);}
     static Map<String,Integer> reserve(List<JSONObject> events,boolean[] study){
@@ -306,7 +308,8 @@ public final class Planner {
     static int unit(JSONObject s,JSONObject c){return Math.max(1,c.optInt("minimumBlockMinutes")>0?c.optInt("minimumBlockMinutes"):s.optJSONObject("settings").optInt("minimumScheduleUnit"));}
     static class Work{int minutes;String lessonID,lessonName;Work(int n,String id,String name){minutes=n;lessonID=id;lessonName=name;}}
     static int ceilMinutes(double seconds){return (int)Math.ceil(seconds/60.0);}
-    static List<Work> lessonWork(JSONObject s,JSONObject c){
+    static List<Work> lessonWork(JSONObject s,JSONObject c){List<Work> items=lessonWorkAll(s,c);items.removeIf(w->w.minutes<=0);return items;}
+    static List<Work> lessonWorkAll(JSONObject s,JSONObject c){
         List<Work> out=new ArrayList<>();if(!"不定时录播课程".equals(c.optString("type")))return out;
         JSONArray sources=c.optJSONArray("mergedSources");
         if(sources!=null){
@@ -321,8 +324,8 @@ public final class Planner {
                         JSONObject copy=new JSONObject(r.toString());copy.put("courseID",source.getString("id"));records.put(copy);
                     }
                     subset.put("tasks",tasks).put("completions",records);
-                    List<Work> lessons=lessonWork(subset,source);
-                    if(lessons.isEmpty()&&source.optInt("totalMinutes")>completed(subset,source))lessons.add(new Work(source.optInt("totalMinutes")-completed(subset,source),"whole",source.optString("name")));
+                    List<Work> lessons=lessonWorkAll(subset,source);
+                    if(lessons.isEmpty())lessons.add(new Work(source.optInt("totalMinutes")-completed(subset,source),"whole",source.optString("name")));
                     for(Work w:lessons){w.lessonID=prefix+w.lessonID;out.add(w);}
                 }
                 JSONArray preferred=c.optJSONArray("lessonOrder");
@@ -379,7 +382,6 @@ public final class Planner {
             int credit=Math.min(extra,Math.min(outstanding,w.minutes));w.minutes-=credit;extra-=credit;
         }
         for(Work w:out){int credit=Math.min(extra,w.minutes);w.minutes-=credit;extra-=credit;}
-        out.removeIf(w->w.minutes<=0);
         JSONArray preferred=c.optJSONArray("lessonOrder");if(preferred!=null){Map<String,Integer> rank=new HashMap<>();for(int i=0;i<preferred.length();i++)rank.putIfAbsent(preferred.optString(i),i);out.sort(Comparator.comparingInt(w->rank.getOrDefault(w.lessonID,Integer.MAX_VALUE)));}
         return out;
     }
@@ -454,7 +456,7 @@ public final class Planner {
             Map<String,Integer> placements=reserve(events,study);
             if(placements==null){warnings.add("浮动事项的连续时长无法排入，或组合过于复杂；请调整时段。");blocks.addAll(regions);}
             else for(JSONObject e:events)if(floating(e)){int start=placements.get(e.getString("id"));blocks.add(new Span(at(d,start),at(d,start+occupied(e))));}
-            for(JSONObject t:history)if(planningStart(t)<now&&(pending(t)||t.optInt("completedMinutes")>0))blocks.add(buffered(Math.min(planningStart(t),t.optDouble("confirmedAt",planningStart(t))),Math.min(planningEnd(t),t.optDouble("confirmedAt",planningEnd(t)))));
+            for(JSONObject t:history)if(planningStart(t)<now&&(pending(t)||t.optInt("completedMinutes")>0))blocks.add(buffered(retainedHistoryStart(t),retainedHistoryEnd(t)));
             days.add(new Day(d,subtract(windows,blocks)));
         }
         List<Day> original=copyDays(days);Map<String,Integer> required=new HashMap<>(),missing=new HashMap<>();Map<String,Double> demand=new HashMap<>();Map<String,List<Work>> pendingWork=new HashMap<>();
@@ -537,11 +539,13 @@ public final class Planner {
             for(Span region:floatingRegions)if(region.a<end(t)&&region.b>t.getDouble("start")){a=Math.min(a,region.a);b=Math.max(b,region.b);affected=true;}
             if(affected)t.put("floatingWindowStart",a).put("floatingWindowEnd",b);
         }
+        packed=DailyTaskOrdering.apply(s,packed,history);
         for(JSONObject t:packed){String base="task|"+t.getString("courseID")+"|"+(long)t.getDouble("start")+"|"+t.getInt("durationMinutes")+(t.has("lessonID")?"|"+t.optString("lessonID"):"");String stable=stableID(base);
             List<String> confirmed=new ArrayList<>();boolean collision=false;for(JSONObject old:list(s.getJSONArray("tasks")))if(!pending(old)&&old.getString("courseID").equals(t.getString("courseID"))){confirmed.add(old.getString("id"));if(old.getString("id").equals(stable))collision=true;}Collections.sort(confirmed);if(collision)stable=stableID(base+"|confirmed|"+String.join(",",confirmed));
             for(JSONObject old:list(s.getJSONArray("tasks")))if(pending(old)&&old.getString("courseID").equals(t.getString("courseID"))&&old.getDouble("start")==t.getDouble("start")&&old.getInt("durationMinutes")==t.getInt("durationMinutes")&&old.optString("lessonID").equals(t.optString("lessonID"))){stable=old.getString("id");break;}
             t.put("id",stable);
         }
+        JSONArray risks=new JSONArray();Set<LocalDate> cutoffs=new TreeSet<>();for(JSONObject c:courses)cutoffs.add(day(c.getDouble("deadline")));for(LocalDate cutoff:cutoffs){List<JSONObject> group=new ArrayList<>();JSONArray names=new JSONArray();int requiredMinutes=0,absent=0,capacity=0;for(JSONObject c:courses)if(!day(c.getDouble("deadline")).isAfter(cutoff)){group.add(c);requiredMinutes+=required.get(c.getString("id"));absent+=missing.get(c.getString("id"));if(missing.get(c.getString("id"))>0)names.put(c.getString("name"));}if(absent==0)continue;for(Day d:original)if(!d.d.isAfter(cutoff)){boolean learnable=false;for(JSONObject c:group)if(eligible(c,d.d))learnable=true;if(learnable)for(Span span:d.free)capacity+=span.minutes();}risks.put(new JSONObject().put("deadline",at(cutoff,0)).put("requiredMinutes",requiredMinutes).put("availableMinutes",capacity).put("unscheduledMinutes",absent).put("courseNames",names));}s.put("androidRisks",risks);
         history.addAll(packed);history.sort(Comparator.comparingDouble(t->t.optDouble("start")));s.put("tasks",array(history));s.put("androidWarnings",new JSONArray(warnings));return warnings;
     }
 }
