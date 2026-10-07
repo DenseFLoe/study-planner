@@ -128,8 +128,8 @@ public struct ScheduleEngine: Sendable {
                 let replacingToday = actualStart != nil && calendar.isDate($0.start, inSameDayAs: now)
                 return $0.planningStart < now && (($0.isUnconfirmed && $0.planningEnd <= now && !replacingToday) || $0.completedMinutes > 0)
             }
-                .map { buffered(start: min($0.planningStart, $0.confirmedAt ?? $0.planningStart),
-                                end: min($0.planningEnd, $0.confirmedAt ?? $0.planningEnd)) }
+                .map { buffered(start: $0.retainedHistoryInterval.start,
+                                end: $0.retainedHistoryInterval.end) }
             days.append(.init(date: day, free: subtract(blocks, from: windows)))
             day = calendar.date(byAdding: .day, value: 1, to: day)!
         }

@@ -71,6 +71,7 @@ extension PlannerState {
         let moving = Set(ordered.map(\.id))
         let pause = TimeInterval(ScheduleEngine.breakMinutes * 60)
         let obstacles = tasks.filter { !moving.contains($0.id) && calendar.isDate($0.start, inSameDayAs: day) && ($0.isUnconfirmed || $0.completedMinutes > 0) }
+            .map(\.retainedHistoryInterval)
         var result: [ScheduledTask] = []
         var cursor = earliest
         for var task in ordered {
@@ -86,7 +87,7 @@ extension PlannerState {
                 guard start >= cursor, endMinute <= 1440,
                       (minute..<endMinute).allSatisfy({ available.contains($0) }) else { continue }
                 let end = start.addingTimeInterval(Double(task.durationMinutes * 60))
-                guard !obstacles.contains(where: { start < $0.planningEnd.addingTimeInterval(pause) && end > $0.planningStart.addingTimeInterval(-pause) }) else { continue }
+                guard !obstacles.contains(where: { start < $0.end.addingTimeInterval(pause) && end > $0.start.addingTimeInterval(-pause) }) else { continue }
                 task.start = start
                 task.floatingWindowStart = nil
                 task.floatingWindowEnd = nil

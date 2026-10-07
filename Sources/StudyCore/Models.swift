@@ -157,6 +157,12 @@ public struct ScheduledTask: Identifiable, Codable, Equatable, Sendable {
     public var planningEnd: Date { floatingWindowEnd ?? end }
     public var end: Date { start.addingTimeInterval(Double(durationMinutes) * 60) }
     public var isUnconfirmed: Bool { confirmedAt == nil && (status == .planned || status == .future) }
+    /// Retained history reserves time only up to confirmation. An early confirmation
+    /// resolves a floating window without changing its recorded display dates.
+    var retainedHistoryInterval: DateInterval {
+        DateInterval(start: min(planningStart, confirmedAt ?? planningStart),
+                     end: min(planningEnd, confirmedAt ?? planningEnd))
+    }
     /// Ended tasks may already have been redistributed into the future schedule.
     /// Floating tasks remain reserved until their entire completion window ends.
     public func confirmationRequiresReplan(actualMinutes: Int, now: Date) -> Bool {

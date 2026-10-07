@@ -84,6 +84,104 @@ final class DailyTaskOrderingTests: XCTestCase {
         try state.swapDailyTasks(ids[0], ids[1], now: date(7), calendar: calendar)
         XCTAssertEqual(state.tasks.map(\.id), ids)
     }
+    private func eveningFixture() -> PlannerState {
+        var state = PlannerState()
+        state.settings.availability = [.init(weekday: 2, startMinute: 9 * 60, endMinute: 22 * 60)]
+        state.courses = [Course(name: "合成课一", totalMinutes: 49, startDate: date(), deadline: date()),
+                         Course(name: "合成课二", totalMinutes: 69, startDate: date(), deadline: date(), minimumBlockMinutes: 69),
+                         Course(name: "合成课三", totalMinutes: 35, startDate: date(), deadline: date())]
+        let unconfirmed = [ScheduledTask(courseID: state.courses[0].id, start: date(18, minute: 21), durationMinutes: 49),
+                           ScheduledTask(courseID: state.courses[1].id, start: date(19, minute: 25), durationMinutes: 69),
+                           ScheduledTask(courseID: state.courses[2].id, start: date(20, minute: 49), durationMinutes: 35)]
+        let completedCourse = Course(name: "已完成的合成课", totalMinutes: 108, startDate: date(day: 4), deadline: date())
+        state.courses.append(completedCourse)
+        var history = ScheduledTask(courseID: completedCourse.id, start: date(15, minute: 57), durationMinutes: 108)
+        history.status = .completed
+        history.completedMinutes = 108
+        history.confirmedAt = date(13, day: 4)
+        history.floatingWindowStart = date(15, minute: 57)
+        history.floatingWindowEnd = date(19, minute: 40)
+        state.tasks = unconfirmed + [history]
+        state.completions = [.init(courseID: history.courseID, taskID: history.id, minutes: 108, recordedAt: history.confirmedAt!)]
+        return state
+    }
+
+    /// A completed task keeps its recorded floating window as history, but that window is
+    /// already resolved and must not reserve the evening slots the swap needs.
+    func testPreviouslyConfirmedFloatingHistoryDoesNotBlockEveningSwaps() throws {
+        let original = eveningFixture()
+        let history = original.tasks.last!
+        let unconfirmed = original.tasks.filter(\.isUnconfirmed)
+        let ids = unconfirmed.map(\.id)
+        let durations = Dictionary(uniqueKeysWithValues: unconfirmed.map { ($0.id, $0.durationMinutes) })
+        for (a, b) in [(0, 1), (0, 2), (1, 2)] {
+            var swapped = original
+            XCTAssertNoThrow(try swapped.swapDailyTasks(ids[a], ids[b], now: date(18), calendar: calendar))
+            var expected = ids
+            expected.swapAt(a, b)
+            let day = swapped.tasks.filter(\.isUnconfirmed).sorted { $0.start < $1.start }
+            XCTAssertEqual(day.map(\.id), expected)
+            XCTAssertEqual(day.map(\.durationMinutes), expected.map { durations[$0]! })
+            XCTAssertEqual(day.first?.start, date(18, minute: 21))
+            XCTAssertEqual(day.last?.end, date(21, minute: 24))
+            for (previous, next) in zip(day, day.dropFirst()) {
+                XCTAssertEqual(next.start.timeIntervalSince(previous.end), 900)
+            }
+            XCTAssertEqual(swapped.tasks.first { $0.id == history.id }, history)
+        }
+    }
+
+    func testSameDayConfirmationReservesActualHistoryAndRest() throws {
+        for status in [TaskStatus.completed, .partial] {
+            var state = eveningFixture()
+            state.tasks[3].confirmedAt = date(18, minute: 40)
+            state.tasks[3].status = status
+            if status == .partial { state.tasks[3].completedMinutes = 30 }
+            let history = state.tasks[3]
+            let ids = state.tasks.prefix(3).map(\.id)
+            try state.swapDailyTasks(ids[0], ids[1], now: date(18, minute: 45), calendar: calendar)
+            let placed = state.tasks.filter(\.isUnconfirmed)
+            XCTAssertEqual(placed.map(\.id), [ids[1], ids[0], ids[2]])
+            XCTAssertEqual(placed.first?.start, date(18, minute: 55))
+            XCTAssertEqual(placed.last?.end, date(21, minute: 58))
+            XCTAssertEqual(state.tasks.first { $0.id == history.id }, history)
+        }
+    }
+
+    func testUnresolvedOrLateConfirmedHistoryStillRejectsWhenNoSpace() {
+        for confirmedAt in [nil, date(19, minute: 55)] as [Date?] {
+            var state = eveningFixture()
+            state.tasks[3].confirmedAt = confirmedAt
+            let before = state
+            XCTAssertThrowsError(try state.swapDailyTasks(state.tasks[0].id, state.tasks[1].id, now: date(18), calendar: calendar)) {
+                XCTAssertEqual($0 as? DailyTaskOrderError, .noSpace)
+            }
+            XCTAssertEqual(state, before)
+        }
+    }
+
+    func testEveningOrderSurvivesReplanWithPreviouslyConfirmedHistory() throws {
+        var state = eveningFixture()
+        state.settings.actualStudyStart = date(18, minute: 21)
+        let history = state.tasks.last!
+        let originalCourses = state.courses
+        let completions = state.completions
+        _ = state.replan(now: date(18, minute: 21), calendar: calendar)
+        let tasks = state.tasks.filter(\.isUnconfirmed)
+        XCTAssertEqual(tasks.count, 3)
+        try state.swapDailyTasks(tasks[0].id, tasks[2].id, now: date(18, minute: 21), calendar: calendar)
+        let ordered = state.tasks.filter(\.isUnconfirmed)
+        state = try JSONDecoder().decode(PlannerState.self, from: JSONEncoder().encode(state))
+        for _ in 0..<2 {
+            let result = state.replan(now: date(18, minute: 21), calendar: calendar)
+            XCTAssertEqual(result.tasks.map(\.courseID), ordered.map(\.courseID))
+            XCTAssertEqual(result.tasks.map(\.start), ordered.map(\.start))
+            XCTAssertEqual(result.tasks.map(\.durationMinutes), ordered.map(\.durationMinutes))
+            XCTAssertEqual(state.tasks.first { $0.id == history.id }, history)
+            XCTAssertEqual(state.courses, originalCourses)
+            XCTAssertEqual(state.completions, completions)
+        }
+    }
     func testReplanAfterAnOrderedTaskEndsHasUniqueIDs() throws {
         var state = fixture()
         _ = state.replan(now: date(7), calendar: calendar)
