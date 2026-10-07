@@ -29,6 +29,7 @@
 - `./Android/test.sh`：Java 排课、确认、设置、交换、合并、网站及网盘导入测试；Node 合成分页测试及共享脚本一致性检查。
 - `./Scripts/test.sh --filter 'AndroidParityTests|DailyTaskOrderingTests|CourseMergingTests|WebCourseSnapshotTests|StudyLoadTests|LessonOrderingTests|GenericCourseDigestTests|NetdiskDigestTests|NetdiskDedupTests'`：104 个 Mac 测试通过，包含 Android 合成数据解码与交换顺序恢复。
 - `Android/tests/fixtures/desktop-parity.json` 由 Android 测试生成，只有合成课程和合成分享，没有个人日程或登录凭据。
+- 学丞课程包与直播课节使用 Mac 的 `generic:` / `:live:` 标识；同名但不同目录位置的直播保留独立进度。跨页面继续识别会保留之前的章节，重复抓取不会增加同一课节。回放时长只有在标题与目录一致时才采用。SQLite 或同步后恢复风险提示时，只更新派生诊断，不替换共享课表。
 - 当前环境没有可运行的 Android 模拟器 / adb；本轮尚未进行新 APK 的真机触摸、WebView 登录与直播回放验收。原有文档中的 Android 15 设备同步验收属于此前版本，不能当作本轮新增界面的验收结果。
 - 通用识别依赖设备 WebView 支持加载前脚本注入；旧 WebView 会明确提示升级，允许在页面内切换课程后再识别。网站没有返回时长的课节保留，但不计入可排学习量；已发布且必须有时长的视频缺数据会拒绝导入。
 - 网页导入在独立进程和独立 WebView 数据目录中进行（API 28 及以上）；每次打开及关闭都清除登录 Cookie、网页存储与缓存。API 26 / 27 同样清除会话，该应用其他功能不使用 WebView。课程快照及网盘文件信息只保留白名单字段，分享凭据不会进入保存、同步或导入临时文件。
