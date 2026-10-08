@@ -232,8 +232,17 @@ public struct PlannerState: Codable, Equatable, Sendable {
     public mutating func removeArchivedCourses() {
         removeCourses(ids: Set(courses.filter(\.isArchived).map(\.id)))
     }
+    // Keep the uncapped ledger total separate: lesson reconciliation consumes
+    // repeated study on its own lesson before calculating effective progress.
+    func recordedCompletedMinutes(for course: Course) -> Int {
+        max(0, course.initialCompletedMinutes) + completions.filter { $0.courseID == course.id }.reduce(0) { $0 + $1.minutes }
+    }
     public func completedMinutes(for course: Course) -> Int {
-        min(course.totalMinutes, max(0, course.initialCompletedMinutes) + completions.filter { $0.courseID == course.id }.reduce(0) { $0 + $1.minutes })
+        let lessons = lessonWorkItems(for: course)
+        if !lessons.isEmpty {
+            return max(0, course.totalMinutes - lessons.reduce(0) { $0 + $1.remainingMinutes })
+        }
+        return min(course.totalMinutes, recordedCompletedMinutes(for: course))
     }
     public func remainingMinutes(for course: Course) -> Int { max(0, course.totalMinutes - completedMinutes(for: course)) }
     public func confirmationCandidates(at now: Date, calendar: Calendar = .current) -> [ScheduledTask] {
@@ -349,7 +358,8 @@ public struct PlannerState: Codable, Equatable, Sendable {
         guard let index = tasks.firstIndex(where: { $0.id == taskID }), tasks[index].isUnconfirmed,
               let course = courses.first(where: { $0.id == tasks[index].courseID }) else { throw PlannerError.alreadyConfirmed }
         guard actualMinutes >= 0, actualMinutes <= tasks[index].durationMinutes else { throw PlannerError.invalidCompletion }
-        let credited = min(actualMinutes, remainingMinutes(for: course))
+        let lessonRemaining = lessonWorkItems(for: course).first { $0.id == tasks[index].lessonID }?.remainingMinutes
+        let credited = min(actualMinutes, lessonRemaining ?? remainingMinutes(for: course))
         tasks[index].completedMinutes = credited
         tasks[index].confirmedAt = now
         tasks[index].status = actualMinutes == 0 ? .missed : (actualMinutes == tasks[index].durationMinutes ? .completed : .partial)

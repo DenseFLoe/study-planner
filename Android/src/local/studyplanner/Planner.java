@@ -88,14 +88,15 @@ public final class Planner {
         Set<String> ids=new HashSet<>();for(JSONObject c:list(s.getJSONArray("courses")))if(c.optBoolean("isArchived"))ids.add(c.getString("id"));
         removeCourses(s,ids);
     }
-    public static int completed(JSONObject s,JSONObject c){int v=Math.max(0,c.optInt("initialCompletedMinutes"));for(JSONObject r:list(s.optJSONArray("completions")))if(r.optString("courseID").equals(c.optString("id")))v+=r.optInt("minutes");return Math.min(c.optInt("totalMinutes"),v);}
+    static int recordedCompleted(JSONObject s,JSONObject c){int v=Math.max(0,c.optInt("initialCompletedMinutes"));for(JSONObject r:list(s.optJSONArray("completions")))if(r.optString("courseID").equals(c.optString("id")))v+=r.optInt("minutes");return v;}
+    public static int completed(JSONObject s,JSONObject c){List<Work> lessons=lessonWorkAll(s,c);if(!lessons.isEmpty()){int left=0;for(Work w:lessons)left+=w.minutes;return Math.max(0,c.optInt("totalMinutes")-left);}return Math.min(c.optInt("totalMinutes"),recordedCompleted(s,c));}
     public static int remaining(JSONObject s,JSONObject c){return Math.max(0,c.optInt("totalMinutes")-completed(s,c));}
     public static boolean occurs(JSONObject e,LocalDate d){return occurs(e,d,false);}
     public static boolean occurs(JSONObject e,LocalDate d,boolean includingExcluded){if(d.isBefore(day(e.optDouble("startDate")))||d.isAfter(day(e.optDouble("endDate"))))return false;JSONArray excluded=e.optJSONArray("excludedDates");if(!includingExcluded&&excluded!=null)for(int i=0;i<excluded.length();i++)if(day(excluded.optDouble(i)).equals(d))return false;JSONArray w=e.optJSONArray("weekdays");if(w==null||w.length()==0)return d.equals(day(e.optDouble("startDate")));for(int i=0;i<w.length();i++)if(w.optInt(i)==weekday(d))return true;return false;}
     public static List<JSONObject> review(JSONObject s,double now){List<JSONObject> out=new ArrayList<>();LocalDate today=day(now);int m=(int)((now-at(today,0))/60);for(JSONObject t:list(s.optJSONArray("tasks"))){JSONObject c=course(s,t.optString("courseID"));if(pending(t)&&c!=null&&!c.optBoolean("isArchived")&&(planningEnd(t)<=at(today,0)||(m>=s.optJSONObject("settings").optInt("notificationMinute")&&planningEnd(t)<=now)))out.add(t);}return out;}
     // Ended work may already be redistributed; floating work stays reserved until its window ends.
     public static boolean confirmationRequiresReplan(JSONObject task,int actual,double now){return actual!=task.optInt("durationMinutes")||planningEnd(task)<=now;}
-    public static void confirm(JSONObject s,String taskID,int actual,double now)throws Exception{JSONObject t=null;for(JSONObject v:list(s.getJSONArray("tasks")))if(v.getString("id").equals(taskID))t=v;if(t==null||!pending(t))throw new IllegalArgumentException("该任务已确认，请刷新后重试");if(actual<0||actual>t.getInt("durationMinutes"))throw new IllegalArgumentException("实际时长必须在 0 与计划时长之间");JSONObject c=course(s,t.getString("courseID"));if(c==null)throw new IllegalArgumentException("找不到课程");int credit=Math.min(actual,remaining(s,c));t.put("completedMinutes",credit).put("confirmedAt",now).put("status",actual==0?"missed":actual==t.getInt("durationMinutes")?"completed":"partial");s.getJSONArray("completions").put(new JSONObject().put("id",stableID("completion|"+taskID)).put("courseID",c.getString("id")).put("taskID",taskID).put("minutes",credit).put("recordedAt",now));}
+    public static void confirm(JSONObject s,String taskID,int actual,double now)throws Exception{JSONObject t=null;for(JSONObject v:list(s.getJSONArray("tasks")))if(v.getString("id").equals(taskID))t=v;if(t==null||!pending(t))throw new IllegalArgumentException("该任务已确认，请刷新后重试");if(actual<0||actual>t.getInt("durationMinutes"))throw new IllegalArgumentException("实际时长必须在 0 与计划时长之间");JSONObject c=course(s,t.getString("courseID"));if(c==null)throw new IllegalArgumentException("找不到课程");int available=remaining(s,c);for(Work w:lessonWorkAll(s,c))if(w.lessonID.equals(t.optString("lessonID"))){available=w.minutes;break;}int credit=Math.min(actual,available);t.put("completedMinutes",credit).put("confirmedAt",now).put("status",actual==0?"missed":actual==t.getInt("durationMinutes")?"completed":"partial");s.getJSONArray("completions").put(new JSONObject().put("id",stableID("completion|"+taskID)).put("courseID",c.getString("id")).put("taskID",taskID).put("minutes",credit).put("recordedAt",now));}
     public static void undoConfirmation(JSONObject s,String taskID,double now)throws Exception{JSONObject t=null;for(JSONObject v:list(s.getJSONArray("tasks")))if(v.getString("id").equals(taskID))t=v;if(t==null||!t.has("confirmedAt"))throw new IllegalArgumentException("该任务尚未确认，无需撤销");JSONArray records=s.getJSONArray("completions");boolean removed=false;for(int i=records.length()-1;i>=0;i--)if(records.getJSONObject(i).optString("taskID").equals(taskID)){records.remove(i);removed=true;}if(!removed)throw new IllegalArgumentException("找不到该任务的完成记录");t.remove("confirmedAt");t.put("completedMinutes",0).put("status",day(t.getDouble("start")).equals(day(now))?"planned":"future");JSONObject c=course(s,t.getString("courseID"));if(c!=null)reconcileWebsiteBaseline(s,c);}
 
     static void reconcileWebsiteBaseline(JSONObject state,JSONObject course)throws Exception {
@@ -347,7 +348,7 @@ public final class Planner {
                 out.add(new Work(remaining,l.optString("id"),l.optString("name")));
             }
             if(ceilMinutes(total)!=c.optInt("totalMinutes"))return new ArrayList<>();
-            baseline=Math.max(0,completed(s,c)-(ceilMinutes(total)-ceilMinutes(left)));
+            baseline=Math.max(0,recordedCompleted(s,c)-(ceilMinutes(total)-ceilMinutes(left)));
         }else if(manual!=null&&manual.length()>0){
             int total=0;for(JSONObject l:list(manual)){int n=l.optInt("durationMinutes");if(n<=0)return new ArrayList<>();total+=n;out.add(new Work(n,l.optString("id"),l.optString("name")));}
             if(total!=c.optInt("totalMinutes"))return new ArrayList<>();
@@ -369,7 +370,7 @@ public final class Planner {
             }
             int amount=record.optInt("minutes");if(snapshot!=null&&extra<=0)continue;
             Work target=task==null?null:workByID.get(task.optString("lessonID"));
-            if(target!=null){int credit=Math.min(amount,target.minutes);if(snapshot!=null)credit=Math.min(credit,extra);target.minutes-=credit;amount-=credit;if(snapshot!=null)extra-=credit;}
+            if(target!=null){int credit=Math.min(amount,target.minutes);if(snapshot!=null)credit=Math.min(credit,extra);target.minutes-=credit;amount-=credit;if(snapshot!=null)extra-=Math.min(extra,record.optInt("minutes"));else amount=0;}
             if(snapshot==null)extra+=amount;
         }
         // A newer website snapshot may still lag local confirmations. Preserve their
@@ -379,7 +380,7 @@ public final class Planner {
             JSONObject overlaps=c.optJSONObject("webCompletionOverlaps");
             int overlap=overlaps==null?websiteCredits.get(i):overlaps.optInt(w.lessonID,0);
             int outstanding=Math.max(0,earlierCredits.getOrDefault(w.lessonID,0)-overlap);
-            int credit=Math.min(extra,Math.min(outstanding,w.minutes));w.minutes-=credit;extra-=credit;
+            int credit=Math.min(extra,Math.min(outstanding,w.minutes));w.minutes-=credit;extra-=Math.min(extra,outstanding);
         }
         for(Work w:out){int credit=Math.min(extra,w.minutes);w.minutes-=credit;extra-=credit;}
         JSONArray preferred=c.optJSONArray("lessonOrder");if(preferred!=null){Map<String,Integer> rank=new HashMap<>();for(int i=0;i<preferred.length();i++)rank.putIfAbsent(preferred.optString(i),i);out.sort(Comparator.comparingInt(w->rank.getOrDefault(w.lessonID,Integer.MAX_VALUE)));}

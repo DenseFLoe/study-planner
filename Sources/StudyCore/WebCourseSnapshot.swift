@@ -164,7 +164,6 @@ extension PlannerState {
                    let index = items.firstIndex(where: { $0.id == lessonID }) {
                     let credit = min(record.minutes, items[index].remainingMinutes)
                     items[index].remainingMinutes -= credit
-                    unassigned += record.minutes - credit
                 } else { unassigned += record.minutes }
             }
             for index in items.indices where unassigned > 0 {
@@ -188,7 +187,7 @@ extension PlannerState {
         }
         // The import reconciles website progress with the app ledger. Only progress beyond
         // that website snapshot needs to reduce its per-lesson remaining work.
-        var extra = max(0, completedMinutes(for: course) - snapshot.completedMinutes)
+        var extra = max(0, recordedCompletedMinutes(for: course) - snapshot.completedMinutes)
         let websiteCredits = items.map { max(0, $0.durationMinutes - $0.remainingMinutes) }
         let taskByID = Dictionary(uniqueKeysWithValues: tasks.filter { $0.courseID == course.id }.map { ($0.id, $0) })
         for record in completions.filter({ $0.courseID == course.id && $0.recordedAt > snapshot.fetchedAt }) {
@@ -196,7 +195,9 @@ extension PlannerState {
                   let index = items.firstIndex(where: { $0.id == lessonID }) else { continue }
             let credit = min(extra, record.minutes, items[index].remainingMinutes)
             items[index].remainingMinutes -= credit
-            extra -= credit
+            // Consume the entire identified record, including repeated study. Its
+            // overflow must never mark an unrelated lesson as watched.
+            extra -= min(extra, record.minutes)
         }
         // Refreshing the snapshot does not mean the website has caught up with local
         // confirmations. Keep their lesson identity, discounting progress already
@@ -212,7 +213,7 @@ extension PlannerState {
             let outstanding = max(0, earlierCredits[items[index].id, default: 0] - overlap)
             let credit = min(extra, outstanding, items[index].remainingMinutes)
             items[index].remainingMinutes -= credit
-            extra -= credit
+            extra -= min(extra, outstanding)
         }
         for index in items.indices where extra > 0 {
             let credit = min(extra, items[index].remainingMinutes)

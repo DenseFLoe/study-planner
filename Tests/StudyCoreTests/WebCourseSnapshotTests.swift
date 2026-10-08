@@ -121,6 +121,58 @@ final class WebCourseSnapshotTests: XCTestCase {
         XCTAssertEqual(state.lessonWorkItems(for: state.courses[0]).map(\.remainingMinutes), [60, 30, 60])
     }
 
+    func testRepeatedLessonHistoryNeverCompletesUntouchedLessons() throws {
+        let now = Date(), deadline = now.addingTimeInterval(86400 * 7)
+        var value = snapshot()
+        value.fetchedAt = now
+        value.lessons = ["untouched", "repeated", "later"].map {
+            .init(id: $0, name: $0, subject: "", stage: "", chapter: "", kind: "video",
+                  published: true, durationSeconds: 3600, watchedPercent: 0,
+                  markedFinished: false, requiresDuration: true)
+        }
+        var state = PlannerState()
+        try state.importWebCourses([value], deadline: deadline, now: now)
+        // Reproduce old/offline records whose sum even exceeds the whole course.
+        for id in ["repeated", "repeated", "repeated", "repeated", "later"] {
+            var task = ScheduledTask(courseID: state.courses[0].id, start: now, durationMinutes: 60, lessonID: id)
+            task.confirmedAt = now.addingTimeInterval(1)
+            task.completedMinutes = 60; task.status = .completed
+            state.tasks.append(task)
+            state.completions.append(.init(courseID: task.courseID, taskID: task.id, minutes: 60, recordedAt: task.confirmedAt!))
+        }
+        for fetchedAt in [now, now.addingTimeInterval(2)] {
+            state.courses[0].webCourse!.fetchedAt = fetchedAt
+            XCTAssertEqual(state.lessonWorkItems(for: state.courses[0]).map(\.remainingMinutes), [60, 0, 0])
+            XCTAssertEqual(state.completedMinutes(for: state.courses[0]), 120)
+            let plan = ScheduleEngine().generate(state: state, now: now.addingTimeInterval(3))
+            XCTAssertEqual(Set(plan.tasks.compactMap(\.lessonID)), ["untouched"])
+        }
+        let restored = try JSONDecoder().decode(PlannerState.self, from: JSONEncoder().encode(state))
+        XCTAssertEqual(restored.remainingMinutes(for: restored.courses[0]), 60)
+        XCTAssertEqual(restored.completions.count, 5, "Keep the original study history")
+    }
+
+    func testConfirmingAnotherTaskForFinishedLessonAddsNoProgress() throws {
+        let now = Date()
+        var value = snapshot()
+        value.fetchedAt = now
+        value.lessons[0].durationSeconds = 3600
+        value.lessons[0].watchedPercent = 0
+        value.lessons.append(.init(id: "untouched", name: "未学习", subject: "", stage: "", chapter: "", kind: "video",
+                                  published: true, durationSeconds: 3600, watchedPercent: 0, markedFinished: false, requiresDuration: true))
+        var state = PlannerState()
+        try state.importWebCourses([value], deadline: now.addingTimeInterval(86400), now: now)
+        for _ in 0..<2 {
+            let task = ScheduledTask(courseID: state.courses[0].id, start: now, durationMinutes: 60, lessonID: value.lessons[0].id)
+            state.tasks.append(task)
+            try state.confirm(taskID: task.id, actualMinutes: 60, now: now.addingTimeInterval(1))
+        }
+        XCTAssertEqual(state.completions.map(\.minutes), [60, 0])
+        XCTAssertEqual(state.lessonWorkItems(for: state.courses[0]).map(\.remainingMinutes), [0, 60])
+        try state.undoConfirmation(taskID: state.tasks[1].id, now: now.addingTimeInterval(2))
+        XCTAssertEqual(state.remainingMinutes(for: state.courses[0]), 60)
+    }
+
     func snapshot() -> WebCourseSnapshot {
         .init(packageID: "1", name: "数学", sourceURL: "https://www.kaoyanvip.cn/", fetchedAt: Date(), expectedOutlines: 1, fetchedOutlines: 1,
               lessons: [.init(id: "1:1", name: "课节", subject: "数学", stage: "基础", chapter: "一", kind: "video", published: true, durationSeconds: 3601, watchedPercent: 50, markedFinished: false, requiresDuration: true)], issues: [])

@@ -30,5 +30,41 @@ public final class ImportParityTests {
  static void websitePages()throws Exception{JSONObject old=snapshot(50,0,now).put("packageID","generic:course-42");old.getJSONArray("lessons").getJSONObject(0).put("name","第一讲");JSONObject catalog=new JSONObject().put("courseID","course-42").put("name","直播课程").put("rows",new JSONArray().put(new JSONObject().put("name","第一讲").put("key","chapter/0").put("replay",true)).put(new JSONObject().put("name","第一讲").put("key","chapter/1").put("replay",false)));JSONObject live=WebsiteCapture.xuecheng(catalog,Collections.singletonList(old),"https://ixuecheng.cn/detail?id=course-42&token=PLACEHOLDER",now);check(live.getString("sourceURL").equals("https://ixuecheng.cn/detail?id=course-42"),"Public course link lost or auth query persisted");check(live.getJSONArray("lessons").getJSONObject(1).getDouble("watchedPercent")==0,"Same-name live entry incorrectly reused another lesson progress");check(live.getString("packageID").equals("generic:course-42"),"Xuecheng package ID differs from desktop");check(live.getJSONArray("lessons").getJSONObject(0).getString("id").equals("generic:course-42:live:第一讲:chapter/0"),"Xuecheng lesson key differs from desktop");check(!live.getJSONArray("lessons").getJSONObject(1).getBoolean("published"),"Future live published too early");check(live.getJSONArray("lessons").getJSONObject(0).getDouble("watchedPercent")==50,"Live merge lost known progress");
   JSONObject fresh=snapshot(0,0,now+60).put("packageID",old.getString("packageID"));fresh.put("lessons",new JSONArray().put(fresh.getJSONArray("lessons").getJSONObject(0)).put(lesson("3",600,0)));List<JSONObject> merged=WebsiteCapture.merge(Collections.singletonList(old),Collections.singletonList(fresh));check(merged.get(0).getJSONArray("lessons").length()==3,"Navigation discarded previously captured chapter");check(merged.get(0).getJSONArray("lessons").getJSONObject(0).getDouble("watchedPercent")==50,"Missing page progress erased verified capture");check(old.getJSONArray("lessons").length()==2,"Capture merge mutated previous result");check(WebsiteCapture.merge(merged,Collections.singletonList(fresh)).get(0).getJSONArray("lessons").length()==3,"Repeated capture duplicated lessons");
  }
- public static void main(String[] args)throws Exception{refresh();generic();netdisk();seriesAndExisting();websitePages();System.out.println("ImportParityTests: "+checks+" checks passed");if(args.length>0){JSONObject state=PlannerTests.empty();state.getJSONObject("settings").put("availability",StudySettingsTests.windows(480,1320)).put("actualStudyStart",now);WebCourseImport.save(state,Collections.singletonList(snapshot(50,0,now)),deadline,now);List<JSONObject> net=NetdiskImport.build(scan(new JSONArray().put(folder("视频课程")).put(video("视频课程","a","第一讲",600.0)).put(video("视频课程","b","第二讲",600.0)).put(video("视频课程","c","第三讲",600.0))));WebCourseImport.save(state,net,deadline,now);for(JSONObject course:Planner.list(state.getJSONArray("courses")))course.put("deadline",Planner.at(day,0));Planner.replan(state,now);List<JSONObject> tasks=new ArrayList<>();for(JSONObject t:Planner.list(state.getJSONArray("tasks")))if(Planner.pending(t)&&Planner.day(t.getDouble("start")).equals(day))tasks.add(t);if(tasks.size()>1)DailyTaskOrdering.swap(state,tasks.get(0).getString("id"),tasks.get(1).getString("id"),now);java.nio.file.Files.write(java.nio.file.Paths.get(args[0]),state.toString(2).getBytes(java.nio.charset.StandardCharsets.UTF_8));}}
+ // Synthetic snapshot whose lessons mirror the Mac helper: every lesson is 3600 seconds.
+ static JSONObject snapshotFor(double date,String... lessonIDs)throws Exception{JSONArray lessons=new JSONArray();for(String id:lessonIDs)lessons.put(lesson(id,3600,0));return snapshot(0,0,date).put("lessons",lessons);}
+ static String lessonMinutes(List<Planner.Work> work){StringBuilder text=new StringBuilder();for(Planner.Work w:work){if(text.length()>0)text.append(",");text.append(w.minutes);}return text.toString();}
+ static String completionMinutes(JSONObject state)throws Exception{StringBuilder text=new StringBuilder();for(JSONObject record:Planner.list(state.getJSONArray("completions"))){if(text.length()>0)text.append(",");text.append(record.getInt("minutes"));}return text.toString();}
+ /** Repeated/offline history must never complete untouched lessons, and the original records stay intact. */
+ static void repeatedLessonHistoryNeverCompletesUntouchedLessons()throws Exception{
+  JSONObject value=snapshotFor(now,"untouched","repeated","later"),state=PlannerTests.empty();
+  WebCourseImport.save(state,Collections.singletonList(value),Planner.at(day.plusDays(7),0),now);
+  JSONObject course=state.getJSONArray("courses").getJSONObject(0);String id=course.getString("id");
+  for(String lessonID:new String[]{"repeated","repeated","repeated","repeated","later"}){
+   JSONObject task=Planner.task(id,now,60).put("lessonID",lessonID).put("confirmedAt",now+1).put("completedMinutes",60).put("status","completed");
+   state.getJSONArray("tasks").put(task);
+   state.getJSONArray("completions").put(new JSONObject().put("id",Planner.stableID("completion|"+task.getString("id"))).put("courseID",id).put("taskID",task.getString("id")).put("minutes",60).put("recordedAt",now+1));
+  }
+  for(double fetchedAt:new double[]{now,now+2}){
+   course.getJSONObject("webCourse").put("fetchedAt",fetchedAt);
+   check(lessonMinutes(Planner.lessonWorkAll(state,course)).equals("60,0,0"),"Repeated lesson history completed untouched lessons");
+   check(Planner.completed(state,course)==120,"Repeated lesson history credited the same minutes twice");
+  }
+  check(state.getJSONArray("completions").length()==5,"Original study history was dropped");
+ }
+ /** A second confirmed task for an already finished lesson must add no progress, and undo must not either. */
+ static void confirmingAnotherTaskForFinishedLessonAddsNoProgress()throws Exception{
+  JSONObject value=snapshotFor(now,"1","untouched"),state=PlannerTests.empty();
+  WebCourseImport.save(state,Collections.singletonList(value),now+86400,now);
+  JSONObject course=state.getJSONArray("courses").getJSONObject(0);String id=course.getString("id");
+  for(int i=0;i<2;i++){
+   JSONObject task=Planner.task(id,now,60).put("lessonID","1");
+   state.getJSONArray("tasks").put(task);
+   Planner.confirm(state,task.getString("id"),60,now+1);
+  }
+  check(completionMinutes(state).equals("60,0"),"Finished lesson credited a second task");
+  check(lessonMinutes(Planner.lessonWorkAll(state,course)).equals("0,60"),"Finished lesson kept remaining work");
+  Planner.undoConfirmation(state,state.getJSONArray("tasks").getJSONObject(1).getString("id"),now+2);
+  check(Planner.remaining(state,Planner.course(state,id))==60,"Undo did not restore exactly the confirmed lesson");
+ }
+ public static void main(String[] args)throws Exception{refresh();generic();netdisk();seriesAndExisting();websitePages();repeatedLessonHistoryNeverCompletesUntouchedLessons();confirmingAnotherTaskForFinishedLessonAddsNoProgress();System.out.println("ImportParityTests: "+checks+" checks passed");if(args.length>0){JSONObject state=PlannerTests.empty();state.getJSONObject("settings").put("availability",StudySettingsTests.windows(480,1320)).put("actualStudyStart",now);WebCourseImport.save(state,Collections.singletonList(snapshot(50,0,now)),deadline,now);List<JSONObject> net=NetdiskImport.build(scan(new JSONArray().put(folder("视频课程")).put(video("视频课程","a","第一讲",600.0)).put(video("视频课程","b","第二讲",600.0)).put(video("视频课程","c","第三讲",600.0))));WebCourseImport.save(state,net,deadline,now);for(JSONObject course:Planner.list(state.getJSONArray("courses")))course.put("deadline",Planner.at(day,0));Planner.replan(state,now);List<JSONObject> tasks=new ArrayList<>();for(JSONObject t:Planner.list(state.getJSONArray("tasks")))if(Planner.pending(t)&&Planner.day(t.getDouble("start")).equals(day))tasks.add(t);if(tasks.size()>1)DailyTaskOrdering.swap(state,tasks.get(0).getString("id"),tasks.get(1).getString("id"),now);java.nio.file.Files.write(java.nio.file.Paths.get(args[0]),state.toString(2).getBytes(java.nio.charset.StandardCharsets.UTF_8));}}
 }

@@ -71,6 +71,12 @@ public class PlannerTests {
   check(Planner.confirmationRequiresReplan(task,60,Planner.at(day,720)),"Ended floating completion must replan");
   check(Planner.confirmationRequiresReplan(task,30,Planner.at(day,600)),"Partial completion must replan");
  }
+ // Seed records from before the supplied snapshot directly. Calling confirm on an
+ // already-refreshed course correctly caps NEW credit at its current remaining work.
+ static void historicalCompletion(JSONObject state,JSONObject task,int minutes,double recordedAt)throws Exception{
+  task.put("completedMinutes",minutes).put("confirmedAt",recordedAt).put("status",minutes==task.getInt("durationMinutes")?"completed":"partial");
+  state.getJSONArray("completions").put(new JSONObject().put("id",Planner.stableID("completion|"+task.getString("id"))).put("courseID",task.getString("courseID")).put("taskID",task.getString("id")).put("minutes",minutes).put("recordedAt",recordedAt));
+ }
  static void refreshedWebsiteProgressRegression()throws Exception{
   LocalDate day=LocalDate.of(2026,9,28);
   for(int percent:new int[]{0,50,100}){
@@ -79,7 +85,7 @@ public class PlannerTests {
    for(String id:new String[]{"first","second"})lessons.put(new JSONObject().put("id",id).put("name",id).put("published",true).put("requiresDuration",true).put("durationSeconds",3600).put("watchedPercent",id.equals("second")?percent:0));
    c.put("webCourse",new JSONObject().put("fetchedAt",Planner.at(day,480)).put("lessons",lessons));s.getJSONArray("courses").put(c);
    JSONObject task=Planner.task(c.getString("id"),Planner.at(day,360),60).put("lessonID","second");s.getJSONArray("tasks").put(task);
-   Planner.confirm(s,task.getString("id"),60,Planner.at(day,420));
+   historicalCompletion(s,task,60,Planner.at(day,420));
    List<Planner.Work> work=Planner.lessonWork(s,c);
    check(work.size()==1&&work.get(0).lessonID.equals("first")&&work.get(0).minutes==60,"Refreshed website progress moved local completion to wrong lesson at "+percent+"%");
    s.getJSONObject("settings").getJSONArray("availability").put(new JSONObject().put("weekday",Planner.weekday(day)).put("startMinute",540).put("endMinute",720));
@@ -91,7 +97,7 @@ public class PlannerTests {
   for(String id:new String[]{"first","second","third"})lessons.put(new JSONObject().put("id",id).put("name",id).put("published",true).put("requiresDuration",true).put("durationSeconds",3600).put("watchedPercent",id.equals("second")?50:0));
   c.put("webCourse",new JSONObject().put("fetchedAt",Planner.at(day,480)).put("lessons",lessons));s.getJSONArray("courses").put(c);
   String lastTask="";
-  for(String id:new String[]{"second","third"}){JSONObject task=Planner.task(c.getString("id"),Planner.at(day,360),60).put("lessonID",id);s.getJSONArray("tasks").put(task);lastTask=task.getString("id");Planner.confirm(s,lastTask,30,Planner.at(day,420));}
+  for(String id:new String[]{"second","third"}){JSONObject task=Planner.task(c.getString("id"),Planner.at(day,360),60).put("lessonID",id);s.getJSONArray("tasks").put(task);lastTask=task.getString("id");historicalCompletion(s,task,30,Planner.at(day,420));}
   List<Planner.Work> work=Planner.lessonWork(s,c);
   check(work.size()==3&&work.get(0).minutes==60&&work.get(1).minutes==30&&work.get(2).minutes==30,"Website and local progress were counted twice for one lesson");
   Planner.undoConfirmation(s,lastTask,Planner.at(day,480));work=Planner.lessonWork(s,c);
