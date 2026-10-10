@@ -941,8 +941,17 @@ private struct TimelineRow: View {
     var dragEnded: (CGPoint?) -> Void
     @State private var hovering = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @AppStorage("timelineTimeFontSize") private var timelineTimeFontSize = 17.0
 
     private var floating: Bool { item.event?.isFloating == true || item.task?.isFloating == true }
+
+    /// The stored preference can come from an older build or a hand-edited plist,
+    /// so an unusable value falls back to the default instead of shrinking the
+    /// timeline row to nothing.
+    private var effectiveTimeFontSize: Double {
+        guard timelineTimeFontSize.isFinite else { return 17 }
+        return min(max(timelineTimeFontSize, 14), 24)
+    }
 
     private var tint: Color {
         if item.task != nil { return courseColor(course?.color ?? "blue") }
@@ -953,13 +962,18 @@ private struct TimelineRow: View {
         HStack(alignment: .top, spacing: 14) {
             VStack(alignment: .trailing, spacing: 3) {
                 Text(item.start.formatted(date: .omitted, time: .shortened))
-                    .font(.system(size: 13, weight: .semibold, design: .rounded))
+                    .font(.system(size: effectiveTimeFontSize, weight: .semibold, design: .rounded))
+                    .monospacedDigit()
+                    .fixedSize(horizontal: true, vertical: false)
                 if floating { Image(systemName: "arrow.up.arrow.down").font(.caption2).foregroundStyle(tint) }
                 Text(item.end.formatted(date: .omitted, time: .shortened))
-                    .font(.caption2)
-                    .foregroundStyle(.tertiary)
+                    .font(.system(size: effectiveTimeFontSize - 2, weight: .medium, design: .rounded))
+                    .monospacedDigit()
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: true, vertical: false)
             }
-            .frame(width: 53, alignment: .trailing)
+            .frame(minWidth: 72, alignment: .trailing)
+            .fixedSize(horizontal: true, vertical: false)
             .padding(.top, 17)
 
             VStack(spacing: 0) {

@@ -240,12 +240,46 @@ struct SettingsView: View {
     @State private var saved = false
     @State private var syncHost = ""
     @State private var pairingRequest: PairingRequest?
+    @AppStorage("timelineTimeFontSize") private var timelineTimeFontSize = 17.0
+    /// Display-only preference: it never travels through `AppSettings`, so
+    /// adjusting it neither saves business settings nor triggers rescheduling.
+    private var displayTimelineTimeFontSize: Double {
+        guard timelineTimeFontSize.isFinite else { return 17 }
+        return min(max(timelineTimeFontSize, 14), 24)
+    }
     private var valid: Bool {
         (1...1440).contains(settings.minimumScheduleUnit) && settings.availability.allSatisfy { $0.startMinute >= 0 && $0.endMinute <= 1440 && $0.startMinute < $0.endMinute }
     }
     var body: some View {
         VStack(spacing: 0) {
             Form {
+                Section("显示设置") {
+                    VStack(alignment: .leading, spacing: 6) {
+                        HStack {
+                            Text("主页时间字号")
+                            Spacer()
+                            Text("\(Int(displayTimelineTimeFontSize.rounded())) 号").monospacedDigit().foregroundStyle(.secondary)
+                        }
+                        Slider(value: $timelineTimeFontSize, in: 14...24, step: 1)
+                            .accessibilityLabel("主页时间字号")
+                            .accessibilityValue("\(Int(displayTimelineTimeFontSize.rounded())) 号")
+                    }
+                    HStack(alignment: .firstTextBaseline, spacing: 16) {
+                        VStack(alignment: .trailing, spacing: 3) {
+                            Text("09:00")
+                                .font(.system(size: displayTimelineTimeFontSize, weight: .semibold, design: .rounded))
+                                .monospacedDigit()
+                            Text("10:30")
+                                .font(.system(size: displayTimelineTimeFontSize - 2, weight: .medium, design: .rounded))
+                                .monospacedDigit()
+                                .foregroundStyle(.secondary)
+                        }
+                        .fixedSize(horizontal: true, vertical: false)
+                        Text("预览：主页时间轴的开始时间与结束时间").font(.caption).foregroundStyle(.secondary)
+                    }
+                    Button("恢复默认字号") { timelineTimeFontSize = 17 }
+                    Text("调整后立即生效并自动保存。").font(.caption).foregroundStyle(.secondary)
+                }
                 Section("每日可学习时间") {
                     Text("可以为每天添加多段时间。不启用的日期不会分配学习任务。").font(.callout).foregroundStyle(.secondary)
                     ForEach([2,3,4,5,6,7,1], id: \.self) { day in
