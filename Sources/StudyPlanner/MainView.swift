@@ -598,6 +598,9 @@ struct MainView: View {
                         .buttonStyle(SoftButtonStyle(prominent: true))
                 }
 
+                Label("赶进度？直接调整下方「每日加量」，可分别设置多门课。1.5 倍多学 50%，2 倍多学一倍；选择后自动重排。", systemImage: "bolt.fill")
+                    .font(.callout).foregroundStyle(.secondary)
+
                 ForEach(store.courses) { course in
                     CourseListRow(
                         course: course,
@@ -605,6 +608,8 @@ struct MainView: View {
                         minimumBlock: course.minimumBlockMinutes == 0
                             ? store.state.settings.minimumScheduleUnit
                             : course.minimumBlockMinutes,
+                        dailyMinutes: store.result.demands[course.id]?.averageMinutesPerDay,
+                        setDailyWeight: { store.setDailyWeight($0, for: course.id) },
                         edit: { sheet = .course(course) },
                         reorder: store.state.lessonWorkItems(for: course).count > 1
                             ? { sheet = .lessonOrder(course) } : nil
@@ -1352,6 +1357,8 @@ private struct CourseListRow: View {
     var course: Course
     var completed: Int
     var minimumBlock: Int
+    var dailyMinutes: Double?
+    var setDailyWeight: (Double) -> Void
     var edit: () -> Void
     var reorder: (() -> Void)?
     @State private var hovering = false
@@ -1377,6 +1384,15 @@ private struct CourseListRow: View {
                 Text("已学 \(hours(completed)) / 共 \(hours(course.totalMinutes)) · \(course.type == .lessonBasedRecorded && (course.mergedSources != nil || course.webCourse != nil || course.manualLessons != nil) ? "按课节排程" : "最小时间块 \(minimumBlock) 分钟")")
                     .font(.caption)
                     .foregroundStyle(.tertiary)
+                DailyStudyWeightPicker(weight: Binding(get: { course.dailyWeight }, set: { setDailyWeight($0) }))
+                    .frame(maxWidth: 360)
+                    .padding(.top, 6)
+                if let dailyMinutes, dailyMinutes > 0 {
+                    Text("参考每日 \(Int(ceil(dailyMinutes * course.dailyWeight))) 分钟 · 优先安排到前面的日期")
+                        .font(.caption).foregroundStyle(course.dailyWeight > 1 ? Color.orange : Color.secondary)
+                }
+                Text(course.autoScheduleEnabled ? "实际安排受可用时间与完整课节限制。" : "恢复自动排程后生效。")
+                    .font(.caption2).foregroundStyle(.secondary)
             }
 
             Spacer(minLength: 16)

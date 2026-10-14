@@ -109,6 +109,9 @@ struct CourseEditor: View {
                 Section("排程规则") {
                     DatePicker("开始日期", selection: $course.startDate, displayedComponents: .date)
                     DatePicker("截止日期（含当天）", selection: $course.deadline, displayedComponents: .date)
+                    DailyStudyWeightPicker(weight: Binding(get: { course.dailyWeight }, set: { course.dailyStudyWeight = $0 }))
+                    Text("1.5 倍多学 50%，2 倍多学一倍，3 倍多学两倍；优先安排到前面的日期，受可用时间与完整课节限制。")
+                        .font(.caption).foregroundStyle(.secondary)
                     Toggle("记录原始发布时间", isOn: Binding(get: { course.publishedDate != nil }, set: { course.publishedDate = $0 ? course.startDate : nil }))
                     if course.publishedDate != nil { DatePicker("发布时间", selection: Binding(get: { course.publishedDate ?? Date() }, set: { course.publishedDate = $0 }), displayedComponents: .date) }
                     Picker("优先级", selection: $course.priority) { Text("高").tag(3); Text("中").tag(2); Text("低").tag(1) }

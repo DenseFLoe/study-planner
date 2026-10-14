@@ -27,6 +27,12 @@ public struct Course: Identifiable, Codable, Equatable, Sendable {
     public var deadline: Date
     public var publishedDate: Date?
     public var priority: Int = 2
+    /// Optional so older saved courses keep their standard daily pace.
+    public var dailyStudyWeight: Double?
+    public var dailyWeight: Double {
+        guard let value = dailyStudyWeight, value.isFinite else { return 1 }
+        return min(3, max(1, value))
+    }
     public var color: String = "blue"
     /// Zero follows the global default. The final remainder may be shorter.
     public var minimumBlockMinutes: Int = 60

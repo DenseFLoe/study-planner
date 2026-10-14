@@ -95,6 +95,12 @@ final class PlannerStore {
     }
     func waitForOrderSave() async -> Bool { await orderSaveTask?.value ?? true }
     func replan() { change { _ in } }
+    func setDailyWeight(_ weight: Double, for courseID: UUID) {
+        change { state in
+            guard let index = state.courses.firstIndex(where: { $0.id == courseID }) else { return }
+            state.courses[index].dailyStudyWeight = weight
+        }
+    }
     func saveActualStudyStart(_ time: Date) -> Bool {
         let calendar = Calendar.current
         let minute = calendar.component(.hour, from: time) * 60 + calendar.component(.minute, from: time)

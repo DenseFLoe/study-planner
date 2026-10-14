@@ -172,6 +172,16 @@ public struct ScheduleEngine: Sendable {
             let count = days.filter { eligible(course, $0.date) && $0.free.contains(where: { shortest > 0 && $0.minutes >= shortest }) }.count
             demands[course.id] = .init(remainingMinutes: remaining, learnableDays: count)
         }
+        let hasDailyBoost = courses.contains { $0.dailyWeight > 1 }
+        // A boost concentrates learning into earlier learnable days. These are soft
+        // targets: the original deadline remains available when capacity is tight.
+        var preferredDays: [UUID: Set<Date>] = [:]
+        for course in courses where course.dailyWeight > 1 {
+            let shortest = pending[course.id]?.map(\.minutes).min() ?? 1
+            let learnable = days.filter { eligible(course, $0.date) && $0.free.contains { $0.minutes >= shortest } }
+            let count = max(1, Int(ceil(Double(learnable.count) / course.dailyWeight)))
+            preferredDays[course.id] = Set(learnable.prefix(count).map(\.date))
+        }
         let ordered = courses.sorted {
             let a = calendar.startOfDay(for: $0.deadline), b = calendar.startOfDay(for: $1.deadline)
             if a != b { return a < b }
@@ -285,7 +295,7 @@ public struct ScheduleEngine: Sendable {
         // Rebuild the feasible allocation day by day. Unlike merely shuffling one interval,
         // this gives equal-priority courses a share of days that were filled by a single course.
         // Keep the original allocation unless every booked block fits in the new arrangement.
-        if Set(courses.map(\.priority)).count < courses.count {
+        if hasDailyBoost || Set(courses.map(\.priority)).count < courses.count {
             var queues: [UUID: [ScheduledTask]] = [:]
             var positions: [UUID: Int] = [:], remaining: [UUID: Int] = [:], booked: [UUID: Int] = [:]
             var futureCapacity: [UUID: [Int]] = [:]
@@ -325,6 +335,16 @@ public struct ScheduleEngine: Sendable {
                             if urgentA != urgentB { return urgentA }
                             if urgentA && calendar.startOfDay(for: a.deadline) != calendar.startOfDay(for: b.deadline) {
                                 return a.deadline < b.deadline
+                            }
+                            if hasDailyBoost {
+                                // Compare progress toward each course's daily target,
+                                // including half the next block so a boost also matters
+                                // when only one whole lesson fits into a day.
+                                let targetA = max(1, demands[a.id]!.averageMinutesPerDay * a.dailyWeight)
+                                let targetB = max(1, demands[b.id]!.averageMinutesPerDay * b.dailyWeight)
+                                let loadA = (Double(daily[a.id, default: 0]) + Double(queues[a.id]![positions[a.id]!].durationMinutes) / 2) / targetA
+                                let loadB = (Double(daily[b.id, default: 0]) + Double(queues[b.id]![positions[b.id]!].durationMinutes) / 2) / targetB
+                                if loadA != loadB { return loadA < loadB }
                             }
                             if a.priority != b.priority { return a.priority > b.priority }
                             let loadA = daily[a.id, default: 0], loadB = daily[b.id, default: 0]
@@ -373,6 +393,7 @@ public struct ScheduleEngine: Sendable {
                 let size = task.durationMinutes
                 let candidates = days.indices.filter {
                     $0 != source && eligible(course, days[$0].date) &&
+                    (preferredDays[course.id]?.contains(days[$0].date) ?? true) &&
                     loads[course.id]![source] - loads[course.id]![$0] > size &&
                     days[$0].free.contains { $0.minutes >= size }
                 }
