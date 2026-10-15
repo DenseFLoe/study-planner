@@ -450,10 +450,10 @@ final class ScheduleEngineTests: XCTestCase {
         XCTAssertEqual(r.tasks.count, 4)
         for pair in zip(r.tasks, r.tasks.dropFirst()) { XCTAssertNotEqual(pair.0.courseID, pair.1.courseID) }
         assertValid(r, s)
-        // A lower-priority course does not interrupt an equal-deadline high-priority block.
+        // Ordinary priority must still leave room for the other available course.
         s.courses[0].priority = 3
         let prioritized = result(s)
-        XCTAssertEqual(prioritized.tasks.prefix(2).map(\.courseID), [s.courses[0].id, s.courses[0].id])
+        XCTAssertEqual(Set(prioritized.tasks.prefix(2).map(\.courseID)).count, 2)
     }
 
     func testMixedVariableLessonsKeepSequenceAndTotal() {
@@ -570,12 +570,10 @@ final class ScheduleEngineTests: XCTestCase {
             let firstDay = r.tasks.filter { cal.isDate($0.start, inSameDayAs: date(14)) }
             if weight == 3 {
                 XCTAssertEqual(firstDay.map(\.courseID), [s.courses[0].id])
-                XCTAssertFalse(r.diagnostics.contains { $0.contains("2026-9-14 未满足") })
-                // Finished 3x work must not exempt tomorrow's two ordinary courses.
-                XCTAssertTrue(r.diagnostics.contains { $0.contains("2026-9-15 未满足") })
+                XCTAssertEqual(Set(r.tasks.filter { cal.isDate($0.start, inSameDayAs: date(15)) }.map(\.courseID)).count, 2)
             } else {
                 XCTAssertEqual(Set(firstDay.map(\.courseID)).count, 2)
-                XCTAssertTrue(r.diagnostics.contains { $0.contains("2026-9-14 未满足") })
+                XCTAssertTrue(r.diagnostics.isEmpty)
             }
             assertValid(r, s)
         }
@@ -590,15 +588,72 @@ final class ScheduleEngineTests: XCTestCase {
         assertValid(r, s)
     }
 
-    func testImpossibleDiversityReportsProblemWithoutInventingWork() {
+    func testLimitedDiversityIsNormalWithoutInventingWork() {
         for courseCount in [1, 2, 3] {
             var s = diversityState(days: 1, minutes: Array(repeating: 60, count: courseCount))
             s.settings.availability = [.init(weekday: 2, startMinute: 480, endMinute: 615)]
             let r = result(s)
             XCTAssertEqual(r.tasks.count, min(2, courseCount))
-            XCTAssertTrue(r.diagnostics.contains { $0.contains("未满足每日三门课程") })
+            XCTAssertTrue(r.diagnostics.isEmpty)
+            XCTAssertEqual(r.risks.first?.unscheduledMinutes ?? 0, courseCount == 3 ? 60 : 0)
             assertValid(r, s)
         }
+    }
+
+    func testFixedEventsCanLeaveOnlyOneCourseWithoutDiversityWarning() {
+        var s = diversityState(days: 3, minutes: [180, 180, 180])
+        s.settings.availability = (1...7).map { .init(weekday: $0, startMinute: 480, endMinute: 960) }
+        s.fixedEvents = [
+            .init(title: "上午固定课", startMinute: 480, endMinute: 600, startDate: date(14), endDate: date(14)),
+            .init(title: "下午固定课", startMinute: 660, endMinute: 960, startDate: date(14), endDate: date(14))]
+        let r = result(s)
+        XCTAssertEqual(r.tasks.filter { cal.isDate($0.start, inSameDayAs: date(14)) }.count, 1)
+        XCTAssertTrue(r.diagnostics.isEmpty)
+        XCTAssertTrue(r.risks.isEmpty)
+        XCTAssertEqual(minutes(r.tasks), 540)
+        for day in 15...16 {
+            XCTAssertEqual(Set(r.tasks.filter { cal.isDate($0.start, inSameDayAs: date(day)) }.map(\.courseID)).count, 3)
+        }
+        assertValid(r, s)
+    }
+
+    func testDoNotReserveThreeSubjectsForDaysThatOnlyFitOne() {
+        var s = diversityState(days: 3, minutes: [120, 120, 120])
+        s.settings.availability = [.init(weekday: 2, startMinute: 480, endMinute: 1080),
+                                   .init(weekday: 3, startMinute: 480, endMinute: 540),
+                                   .init(weekday: 4, startMinute: 480, endMinute: 540)]
+        let r = result(s)
+        XCTAssertTrue(r.risks.isEmpty)
+        XCTAssertTrue(r.diagnostics.isEmpty)
+        XCTAssertEqual(minutes(r.tasks), 360)
+        assertValid(r, s)
+    }
+
+    func testFutureDiversityDoesNotLeaveTodaysDeadlineWorkUnscheduled() {
+        var s = diversityState(days: 4, minutes: [120, 120, 120, 120])
+        s.courses[0].deadline = date(14)
+        let r = result(s)
+        XCTAssertEqual(minutes(r.tasks.filter { $0.courseID == s.courses[0].id }), 120)
+        XCTAssertTrue(r.risks.isEmpty)
+        XCTAssertTrue(r.diagnostics.isEmpty)
+        assertValid(r, s)
+    }
+
+    func testTwoWholeLessonCoursesMixDespiteDifferentPriorities() {
+        var s = diversityState(days: 2, minutes: [240, 240])
+        s.settings.availability = (1...7).map { .init(weekday: $0, startMinute: 480, endMinute: 765) }
+        for i in s.courses.indices {
+            s.courses[i].type = .lessonBasedRecorded
+            s.courses[i].manualLessons = (0..<4).map { .init(id: "\($0)", name: "课\($0)", durationMinutes: 60) }
+        }
+        let r = result(s)
+        for day in 14...15 {
+            XCTAssertEqual(Set(r.tasks.filter { cal.isDate($0.start, inSameDayAs: date(day)) }.map(\.courseID)).count, 2)
+        }
+        XCTAssertTrue(r.diagnostics.isEmpty)
+        XCTAssertTrue(r.risks.isEmpty)
+        XCTAssertEqual(minutes(r.tasks), 480)
+        assertValid(r, s)
     }
 
     func testReplanReportsCapacityForWholeUnconfirmedActiveWork() {

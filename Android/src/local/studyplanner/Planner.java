@@ -439,8 +439,8 @@ public final class Planner {
         return Double.isFinite(value)?Math.min(3,Math.max(1,value)):1;
     }
     /**
-     * Diversity is a daily constraint, ahead of priority and sub-3x boosts: three different
-     * unfinished courses share a learnable day whenever their blocks and breaks fit.
+     * Prefer daily diversity when whole blocks fit, ahead of priority and sub-3x boosts: three
+     * different unfinished courses share a learnable day whenever their blocks and breaks fit.
      */
     static final class DiversityScheduler {
         final Map<String,List<Work>> allWork;final List<Day> days;final Map<String,Double> demand;final boolean boost;
@@ -507,42 +507,38 @@ public final class Planner {
                 Map<String,Integer> daily=new HashMap<>();
                 initial.sort(Comparator.comparingDouble(booked->booked.optDouble("start")));
                 for(JSONObject booked:initial){book(booked);daily.merge(booked.getString("courseID"),booked.getInt("durationMinutes"),Integer::sum);}
-                // Preserve one whole block for each later learnable day where three unfinished
-                // courses can still participate, instead of leaving single-course days at the end.
+                // Reserve variety only for future days that can actually fit three distinct next
+                // lessons AND their breaks after fixed events. Counting individually fitting
+                // courses would reserve work for impossible days.
+                List<Integer> futureDiverse=new ArrayList<>();
+                for(int future=0;future<original.size();future++){
+                    if(future<=index)continue;
+                    List<JSONObject> participants=new ArrayList<>();
+                    for(JSONObject course:ordered)if(eligible(course,original.get(future).d)&&next(course)!=null)participants.add(course);
+                    if(seed(participants,original.get(future).free,3)!=null)futureDiverse.add(future);
+                }
                 Map<String,Integer> reserves=new HashMap<>();
                 for(JSONObject course:active)if(dailyWeight(course)<3){
                     String id=course.getString("id");List<Work> remaining=allWork.get(id).subList(positions.get(id),allWork.get(id).size());
                     if(remaining.isEmpty())continue;
                     int shortest=Integer.MAX_VALUE;for(Work work:remaining)shortest=Math.min(shortest,work.minutes);
                     int count=0;
-                    for(int future=0;future<original.size();future++){
-                        if(future<=index||!eligible(course,original.get(future).d))continue;
-                        boolean fits=false;for(Span span:original.get(future).free)if(span.minutes()>=shortest)fits=true;if(!fits)continue;
-                        int participants=0;for(JSONObject other:ordered)if(eligible(other,original.get(future).d)&&next(other)!=null)participants++;
-                        if(participants>=3)count++;
+                    for(int future:futureDiverse){
+                        if(!eligible(course,original.get(future).d))continue;
+                        for(Span span:original.get(future).free)if(span.minutes()>=shortest){count++;break;}
                     }
                     reserves.put(id,count);
                 }
-                int futureDiverseDays=0;
-                for(int future=0;future<original.size();future++){
-                    if(future<=index)continue;
-                    int participants=0;
-                    for(JSONObject course:ordered){
-                        if(!eligible(course,original.get(future).d))continue;
-                        Work work=next(course);if(work==null)continue;
-                        boolean fits=false;for(Span span:original.get(future).free)if(span.minutes()>=work.minutes)fits=true;
-                        if(fits)participants++;
-                    }
-                    if(participants>=3)futureDiverseDays++;
-                }
                 while(true){
                     int remainingBlocks=0;for(JSONObject course:ordered)remainingBlocks+=allWork.get(course.getString("id")).size()-positions.get(course.getString("id"));
-                    // With four or more courses, avoid using tomorrow's third subject as an
-                    // unnecessary fourth subject today.
-                    if(triple==null&&daily.size()>=3&&remainingBlocks<=3*futureDiverseDays)break;
+                    // Keep future variety when feasible, but do not strand work due today or
+                    // ration a day that can only fit one or two subjects.
+                    boolean preserveFuture=triple==null&&initial.size()>=3&&remainingBlocks<=3*futureDiverse.size();
                     List<JSONObject> candidates=new ArrayList<>();
                     for(JSONObject course:active){
                         if(next(course)==null||placement(course,days.get(index).free)==null)continue;
+                        if(day(course.optDouble("deadline")).equals(date)||(triple==null&&initial.size()<3)){candidates.add(course);continue;}
+                        if(preserveFuture)continue;
                         if(!daily.containsKey(course.getString("id"))||allWork.get(course.getString("id")).size()-positions.get(course.getString("id"))>reserves.getOrDefault(course.getString("id"),0))candidates.add(course);
                     }
                     if(candidates.isEmpty())break;
@@ -615,9 +611,9 @@ public final class Planner {
                 }
             }if(!repaired)break;
         }int left=0;for(Work w:work)left+=w.minutes;missing.put(cid,left);}
-        // Diversity is a daily constraint, ahead of priority and sub-3x boosts. Rebuild from ALL
-        // unfinished work, including blocks the deadline-first pass could not book; otherwise a
-        // monopolizing course can hide the other courses.
+        // Prefer daily diversity when whole blocks fit, ahead of priority and sub-3x boosts. Rebuild
+        // from ALL unfinished work, including blocks the deadline-first pass could not book;
+        // otherwise a monopolizing course can hide the other courses.
         if(courses.size()>=3){
             tasks=new ArrayList<>();
             days=copyDays(original);
@@ -627,8 +623,7 @@ public final class Planner {
             for(JSONObject c:courses){String id=c.getString("id");List<Work> work=allWork.get(id);int left=0;for(int i=diversity.positions.get(id);i<work.size();i++)left+=work.get(i).minutes;missing.put(id,left);}
         }
         // Try a day-by-day rotation, retaining the feasible allocation if any booked block fails to fit.
-        Set<Integer> priorities=new HashSet<>();for(JSONObject c:courses)priorities.add(c.optInt("priority"));
-        if(courses.size()<3&&(hasDailyBoost||priorities.size()<courses.size())){
+        if(courses.size()<3&&(hasDailyBoost||courses.size()==2)){
             Map<String,List<JSONObject>> queues=new HashMap<>();Map<String,Integer> positions=new HashMap<>(),left=new HashMap<>(),booked=new HashMap<>();Map<String,int[]> future=new HashMap<>();
             for(JSONObject c:courses){
                 String id=c.getString("id");Map<String,Integer> ranks=new HashMap<>();List<Work> lessons=lessonWork(s,c);for(int i=0;i<lessons.size();i++)ranks.put(lessons.get(i).lessonID,i);
@@ -646,6 +641,10 @@ public final class Planner {
                     candidates.sort((a,b)->{
                         String ai=a.optString("id"),bi=b.optString("id");boolean ua=left.get(ai)>future.get(ai)[index+1],ub=left.get(bi)>future.get(bi)[index+1];if(ua!=ub)return ua?-1:1;
                         int v=ua?day(a.optDouble("deadline")).compareTo(day(b.optDouble("deadline"))):0;if(v!=0)return v;
+                        // Even with only two courses, ordinary priority must not monopolize a
+                        // day when the other course can also fit.
+                        boolean tripleDay=false;for(JSONObject other:courses)if(dailyWeight(other)==3&&daily.containsKey(other.optString("id"))){tripleDay=true;break;}
+                        if(!tripleDay&&dailyWeight(a)<3&&dailyWeight(b)<3&&daily.containsKey(ai)!=daily.containsKey(bi))return daily.containsKey(ai)?1:-1;
                         if(hasDailyBoost){
                             double targetA=Math.max(1,demand.get(ai)*dailyWeight(a)),targetB=Math.max(1,demand.get(bi)*dailyWeight(b));
                             double loadA=(daily.getOrDefault(ai,0)+queues.get(ai).get(positions.get(ai)).optInt("durationMinutes")/2.0)/targetA;
@@ -694,19 +693,6 @@ public final class Planner {
             List<String> confirmed=new ArrayList<>();boolean collision=false;for(JSONObject old:list(s.getJSONArray("tasks")))if(!pending(old)&&old.getString("courseID").equals(t.getString("courseID"))){confirmed.add(old.getString("id"));if(old.getString("id").equals(stable))collision=true;}Collections.sort(confirmed);if(collision)stable=stableID(base+"|confirmed|"+String.join(",",confirmed));
             for(JSONObject old:list(s.getJSONArray("tasks")))if(pending(old)&&old.getString("courseID").equals(t.getString("courseID"))&&old.getDouble("start")==t.getDouble("start")&&old.getInt("durationMinutes")==t.getInt("durationMinutes")&&old.optString("lessonID").equals(t.optString("lessonID"))){stable=old.getString("id");break;}
             t.put("id",stable);
-        }
-        // Daily diversity is a hard rule for three or more courses: report unmet daily diversity when
-        // course counts or fitting whole blocks are insufficient; never invent extra work.
-        for(Day planDay:original)if(!planDay.free.isEmpty()){
-            Set<String> owners=new HashSet<>();
-            for(JSONObject t:packed)if(day(t.getDouble("start")).equals(planDay.d))owners.add(t.getString("courseID"));
-            boolean unfinished=false;
-            for(JSONObject c:courses)if(eligible(c,planDay.d)){
-                int planned=0;for(JSONObject t:packed)if(t.getString("courseID").equals(c.getString("id"))&&t.getDouble("start")<at(planDay.d,0))planned+=t.getInt("durationMinutes");
-                if(planned<required.getOrDefault(c.getString("id"),0)){unfinished=true;break;}
-            }
-            boolean exempt=false;for(JSONObject c:courses)if(owners.contains(c.getString("id"))&&dailyWeight(c)==3){exempt=true;break;}
-            if(unfinished&&owners.size()<3&&!exempt)warnings.add(planDay.d.getYear()+"-"+planDay.d.getMonthValue()+"-"+planDay.d.getDayOfMonth()+" 未满足每日三门课程：仅排入 "+owners.size()+" 门；请检查未完成课程数量、课程日期及可容纳整节课和休息的时段。");
         }
         JSONArray risks=new JSONArray();Set<LocalDate> cutoffs=new TreeSet<>();for(JSONObject c:courses)cutoffs.add(day(c.getDouble("deadline")));for(LocalDate cutoff:cutoffs){List<JSONObject> group=new ArrayList<>();JSONArray names=new JSONArray();int requiredMinutes=0,absent=0,capacity=0;for(JSONObject c:courses)if(!day(c.getDouble("deadline")).isAfter(cutoff)){group.add(c);requiredMinutes+=required.get(c.getString("id"));absent+=missing.get(c.getString("id"));if(missing.get(c.getString("id"))>0)names.put(c.getString("name"));}if(absent==0)continue;for(Day d:original)if(!d.d.isAfter(cutoff)){boolean learnable=false;for(JSONObject c:group)if(eligible(c,d.d))learnable=true;if(learnable)for(Span span:d.free)capacity+=span.minutes();}risks.put(new JSONObject().put("deadline",at(cutoff,0)).put("requiredMinutes",requiredMinutes).put("availableMinutes",capacity).put("unscheduledMinutes",absent).put("courseNames",names));}s.put("androidRisks",risks);
         history.addAll(packed);history.sort(Comparator.comparingDouble(t->t.optDouble("start")));s.put("tasks",array(history));s.put("androidWarnings",new JSONArray(warnings));return warnings;
