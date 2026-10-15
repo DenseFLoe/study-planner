@@ -475,6 +475,132 @@ final class ScheduleEngineTests: XCTestCase {
         assertValid(r, s)
     }
 
+    func diversityState(days: Int = 3, minutes: [Int] = [600, 180, 180], weight: Double = 1) -> PlannerState {
+        var s = state(deadline: 13 + days)
+        s.courses = minutes.enumerated().map { index, amount in
+            var course = Course(name: "课程\(index)", totalMinutes: amount, startDate: date(14),
+                                deadline: date(13 + days), minimumBlockMinutes: 60)
+            course.priority = 3 - index
+            return course
+        }
+        s.courses[0].dailyStudyWeight = weight
+        return s
+    }
+
+    func testThreeCoursesEveryDayRegardlessOfPriorityOrSubTripleBoost() {
+        for weight in [1.0, 1.5, 2.0, 2.99] {
+            for whole in [false, true] {
+                var s = diversityState(weight: weight)
+                if whole {
+                    for i in s.courses.indices {
+                        s.courses[i].type = .lessonBasedRecorded
+                        s.courses[i].manualLessons = (0..<(s.courses[i].totalMinutes / 60)).map {
+                            .init(id: "lesson\($0)", name: "第\($0)节", durationMinutes: 60)
+                        }
+                        s.courses[i].lessonOrder = s.courses[i].manualLessons!.map(\.id).reversed()
+                    }
+                }
+                let r = result(s)
+                XCTAssertTrue(r.risks.isEmpty)
+                XCTAssertTrue(r.diagnostics.isEmpty)
+                XCTAssertEqual(minutes(r.tasks), 960)
+                for day in 14...16 {
+                    XCTAssertEqual(Set(r.tasks.filter { cal.isDate($0.start, inSameDayAs: date(day)) }.map(\.courseID)).count, 3)
+                }
+                if whole {
+                    for course in s.courses {
+                        XCTAssertEqual(r.tasks.filter { $0.courseID == course.id }.map { $0.lessonID! }, course.lessonOrder!)
+                    }
+                }
+                XCTAssertEqual(r.tasks, result(s).tasks)
+                assertValid(r, s)
+            }
+        }
+    }
+
+    func testFourthSubjectIsReservedForLaterDays() {
+        var s = diversityState(days: 4, minutes: [240, 240, 120, 120])
+        s.courses[3].priority = 0
+        let r = result(s)
+        XCTAssertTrue(r.risks.isEmpty)
+        XCTAssertTrue(r.diagnostics.isEmpty)
+        for day in 14...17 {
+            XCTAssertEqual(Set(r.tasks.filter { cal.isDate($0.start, inSameDayAs: date(day)) }.map(\.courseID)).count, 3)
+        }
+        XCTAssertEqual(minutes(r.tasks), 720)
+        assertValid(r, s)
+    }
+
+    func testDiversitySearchFitsLongLessonAndSeparateWindows() {
+        var s = diversityState(days: 1, minutes: [30, 120, 30])
+        s.courses[0].minimumBlockMinutes = 30
+        s.courses[1].minimumBlockMinutes = 120
+        s.courses[2].minimumBlockMinutes = 30
+        // Trying the short, earlier-deadline course first must not consume the long window.
+        s.courses[0].deadline = date(14)
+        s.courses[1].deadline = date(15)
+        s.courses[2].deadline = date(15)
+        s.settings.availability = [.init(weekday: 2, startMinute: 480, endMinute: 600),
+                                   .init(weekday: 2, startMinute: 660, endMinute: 690),
+                                   .init(weekday: 2, startMinute: 750, endMinute: 780)]
+        let r = result(s)
+        XCTAssertEqual(Set(r.tasks.map(\.courseID)).count, 3)
+        XCTAssertEqual(r.tasks.first?.courseID, s.courses[1].id)
+        XCTAssertTrue(r.risks.isEmpty)
+        XCTAssertTrue(r.diagnostics.isEmpty)
+        assertValid(r, s)
+    }
+
+    func testDiversityTakesPrecedenceOverUrgencyAndIncludesPreviouslyUnbookedCourses() {
+        var s = diversityState(days: 1, minutes: [600, 60, 60])
+        s.courses[1].deadline = date(15)
+        s.courses[2].deadline = date(15)
+        let r = result(s)
+        XCTAssertEqual(Set(r.tasks.filter { cal.isDate($0.start, inSameDayAs: date(14)) }.map(\.courseID)).count, 3)
+        XCTAssertGreaterThan(r.risks.first?.unscheduledMinutes ?? 0, 0)
+        assertValid(r, s)
+    }
+
+    func testTripleExceptionRequiresActualCourseOnThatDay() {
+        for weight in [2.99, 3.0] {
+            var s = diversityState(days: 2, minutes: [480, 60, 60], weight: weight)
+            s.courses[0].minimumBlockMinutes = 480
+            s.settings.availability = (1...7).map { .init(weekday: $0, startMinute: 480, endMinute: 960) }
+            let r = result(s)
+            let firstDay = r.tasks.filter { cal.isDate($0.start, inSameDayAs: date(14)) }
+            if weight == 3 {
+                XCTAssertEqual(firstDay.map(\.courseID), [s.courses[0].id])
+                XCTAssertFalse(r.diagnostics.contains { $0.contains("2026-9-14 未满足") })
+                // Finished 3x work must not exempt tomorrow's two ordinary courses.
+                XCTAssertTrue(r.diagnostics.contains { $0.contains("2026-9-15 未满足") })
+            } else {
+                XCTAssertEqual(Set(firstDay.map(\.courseID)).count, 2)
+                XCTAssertTrue(r.diagnostics.contains { $0.contains("2026-9-14 未满足") })
+            }
+            assertValid(r, s)
+        }
+        var s = diversityState()
+        var future = Course(name: "未来三倍", totalMinutes: 60, startDate: date(17), deadline: date(17))
+        future.dailyStudyWeight = 3
+        s.courses.append(future)
+        let r = result(s)
+        for day in 14...16 {
+            XCTAssertEqual(Set(r.tasks.filter { cal.isDate($0.start, inSameDayAs: date(day)) }.map(\.courseID)).count, 3)
+        }
+        assertValid(r, s)
+    }
+
+    func testImpossibleDiversityReportsProblemWithoutInventingWork() {
+        for courseCount in [1, 2, 3] {
+            var s = diversityState(days: 1, minutes: Array(repeating: 60, count: courseCount))
+            s.settings.availability = [.init(weekday: 2, startMinute: 480, endMinute: 615)]
+            let r = result(s)
+            XCTAssertEqual(r.tasks.count, min(2, courseCount))
+            XCTAssertTrue(r.diagnostics.contains { $0.contains("未满足每日三门课程") })
+            assertValid(r, s)
+        }
+    }
+
     func testReplanReportsCapacityForWholeUnconfirmedActiveWork() {
         var s = state(hours: 2, deadline: 15)
         s.courses[0].totalMinutes = 150

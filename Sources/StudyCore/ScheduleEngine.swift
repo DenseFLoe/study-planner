@@ -172,6 +172,7 @@ public struct ScheduleEngine: Sendable {
             let count = days.filter { eligible(course, $0.date) && $0.free.contains(where: { shortest > 0 && $0.minutes >= shortest }) }.count
             demands[course.id] = .init(remainingMinutes: remaining, learnableDays: count)
         }
+        let allWork = pending
         let hasDailyBoost = courses.contains { $0.dailyWeight > 1 }
         // A boost concentrates learning into earlier learnable days. These are soft
         // targets: the original deadline remains available when capacity is tight.
@@ -292,10 +293,121 @@ public struct ScheduleEngine: Sendable {
             }
             missing[course.id] = pending[course.id]!.reduce(0) { $0 + $1.minutes }
         }
+        // Diversity is a daily constraint, ahead of priority and sub-3x boosts.
+        // Rebuild from ALL unfinished work, including blocks the deadline-first pass
+        // could not book; otherwise a monopolizing course can hide the other courses.
+        if courses.count >= 3 {
+            tasks = []
+            days = originalDays
+            var positions = Dictionary(uniqueKeysWithValues: courses.map { ($0.id, 0) })
+            var lastEnds: [UUID: Date] = [:]
+            func nextWork(_ course: Course) -> Work? {
+                let position = positions[course.id]!
+                return position < allWork[course.id]!.count ? allWork[course.id]![position] : nil
+            }
+            func placement(_ course: Course, in free: [Span]) -> ScheduledTask? {
+                guard let work = nextWork(course) else { return nil }
+                let earliest = lastEnds[course.id]?.addingTimeInterval(breakSeconds) ?? .distantPast
+                guard let span = free.first(where: {
+                    $0.end.timeIntervalSince(max($0.start, earliest)) >= Double(work.minutes * 60)
+                }) else { return nil }
+                return .init(courseID: course.id, start: max(span.start, earliest), durationMinutes: work.minutes,
+                             lessonID: work.lessonID, lessonName: work.lessonName)
+            }
+            // Try different course orders: a short lesson must not consume the only
+            // window that can hold a long lesson. At most three distinct blocks deep.
+            func seed(_ candidates: [Course], free: [Span], count: Int) -> [ScheduledTask]? {
+                if count == 0 { return [] }
+                guard candidates.count >= count else { return nil }
+                for course in candidates {
+                    guard let task = placement(course, in: free) else { continue }
+                    let rest = subtract([buffered(start: task.start, end: task.end)], from: free)
+                    if let tail = seed(candidates.filter { $0.id != course.id }, free: rest, count: count - 1) {
+                        return [task] + tail
+                    }
+                }
+                return nil
+            }
+            func book(_ task: ScheduledTask) {
+                tasks.append(task)
+                positions[task.courseID]! += 1
+                lastEnds[task.courseID] = task.end
+                let occupied = buffered(start: task.start, end: task.end)
+                for index in days.indices { days[index].free = subtract([occupied], from: days[index].free) }
+            }
+            for index in days.indices {
+                let active = ordered.filter { eligible($0, days[index].date) && nextWork($0) != nil }
+                // The exception is local to a day actually containing a 3x course.
+                // A future, finished, paused or non-fitting 3x course grants no exemption.
+                let triple = active.first { $0.dailyWeight == 3 && placement($0, in: days[index].free) != nil }
+                let initial: [ScheduledTask]
+                if let triple, let task = placement(triple, in: days[index].free) {
+                    initial = [task]
+                } else {
+                    initial = seed(active, free: days[index].free, count: 3)
+                        ?? seed(active, free: days[index].free, count: 2)
+                        ?? seed(active, free: days[index].free, count: 1) ?? []
+                }
+                var daily: [UUID: Int] = [:]
+                for task in initial.sorted(by: { $0.start < $1.start }) {
+                    book(task); daily[task.courseID, default: 0] += task.durationMinutes
+                }
+                // Preserve one whole block for each later learnable day where three
+                // unfinished courses can still participate, instead of finishing the
+                // smaller courses early and leaving single-course days at the end.
+                var reserves: [UUID: Int] = [:]
+                for course in active where course.dailyWeight < 3 {
+                    let remainingWork = allWork[course.id]!.dropFirst(positions[course.id]!)
+                    guard let shortest = remainingWork.map(\.minutes).min() else { continue }
+                    reserves[course.id] = originalDays.indices.filter { future in
+                        future > index && eligible(course, originalDays[future].date)
+                            && originalDays[future].free.contains { $0.minutes >= shortest }
+                            && ordered.filter { eligible($0, originalDays[future].date) && nextWork($0) != nil }.count >= 3
+                    }.count
+                }
+                let futureDiverseDays = originalDays.indices.filter { future in
+                    future > index && ordered.filter { course in
+                        eligible(course, originalDays[future].date) && nextWork(course).map { work in
+                            originalDays[future].free.contains { $0.minutes >= work.minutes }
+                        } == true
+                    }.count >= 3
+                }.count
+                while true {
+                    let remainingBlocks = ordered.reduce(0) { $0 + allWork[$1.id]!.count - positions[$1.id]! }
+                    // With four or more courses, avoid using tomorrow's third subject
+                    // as an unnecessary fourth subject today.
+                    if triple == nil && daily.count >= 3 && remainingBlocks <= 3 * futureDiverseDays { break }
+                    let candidates = active.filter { course in
+                        guard nextWork(course) != nil, placement(course, in: days[index].free) != nil else { return false }
+                        return daily[course.id] == nil || allWork[course.id]!.count - positions[course.id]! > reserves[course.id, default: 0]
+                    }
+                    let selected = candidates.min { a, b in
+                        if daily.count < 3 && triple == nil && (daily[a.id] == nil) != (daily[b.id] == nil) {
+                            return daily[a.id] == nil
+                        }
+                        let urgentA = calendar.startOfDay(for: a.deadline) == days[index].date
+                        let urgentB = calendar.startOfDay(for: b.deadline) == days[index].date
+                        if urgentA != urgentB { return urgentA }
+                        if hasDailyBoost {
+                            let loadA = Double(daily[a.id, default: 0]) / max(1, demands[a.id]!.averageMinutesPerDay * a.dailyWeight)
+                            let loadB = Double(daily[b.id, default: 0]) / max(1, demands[b.id]!.averageMinutesPerDay * b.dailyWeight)
+                            if loadA != loadB { return loadA < loadB }
+                        }
+                        if a.priority != b.priority { return a.priority > b.priority }
+                        return daily[a.id, default: 0] < daily[b.id, default: 0]
+                    }
+                    guard let selected, let task = placement(selected, in: days[index].free) else { break }
+                    book(task); daily[selected.id, default: 0] += task.durationMinutes
+                }
+            }
+            for course in courses {
+                missing[course.id] = allWork[course.id]!.dropFirst(positions[course.id]!).reduce(0) { $0 + $1.minutes }
+            }
+        }
         // Rebuild the feasible allocation day by day. Unlike merely shuffling one interval,
         // this gives equal-priority courses a share of days that were filled by a single course.
         // Keep the original allocation unless every booked block fits in the new arrangement.
-        if hasDailyBoost || Set(courses.map(\.priority)).count < courses.count {
+        if courses.count < 3 && (hasDailyBoost || Set(courses.map(\.priority)).count < courses.count) {
             var queues: [UUID: [ScheduledTask]] = [:]
             var positions: [UUID: Int] = [:], remaining: [UUID: Int] = [:], booked: [UUID: Int] = [:]
             var futureCapacity: [UUID: [Int]] = [:]
@@ -382,7 +494,7 @@ public struct ScheduleEngine: Sendable {
         }
         // Every move strictly decreases that course's sum of squared daily loads, so this terminates.
         // Never take away a booked block to balance another course: feasibility is preserved.
-        var changed = true
+        var changed = courses.count < 3
         while changed {
             changed = false
             for t in tasks.indices {
@@ -468,6 +580,18 @@ public struct ScheduleEngine: Sendable {
                 ?? generated
         }
         for i in tasks.indices { tasks[i].status = calendar.isDate(tasks[i].start, inSameDayAs: today) ? .planned : .future }
+        for day in originalDays where !day.free.isEmpty {
+            let daily = tasks.filter { calendar.isDate($0.start, inSameDayAs: day.date) }
+            let owners = Set(daily.map(\.courseID))
+            let unfinished = courses.contains { course in
+                eligible(course, day.date) && tasks.filter { $0.courseID == course.id && $0.start < day.date }
+                    .reduce(0, { $0 + $1.durationMinutes }) < required[course.id, default: 0]
+            }
+            if unfinished && owners.count < 3 && !courses.contains(where: { owners.contains($0.id) && $0.dailyWeight == 3 }) {
+                let parts = calendar.dateComponents([.year, .month, .day], from: day.date)
+                diagnostics.append("\(parts.year!)-\(parts.month!)-\(parts.day!) 未满足每日三门课程：仅排入 \(owners.count) 门；请检查未完成课程数量、课程日期及可容纳整节课和休息的时段。")
+            }
+        }
         var risks: [ScheduleRisk] = []
         for cutoff in Set(courses.map { calendar.startOfDay(for: $0.deadline) }).sorted() {
             let group = courses.filter { calendar.startOfDay(for: $0.deadline) <= cutoff }

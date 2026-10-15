@@ -10,6 +10,112 @@ public class PlannerTests {
   for(int i=0;i<tasks.size();i++){JSONObject t=tasks.get(i),c=Planner.course(s,t.getString("courseID"));LocalDate day=Planner.day(t.getDouble("start"));check(Planner.eligible(c,day),"Outside course dates");if(i>0)check(Planner.end(tasks.get(i-1))+15*60<=t.getDouble("start"),"Tasks need a 15-minute break");for(JSONObject e:Planner.list(s.getJSONArray("fixedEvents")))if(Planner.occurs(e,day))check(t.getDouble("start")>=Planner.at(day,e.getInt("endMinute"))||Planner.end(t)<=Planner.at(day,e.getInt("startMinute")),"Fixed overlap");boolean fits=false;List<Planner.Span> windows=new ArrayList<>();for(JSONObject a:Planner.list(s.getJSONObject("settings").getJSONArray("availability")))if(a.getInt("weekday")==Planner.weekday(day))windows.add(new Planner.Span(Planner.at(day,a.getInt("startMinute")),Planner.at(day,a.getInt("endMinute"))));for(Planner.Span w:Planner.merge(windows))if(t.getDouble("start")>=w.a&&Planner.end(t)<=w.b)fits=true;check(fits,"Outside available windows");}
   for(JSONObject c:Planner.list(s.getJSONArray("courses"))){int planned=0;for(JSONObject t:tasks)if(t.getString("courseID").equals(c.getString("id")))planned+=t.getInt("durationMinutes");for(JSONObject t:Planner.list(s.getJSONArray("tasks")))if(Planner.pending(t)&&t.getDouble("start")<now&&Planner.end(t)>now&&t.getString("courseID").equals(c.getString("id")))planned+=t.getInt("durationMinutes");check(planned<=Planner.remaining(s,c),"Overallocated learning amount");}
  }
+ static JSONObject window(int weekday,int start,int end)throws Exception{return new JSONObject().put("id",Planner.id()).put("weekday",weekday).put("startMinute",start).put("endMinute",end);}
+ static JSONObject diversityState(int days,int[] minutes,double weight)throws Exception{
+  JSONObject s=empty();for(int w=1;w<=7;w++)s.getJSONObject("settings").getJSONArray("availability").put(window(w,480,1080));
+  LocalDate start=LocalDate.of(2026,9,14);
+  for(int i=0;i<minutes.length;i++)s.getJSONArray("courses").put(course("课程"+i,minutes[i],start,start.plusDays(days-1),60).put("priority",3-i));
+  if(minutes.length>0)s.getJSONArray("courses").getJSONObject(0).put("dailyStudyWeight",weight);
+  return s;
+ }
+ static int totalMinutes(JSONObject s)throws Exception{int total=0;for(JSONObject t:Planner.list(s.getJSONArray("tasks")))total+=t.getInt("durationMinutes");return total;}
+ static Set<String> owners(JSONObject s,LocalDate date)throws Exception{Set<String> owners=new HashSet<>();for(JSONObject t:Planner.list(s.getJSONArray("tasks")))if(Planner.day(t.getDouble("start")).equals(date))owners.add(t.getString("courseID"));return owners;}
+ static List<JSONObject> sortedTasks(JSONObject s)throws Exception{List<JSONObject> tasks=Planner.list(s.getJSONArray("tasks"));tasks.sort(Comparator.comparingDouble(t->t.optDouble("start")));return tasks;}
+ static boolean warned(JSONObject s,String text)throws Exception{JSONArray warnings=s.getJSONArray("androidWarnings");for(int i=0;i<warnings.length();i++)if(warnings.getString(i).contains(text))return true;return false;}
+ static void diversityEveryDayRegression()throws Exception{
+  LocalDate start=LocalDate.of(2026,9,14);double now=Planner.at(start,480);
+  for(double weight:new double[]{1,1.5,2,2.99})for(boolean whole:new boolean[]{false,true}){
+   JSONObject s=diversityState(3,new int[]{600,180,180},weight);
+   if(whole)for(JSONObject c:Planner.list(s.getJSONArray("courses"))){
+    int count=c.getInt("totalMinutes")/60;JSONArray lessons=new JSONArray(),order=new JSONArray();
+    for(int i=0;i<count;i++)lessons.put(new JSONObject().put("id","lesson"+i).put("name","第"+i+"节").put("durationMinutes",60));
+    for(int i=count-1;i>=0;i--)order.put("lesson"+i);
+    c.put("type","不定时录播课程").put("manualLessons",lessons).put("lessonOrder",order);
+   }
+   List<String> warnings=Planner.replan(s,now);
+   check(s.getJSONArray("androidRisks").length()==0,"Diversity lost feasible capacity at "+weight);
+   check(warnings.isEmpty(),"Diversity reported a problem at "+weight);
+   check(totalMinutes(s)==960,"Diversity changed the booked amount at "+weight);
+   for(int offset=0;offset<3;offset++)check(owners(s,start.plusDays(offset)).size()==3,"Daily diversity lost a course at "+weight);
+   if(whole)for(JSONObject c:Planner.list(s.getJSONArray("courses"))){
+    List<String> ids=new ArrayList<>();for(JSONObject t:sortedTasks(s))if(t.getString("courseID").equals(c.getString("id")))ids.add(t.optString("lessonID"));
+    List<String> expected=new ArrayList<>();JSONArray order=c.getJSONArray("lessonOrder");for(int i=0;i<order.length();i++)expected.add(order.getString(i));
+    check(ids.equals(expected),"Diversity reordered lessons at "+weight);
+   }
+   String snapshot=s.getJSONArray("tasks").toString();Planner.replan(s,now);check(snapshot.equals(s.getJSONArray("tasks").toString()),"Diversity is not deterministic at "+weight);
+   invariant(s,now);
+  }
+ }
+ static void fourthSubjectReservedRegression()throws Exception{
+  LocalDate start=LocalDate.of(2026,9,14);double now=Planner.at(start,480);
+  JSONObject s=diversityState(4,new int[]{240,240,120,120},1);
+  s.getJSONArray("courses").getJSONObject(3).put("priority",0);
+  List<String> warnings=Planner.replan(s,now);
+  check(s.getJSONArray("androidRisks").length()==0,"Fourth subject lost feasible capacity");
+  check(warnings.isEmpty(),"Fourth subject reported a problem");
+  for(int offset=0;offset<4;offset++)check(owners(s,start.plusDays(offset)).size()==3,"A later day lost its third subject");
+  check(totalMinutes(s)==720,"Reserving the fourth subject changed the booked amount");
+  invariant(s,now);
+ }
+ static void diversityLongBlockRegression()throws Exception{
+  LocalDate start=LocalDate.of(2026,9,14),next=LocalDate.of(2026,9,15);double now=Planner.at(start,480);
+  JSONObject s=diversityState(1,new int[]{30,120,30},1);JSONArray courses=s.getJSONArray("courses");
+  courses.getJSONObject(0).put("minimumBlockMinutes",30).put("deadline",Planner.at(start,0));
+  courses.getJSONObject(1).put("minimumBlockMinutes",120).put("deadline",Planner.at(next,0));
+  courses.getJSONObject(2).put("minimumBlockMinutes",30).put("deadline",Planner.at(next,0));
+  s.getJSONObject("settings").put("availability",new JSONArray().put(window(2,480,600)).put(window(2,660,690)).put(window(2,750,780)));
+  List<String> warnings=Planner.replan(s,now);
+  check(owners(s,start).size()==3,"Short lessons consumed the long window");
+  check(sortedTasks(s).get(0).getString("courseID").equals(courses.getJSONObject(1).getString("id")),"The long lesson lost its own window");
+  check(s.getJSONArray("androidRisks").length()==0,"Long block search lost feasible capacity");
+  check(warnings.isEmpty(),"Long block search reported a problem");
+  invariant(s,now);
+ }
+ static void diversityPrecedenceRegression()throws Exception{
+  LocalDate start=LocalDate.of(2026,9,14),next=LocalDate.of(2026,9,15);double now=Planner.at(start,480);
+  JSONObject s=diversityState(1,new int[]{600,60,60},1);JSONArray courses=s.getJSONArray("courses");
+  courses.getJSONObject(1).put("deadline",Planner.at(next,0));courses.getJSONObject(2).put("deadline",Planner.at(next,0));
+  Planner.replan(s,now);
+  check(owners(s,start).size()==3,"Urgency displaced the daily diversity");
+  check(s.getJSONArray("androidRisks").length()>0&&s.getJSONArray("androidRisks").getJSONObject(0).getInt("unscheduledMinutes")>0,"Diversity must not invent capacity");
+  invariant(s,now);
+ }
+ static void tripleDiversityExceptionRegression()throws Exception{
+  LocalDate start=LocalDate.of(2026,9,14);double now=Planner.at(start,480);
+  for(double weight:new double[]{2.99,3}){
+   JSONObject s=diversityState(2,new int[]{480,60,60},weight);s.getJSONArray("courses").getJSONObject(0).put("minimumBlockMinutes",480);
+   JSONArray availability=new JSONArray();for(int w=1;w<=7;w++)availability.put(window(w,480,960));
+   s.getJSONObject("settings").put("availability",availability);
+   Planner.replan(s,now);
+   if(weight==3){
+    List<JSONObject> firstDay=new ArrayList<>();for(JSONObject t:sortedTasks(s))if(Planner.day(t.getDouble("start")).equals(start))firstDay.add(t);
+    check(firstDay.size()==1&&firstDay.get(0).getString("courseID").equals(s.getJSONArray("courses").getJSONObject(0).getString("id")),"A triple boost must take its own day");
+    check(!warned(s,"2026-9-14 未满足"),"A booked triple course must exempt its own day");
+    check(warned(s,"2026-9-15 未满足"),"Finished triple work must not exempt tomorrow's ordinary courses");
+   }else{
+    check(owners(s,start).size()==2,"Sub-triple boosts must still share the day");
+    check(warned(s,"2026-9-14 未满足"),"Sub-triple boosts must report the missing third course");
+   }
+   invariant(s,now);
+  }
+  JSONObject s=diversityState(3,new int[]{600,180,180},1);
+  s.getJSONArray("courses").put(course("未来三倍",60,LocalDate.of(2026,9,17),LocalDate.of(2026,9,17),60).put("dailyStudyWeight",3));
+  Planner.replan(s,now);
+  for(int offset=0;offset<3;offset++)check(owners(s,start.plusDays(offset)).size()==3,"A future triple course must not exempt the current days");
+  invariant(s,now);
+ }
+ static void impossibleDiversityRegression()throws Exception{
+  LocalDate start=LocalDate.of(2026,9,14);double now=Planner.at(start,480);
+  for(int count:new int[]{1,2,3}){
+   int[] minutes=new int[count];Arrays.fill(minutes,60);
+   JSONObject s=diversityState(1,minutes,1);
+   s.getJSONObject("settings").put("availability",new JSONArray().put(window(2,480,615)));
+   Planner.replan(s,now);
+   check(s.getJSONArray("tasks").length()==Math.min(2,count),"Impossible diversity invented work");
+   check(warned(s,"未满足每日三门课程"),"Impossible diversity was not reported");
+   invariant(s,now);
+  }
+ }
  static void dailyCourseRotationRegression()throws Exception{
   LocalDate day=LocalDate.of(2026,9,14);double now=Planner.at(day,480);
   for(boolean whole:new boolean[]{false,true}){
@@ -19,7 +125,7 @@ public class PlannerTests {
     s.getJSONArray("courses").put(c);
    }
    for(int w=1;w<=7;w++)s.getJSONObject("settings").getJSONArray("availability").put(new JSONObject().put("id",Planner.id()).put("weekday",w).put("startMinute",480).put("endMinute",765));
-   check(Planner.replan(s,now).isEmpty(),"Rotation lost feasible capacity");
+   Planner.replan(s,now);check(s.getJSONArray("androidRisks").length()==0,"Rotation lost feasible capacity");
    for(int offset=0;offset<2;offset++){Set<String> owners=new HashSet<>();String previous="";int total=0;for(JSONObject t:Planner.list(s.getJSONArray("tasks")))if(Planner.day(t.getDouble("start")).equals(day.plusDays(offset))){String owner=t.getString("courseID");check(!owner.equals(previous),"Same-priority courses should rotate within full days");previous=owner;owners.add(owner);total+=t.getInt("durationMinutes");}check(owners.size()==2&&total==240,"A full day was monopolized by one course");}
    if(whole)for(JSONObject c:new JSONObject[]{a,b}){List<String> ids=new ArrayList<>();for(JSONObject t:Planner.list(s.getJSONArray("tasks")))if(t.getString("courseID").equals(c.getString("id")))ids.add(t.getString("lessonID"));check(ids.equals(Arrays.asList("lesson3","lesson1","lesson2","lesson0")),"Rotation reordered lessons");}
    invariant(s,now);
@@ -147,7 +253,7 @@ public class PlannerTests {
   for(int available:new int[]{120,134,135}){
    JSONObject s=empty();s.getJSONArray("courses").put(course("休息",120,day,day,60));
    s.getJSONObject("settings").getJSONArray("availability").put(new JSONObject().put("weekday",2).put("startMinute",480).put("endMinute",480+available));
-   List<String> warnings=Planner.replan(s,now);check(s.getJSONArray("tasks").length()==(available<135?1:2),"Break capacity boundary");check(warnings.isEmpty()==(available==135),"Missing break capacity warning");invariant(s,now);
+   Planner.replan(s,now);check(s.getJSONArray("tasks").length()==(available<135?1:2),"Break capacity boundary");check((s.getJSONArray("androidRisks").length()==0)==(available==135),"Missing break capacity warning");invariant(s,now);
   }
   for(int minute:new int[]{510,540,545}){
    JSONObject s=empty(),c=course("进行中",120,day,day,60);s.getJSONArray("courses").put(c);
@@ -166,7 +272,7 @@ public class PlannerTests {
   for(int weekday=1;weekday<=7;weekday++)s.getJSONObject("settings").getJSONArray("availability").put(new JSONObject().put("id",Planner.id()).put("weekday",weekday).put("startMinute",480).put("endMinute",720));
   Planner.replan(s,Planner.at(today,480));
   Planner.recordActualStudyStart(s,660,Planner.at(today,840));
-  check(Planner.replan(s,Planner.at(today,840)).isEmpty(),"Actual start should spill into tomorrow");
+  Planner.replan(s,Planner.at(today,840));check(s.getJSONArray("androidRisks").length()==0,"Actual start should spill into tomorrow");
   List<JSONObject> tasks=Planner.list(s.getJSONArray("tasks"));
   check(tasks.size()==4&&tasks.get(0).getDouble("start")==Planner.at(today,660),"Past input should replace today's ended draft");
   check(tasks.get(1).getDouble("start")==Planner.at(today.plusDays(1),480),"Tomorrow should keep normal availability");
@@ -185,6 +291,7 @@ public class PlannerTests {
   breakRegression();liveOrderRegression();confirmedWindowRegression();
   refreshedWebsiteProgressRegression();
   lessonScheduling();
+  diversityEveryDayRegression();fourthSubjectReservedRegression();diversityLongBlockRegression();diversityPrecedenceRegression();tripleDiversityExceptionRegression();impossibleDiversityRegression();
   dailyCourseRotationRegression();mergedCourseRegression();historicalConfirmationRegression();
   JSONObject initial=new JSONObject(new String(Files.readAllBytes(Paths.get("Android/assets/initial-state.json")),"UTF-8"));Planner.validate(initial);check(initial.getJSONArray("courses").length()==0,"Initial package includes courses");check(initial.getJSONArray("fixedEvents").length()==0,"Initial package includes fixed events");check(initial.getJSONArray("tasks").length()==0,"Initial package includes tasks");check(initial.getJSONArray("completions").length()==0,"Initial package includes completion records");for(JSONObject a:Planner.list(initial.getJSONObject("settings").getJSONArray("availability")))check(Planner.canonicalID(a.getString("id")),"Initial availability ID is not cross-platform");JSONObject legacy=clone(initial);legacy.getJSONObject("settings").getJSONArray("availability").getJSONObject(0).put("id","default-availability-1");Planner.validate(legacy);check(legacy.getJSONObject("settings").getJSONArray("availability").getJSONObject(0).getString("id").equals(Planner.stableID("availability|legacy|default-availability-1")),"Legacy availability ID was not migrated");
   LocalDate today=LocalDate.of(2026,9,18);double now=Planner.at(today,18*60+10);JSONObject s=empty();for(int w=1;w<=7;w++)s.getJSONObject("settings").getJSONArray("availability").put(new JSONObject().put("id",Planner.id()).put("weekday",w).put("startMinute",480).put("endMinute",1320));for(int c=0;c<4;c++)s.getJSONArray("courses").put(course("测试课程"+c,600,today.minusDays(1),today.plusDays(7+c),60));Planner.replan(s,now);Map<String,String> historical=new HashMap<>();for(JSONObject t:Planner.list(s.getJSONArray("tasks")))if(t.getDouble("start")<now||!Planner.pending(t))historical.put(t.getString("id"),t.toString());long start=System.nanoTime();Planner.replan(s,now);System.out.println("Scenario replan ms: "+(System.nanoTime()-start)/1e6);invariant(s,now);for(JSONObject t:Planner.list(s.getJSONArray("tasks")))if(historical.containsKey(t.getString("id")))check(t.toString().equals(historical.get(t.getString("id"))),"History modified");

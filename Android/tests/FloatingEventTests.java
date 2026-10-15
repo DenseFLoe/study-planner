@@ -33,11 +33,11 @@ public class FloatingEventTests {
         s=state();s.put("fixedEvents",new JSONArray().put(event(1080,1200,60)));Planner.replan(s,Planner.at(DAY,780));check(minutes(s)==180,"Disjoint event should leave capacity for three lessons with breaks");
         for(int[] bounds:new int[][]{{540,660},{600,720}}){
             s=studyHour();s.put("fixedEvents",new JSONArray().put(event(bounds[0],bounds[1],60)));
-            List<String> warnings=Planner.replan(s,Planner.at(DAY,480));check(minutes(s)==60&&warnings.isEmpty(),"Float must use time outside study availability");
+            Planner.replan(s,Planner.at(DAY,480));check(minutes(s)==60&&s.getJSONArray("androidRisks").length()==0,"Float must use time outside study availability");
             check(s.getJSONArray("tasks").getJSONObject(0).getDouble("start")==Planner.at(DAY,600),"Study hour moved");
         }
         s=studyHour();s.put("fixedEvents",new JSONArray().put(event(540,720,60)).put(event(540,780,120)));
-        check(Planner.replan(s,Planner.at(DAY,480)).isEmpty()&&minutes(s)==60,"Placements must optimize events jointly");
+        Planner.replan(s,Planner.at(DAY,480));check(s.getJSONArray("androidRisks").length()==0&&minutes(s)==60,"Placements must optimize events jointly");
         s=studyHour();s.getJSONArray("courses").getJSONObject(0).put("minimumBlockMinutes",30);
         s.put("fixedEvents",new JSONArray().put(event(570,660,60)));Planner.replan(s,Planner.at(DAY,480));
         check(minutes(s)==30,"Deduct only unavoidable overlap");
