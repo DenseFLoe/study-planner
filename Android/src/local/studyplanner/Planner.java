@@ -447,7 +447,7 @@ public final class Planner {
         final Map<String,Integer> positions=new HashMap<>();final Map<String,Double> lastEnds=new HashMap<>();
         final List<JSONObject> tasks=new ArrayList<>();
         DiversityScheduler(Map<String,List<Work>> allWork,List<Day> days,Map<String,Double> demand,boolean boost){this.allWork=allWork;this.days=days;this.demand=demand;this.boost=boost;}
-        Work next(JSONObject course){List<Work> work=allWork.get(course.getString("id"));int position=positions.get(course.getString("id"));return position<work.size()?work.get(position):null;}
+        Work next(JSONObject course)throws Exception{List<Work> work=allWork.get(course.getString("id"));int position=positions.get(course.getString("id"));return position<work.size()?work.get(position):null;}
         JSONObject placement(JSONObject course,List<Span> free)throws Exception{
             Work work=next(course);if(work==null)return null;String id=course.getString("id");
             Double last=lastEnds.get(id);double earliest=last==null?Double.NEGATIVE_INFINITY:last+BREAK_SECONDS;
@@ -468,13 +468,13 @@ public final class Planner {
             }
             return null;
         }
-        void book(JSONObject booked){
+        void book(JSONObject booked)throws Exception{
             tasks.add(booked);String id=booked.getString("courseID");positions.put(id,positions.get(id)+1);lastEnds.put(id,end(booked));
             Span occupied=buffered(booked.getDouble("start"),end(booked));
             for(Day d:days)d.free=subtract(d.free,Collections.singletonList(occupied));
         }
         /** Lower value wins; the caller keeps the earliest equally ranked course. */
-        int rank(JSONObject a,JSONObject b,Map<String,Integer> daily,LocalDate date,JSONObject triple){
+        int rank(JSONObject a,JSONObject b,Map<String,Integer> daily,LocalDate date,JSONObject triple)throws Exception{
             String ai=a.getString("id"),bi=b.getString("id");
             if(daily.size()<3&&triple==null&&daily.containsKey(ai)!=daily.containsKey(bi))return daily.containsKey(ai)?1:-1;
             boolean urgentA=day(a.optDouble("deadline")).equals(date),urgentB=day(b.optDouble("deadline")).equals(date);
