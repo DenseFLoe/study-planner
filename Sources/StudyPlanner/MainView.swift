@@ -495,6 +495,7 @@ struct MainView: View {
             .padding(.bottom, 30)
         }
         .scrollIndicators(.hidden)
+        .environment(\.plannerScrollingContent, true)
     }
 
     private var summaryBand: some View {
@@ -583,11 +584,12 @@ struct MainView: View {
         }
         .scrollIndicators(.hidden)
         .background(.ultraThinMaterial)
+        .environment(\.plannerScrollingContent, true)
     }
 
     private var courseList: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 16) {
+            LazyVStack(alignment: .leading, spacing: 16) {
                 PlannerSectionTitle(title: "可调度课程", detail: "\(store.courses.count) 门")
                 HStack {
                     Button("合并课程", systemImage: "arrow.triangle.merge") { sheet = .mergeCourses }
@@ -629,6 +631,7 @@ struct MainView: View {
             .padding(PlannerTheme.pagePadding)
         }
         .scrollIndicators(.hidden)
+        .environment(\.plannerScrollingContent, true)
     }
 
     private var fixedList: some View {
@@ -945,7 +948,6 @@ private struct TimelineRow: View {
     var dragChanged: (CGPoint?) -> Void
     var dragEnded: (CGPoint?) -> Void
     @State private var hovering = false
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @AppStorage("timelineTimeFontSize") private var timelineTimeFontSize = 17.0
 
     private var floating: Bool { item.event?.isFloating == true || item.task?.isFloating == true }
@@ -1088,11 +1090,9 @@ private struct TimelineRow: View {
                     RoundedRectangle(cornerRadius: 17).strokeBorder(tint.opacity(0.55), style: StrokeStyle(lineWidth: 1, dash: [5, 4]))
                 }
             }
-            .shadow(color: hovering ? tint.opacity(0.10) : .clear, radius: 12, y: 5)
-            .scaleEffect(hovering && !reduceMotion ? 1.004 : 1, anchor: .center)
-            .onHover { value in
-                withAnimation(reduceMotion ? nil : DailyTaskMotion.hover) { hovering = value }
-            }
+            // Scrolling under a stationary pointer should only change the tint,
+            // not animate the whole card's scale and shadow on every crossing.
+            .onHover { hovering = $0 }
             .modifier(DailyTaskDrag(id: item.id, enabled: canReorder, targeted: targeted,
                                     changed: dragChanged, ended: dragEnded))
             .padding(.bottom, isLast ? 0 : 12)
@@ -1361,8 +1361,6 @@ private struct CourseListRow: View {
     var setDailyWeight: (Double) -> Void
     var edit: () -> Void
     var reorder: (() -> Void)?
-    @State private var hovering = false
-
     private var progress: Double { min(1, Double(completed) / Double(max(1, course.totalMinutes))) }
 
     var body: some View {
@@ -1415,9 +1413,7 @@ private struct CourseListRow: View {
             }
         }
         .padding(18)
-        .plannerSurface(radius: 18, material: .thinMaterial, shadow: hovering)
-        .scaleEffect(hovering ? 1.003 : 1)
-        .onHover { value in withAnimation(.easeOut(duration: 0.18)) { hovering = value } }
+        .plannerSurface(radius: 18, material: .thinMaterial, shadow: false)
     }
 }
 

@@ -51,16 +51,29 @@ struct PlannerGlassBackdrop: View {
     }
 }
 
+// Scrolling cards avoid per-row backdrop sampling; stationary chrome retains glass.
+private struct PlannerScrollingContentKey: EnvironmentKey {
+    static let defaultValue = false
+}
+
+extension EnvironmentValues {
+    var plannerScrollingContent: Bool {
+        get { self[PlannerScrollingContentKey.self] }
+        set { self[PlannerScrollingContentKey.self] = newValue }
+    }
+}
+
 private struct LiquidGlassModifier<S: InsettableShape>: ViewModifier {
     var shape: S
     var tint: Color?
     var interactive: Bool
     var fallbackMaterial: Material
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+    @Environment(\.plannerScrollingContent) private var scrollingContent
 
     @ViewBuilder
     func body(content: Content) -> some View {
-        if reduceTransparency {
+        if reduceTransparency || scrollingContent {
             content
                 .background {
                     shape.fill(PlannerTheme.opaqueSurface)
@@ -124,6 +137,7 @@ struct PlannerSurface: ViewModifier {
     var radius: CGFloat = PlannerTheme.radius
     var material: Material = .regularMaterial
     var shadow: Bool = true
+    @Environment(\.plannerScrollingContent) private var scrollingContent
 
     func body(content: Content) -> some View {
         let shape = RoundedRectangle(cornerRadius: radius, style: .continuous)
@@ -144,7 +158,7 @@ struct PlannerSurface: ViewModifier {
                     lineWidth: 0.7
                 )
             }
-            .shadow(color: shadow ? PlannerTheme.softShadow : .clear, radius: 18, y: 7)
+            .shadow(color: shadow && !scrollingContent ? PlannerTheme.softShadow : .clear, radius: 18, y: 7)
     }
 }
 
@@ -160,6 +174,7 @@ extension View {
 
 struct CircularIconButtonStyle: ButtonStyle {
     var prominent = false
+    @Environment(\.plannerScrollingContent) private var scrollingContent
 
     func makeBody(configuration: Configuration) -> some View {
         let shape = Circle()
@@ -176,7 +191,7 @@ struct CircularIconButtonStyle: ButtonStyle {
                 fallbackMaterial: .thinMaterial
             )
             .shadow(
-                color: prominent ? PlannerTheme.accent.opacity(0.25) : Color.black.opacity(0.045),
+                color: scrollingContent ? Color.clear : (prominent ? PlannerTheme.accent.opacity(0.25) : Color.black.opacity(0.045)),
                 radius: prominent ? 11 : 5,
                 y: prominent ? 5 : 2
             )
@@ -187,6 +202,7 @@ struct CircularIconButtonStyle: ButtonStyle {
 
 struct SoftButtonStyle: ButtonStyle {
     var prominent = false
+    @Environment(\.plannerScrollingContent) private var scrollingContent
 
     func makeBody(configuration: Configuration) -> some View {
         let shape = Capsule(style: .continuous)
@@ -204,7 +220,7 @@ struct SoftButtonStyle: ButtonStyle {
                 fallbackMaterial: .thinMaterial
             )
             .shadow(
-                color: prominent ? PlannerTheme.accent.opacity(0.20) : Color.black.opacity(0.035),
+                color: scrollingContent ? Color.clear : (prominent ? PlannerTheme.accent.opacity(0.20) : Color.black.opacity(0.035)),
                 radius: prominent ? 9 : 4,
                 y: prominent ? 4 : 2
             )
