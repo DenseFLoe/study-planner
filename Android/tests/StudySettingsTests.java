@@ -87,7 +87,40 @@ public final class StudySettingsTests {
         check(rejected&&snapshot.equals(state.toString()),"Invalid input modified the timetable");
     }
     public static void main(String[] args)throws Exception{
+        dailyReviewAfterConfirmation();
         changedWindowsAndReopen();equivalentWindowsAndStaleEditor();confirmedAndPriorDayHistory();homepageInvalidation();
         System.out.println("PASS "+checks+" study settings checks: duplicate drafts, reopen, sync, stale editors, confirmed history and appointments");
+    }
+
+    static void dailyReviewAfterConfirmation()throws Exception{
+        for(int actual:new int[]{0,30,60}){
+            JSONObject state=PlannerTests.empty();
+            JSONObject course=PlannerTests.course("每日确认",600,TODAY,TODAY.plusDays(1),60);
+            state.getJSONArray("courses").put(course);
+            state.getJSONObject("settings").put("availability",windows(480,1320)).put("notificationMinute",1260);
+            Planner.recordActualStudyStart(state,480,Planner.at(TODAY,480));
+            Planner.replan(state,Planner.at(TODAY,480));
+            double now=Planner.at(TODAY,1260);
+            List<JSONObject> review=Planner.review(state,now);
+            check(!review.isEmpty(),"Expected tasks for daily review");
+            Set<String> ids=new HashSet<>();
+            for(JSONObject task:review){ids.add(task.getString("id"));Planner.confirm(state,task.getString("id"),actual,now);}
+            JSONArray records=new JSONArray(state.getJSONArray("completions").toString());
+            for(int reopen=0;reopen<2;reopen++){
+                Planner.replan(state,now);
+                check(Planner.review(state,now).isEmpty(),"Daily review repeated after confirming "+actual+" minutes");
+                int planned=0,confirmed=0;
+                for(JSONObject task:Planner.list(state.getJSONArray("tasks"))){
+                    if(Planner.pending(task)){
+                        check(Planner.planningStart(task)>=now,"Remaining work was scheduled in the past");
+                        planned+=task.getInt("durationMinutes");
+                    }else if(ids.contains(task.getString("id")))confirmed++;
+                }
+                check(planned==Planner.remaining(state,course),"Remaining learning amount changed");
+                check(confirmed==ids.size(),"Confirmed history was lost");
+                check(records.similar(state.getJSONArray("completions")),"Completion records changed");
+                state=copy(state);
+            }
+        }
     }
 }

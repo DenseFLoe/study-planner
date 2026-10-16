@@ -18,6 +18,34 @@ final class ActualStudyStartTests: XCTestCase {
     }
     private func total(_ tasks: [ScheduledTask]) -> Int { tasks.reduce(0) { $0 + $1.durationMinutes } }
 
+    func testDailyReviewDoesNotRecreateEndedTasksAfterConfirmation() throws {
+        for actual in [0, 30, 60] {
+            var state = fixture(minutes: 600, endMinute: 22 * 60)
+            state.settings.notificationMinute = 21 * 60
+            try state.recordActualStudyStart(minute: 480, now: date(3, 8), calendar: calendar)
+            _ = state.replan(now: date(3, 8), calendar: calendar)
+            let now = date(3, 21)
+            let review = state.confirmationCandidates(at: now, calendar: calendar)
+            XCTAssertFalse(review.isEmpty)
+            for task in review {
+                try state.confirm(taskID: task.id, actualMinutes: actual, now: now)
+            }
+            let records = state.completions
+            for _ in 0..<2 {
+                let result = state.replan(now: now, calendar: calendar)
+                XCTAssertTrue(state.confirmationCandidates(at: now, calendar: calendar).isEmpty,
+                              "Confirmation of \(actual) minutes must clear the review")
+                XCTAssertTrue(result.tasks.allSatisfy { $0.planningStart >= now })
+                XCTAssertEqual(total(result.tasks), state.remainingMinutes(for: state.courses[0]))
+                XCTAssertEqual(state.completions, records)
+                XCTAssertTrue(review.allSatisfy { original in
+                    state.tasks.contains { $0.id == original.id && !$0.isUnconfirmed }
+                })
+                state = try JSONDecoder().decode(PlannerState.self, from: JSONEncoder().encode(state))
+            }
+        }
+    }
+
     func testPastActualStartRemainsTheAnchorAfterReopeningAndReplanning() throws {
         var state = fixture()
         _ = state.replan(now: date(3, 8), calendar: calendar)

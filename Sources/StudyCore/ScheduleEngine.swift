@@ -72,7 +72,13 @@ public struct ScheduleEngine: Sendable {
     public func generate(state: PlannerState, now: Date) -> ScheduleResult {
         let today = calendar.startOfDay(for: now)
         let actualStart = state.settings.actualStudyStart(on: now, calendar: calendar)
-        let nextMinute = Date(timeIntervalSince1970: ceil((actualStart ?? now).timeIntervalSince1970 / 60) * 60)
+        // A daily anchor must not send remaining work back before a saved review,
+        // including zero-minute confirmations. Derive the floor from persisted
+        // history so reopening and syncing keep the same scheduling boundary.
+        let lastConfirmation = state.tasks.compactMap(\.confirmedAt)
+            .filter { calendar.isDate($0, inSameDayAs: now) }.max()
+        let scheduleStart = max(actualStart ?? now, lastConfirmation ?? today)
+        let nextMinute = Date(timeIntervalSince1970: ceil(scheduleStart.timeIntervalSince1970 / 60) * 60)
         let courses = state.courses.filter { !$0.isArchived && $0.autoScheduleEnabled && state.remainingMinutes(for: $0) > 0 }
         var diagnostics: [String] = []
         let validEvents = state.fixedEvents.filter {

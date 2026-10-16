@@ -552,7 +552,14 @@ public final class Planner {
     }
     public static List<String> replan(JSONObject s,double now)throws Exception{
         List<String> warnings=new ArrayList<>();LocalDate today=day(now),horizon=today;
-        Double actualStart=actualStudyStart(s,now);double scheduleStart=Math.ceil((actualStart==null?now:actualStart)/60)*60;
+        Double actualStart=actualStudyStart(s,now);double scheduleStart=actualStart==null?now:actualStart;
+        // Keep remaining work after today's saved review, even for zero-minute
+        // confirmations. Persisted history also preserves this floor on reopen/sync.
+        for(JSONObject task:list(s.getJSONArray("tasks")))if(task.has("confirmedAt")){
+            double confirmedAt=task.getDouble("confirmedAt");
+            if(day(confirmedAt).equals(today))scheduleStart=Math.max(scheduleStart,confirmedAt);
+        }
+        scheduleStart=Math.ceil(scheduleStart/60)*60;
         List<JSONObject> courses=new ArrayList<>(),history=new ArrayList<>();
         for(JSONObject c:list(s.getJSONArray("courses")))if(!c.optBoolean("isArchived")&&c.optBoolean("autoScheduleEnabled",true)&&remaining(s,c)>0){courses.add(c);if(day(c.getDouble("deadline")).isAfter(horizon))horizon=day(c.getDouble("deadline"));}
         if(horizon.isAfter(today.plusYears(10))){horizon=today.plusYears(10);warnings.add("仅生成未来十年的计划");}
