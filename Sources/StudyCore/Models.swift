@@ -158,6 +158,8 @@ public struct ScheduledTask: Identifiable, Codable, Equatable, Sendable {
     public var status: TaskStatus = .planned
     public var completedMinutes: Int = 0
     public var confirmedAt: Date?
+    /// Distinguishes new work placed in a slot freed by an early confirmation.
+    public var replacesConfirmedBlock: Bool?
     public var floatingWindowStart: Date?
     public var floatingWindowEnd: Date?
     public var isFloating: Bool { floatingWindowStart != nil && floatingWindowEnd != nil }

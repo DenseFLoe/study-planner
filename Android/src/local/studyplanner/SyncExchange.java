@@ -46,11 +46,25 @@ final class SyncExchange {
     }
     // A legacy random ID and a newly generated stable ID can describe the same block.
     // Resolve exact duplicates before they become two active/history entries or two credits.
+    static String taskSlot(JSONObject task)throws Exception {
+        return new JSONArray().put(task.getString("courseID")).put(task.optString("lessonID")).put(task.getDouble("start")).put(task.getInt("durationMinutes"))
+            .put(task.opt("floatingWindowStart")).put(task.opt("floatingWindowEnd")).toString();
+    }
     static void reconcileTasks(SyncLedger ledger,JSONObject state)throws Exception {
-        java.util.Map<String,JSONObject> winners=new java.util.TreeMap<>();
-        for(JSONObject task:Planner.list(state.getJSONArray("tasks"))){
-            String key=new JSONArray().put(task.getString("courseID")).put(task.optString("lessonID")).put(task.getDouble("start")).put(task.getInt("durationMinutes"))
-                .put(task.opt("floatingWindowStart")).put(task.opt("floatingWindowEnd")).toString();
+        Map<String,JSONObject> winners=new TreeMap<>();List<JSONObject> tasks=Planner.list(state.getJSONArray("tasks"));
+        Map<String,Integer> counts=new HashMap<>();for(JSONObject task:tasks){String slot=taskSlot(task);counts.put(slot,counts.getOrDefault(slot,0)+1);}
+        for(JSONObject task:tasks){
+            String id=task.getString("id"),slot=taskSlot(task),generation="";
+            if(task.optBoolean("replacesConfirmedBlock"))generation=id;
+            else if(counts.get(slot)>1&&UUID.fromString(id).version()==5){
+                // Recognize older salted IDs only for colliding slots, keeping normal reads linear.
+                String base="task|"+task.getString("courseID")+"|"+(long)task.getDouble("start")+"|"+task.getInt("durationMinutes")+(task.has("lessonID")?"|"+task.optString("lessonID"):"");
+                if(!id.equals(Planner.stableID(base))){
+                    List<String> confirmed=new ArrayList<>();for(JSONObject other:tasks)if(other.has("confirmedAt")&&other.getString("courseID").equals(task.getString("courseID"))&&!other.getString("id").equals(id))confirmed.add(other.getString("id"));Collections.sort(confirmed);
+                    if(id.equals(Planner.stableID(base+"|confirmed|"+String.join(",",confirmed))))generation=id;
+                }
+            }
+            String key=new JSONArray().put(slot).put(generation).toString();
             JSONObject old=winners.get(key);
             if(old==null){winners.put(key,task);continue;}
             if(task.has("confirmedAt")!=old.has("confirmedAt")){if(task.has("confirmedAt"))winners.put(key,task);continue;}

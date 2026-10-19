@@ -160,11 +160,26 @@ public struct SyncLedger: Codable, Sendable {
         struct Slot: Hashable {
             var course: UUID; var lesson: String?; var start: Date; var duration: Int
             var windowStart: Date?; var windowEnd: Date?
+            var generation: UUID?
         }
+        func slot(for task: ScheduledTask) -> Slot {
+            Slot(course: task.courseID, lesson: task.lessonID, start: task.start, duration: task.durationMinutes,
+                 windowStart: task.floatingWindowStart, windowEnd: task.floatingWindowEnd, generation: nil)
+        }
+        let counts = Dictionary(grouping: tasks.values, by: { slot(for: $0) }).mapValues(\.count)
         var winners: [Slot: ScheduledTask] = [:]
         for task in tasks.values.sorted(by: { $0.id.uuidString < $1.id.uuidString }) {
-            let slot = Slot(course: task.courseID, lesson: task.lessonID, start: task.start, duration: task.durationMinutes,
-                            windowStart: task.floatingWindowStart, windowEnd: task.floatingWindowEnd)
+            var slot = slot(for: task)
+            // Explicit lineage preserves new work placed in a slot freed by early completion.
+            if task.replacesConfirmedBlock == true { slot.generation = task.id }
+            else if counts[slot, default: 0] > 1 && task.id.uuid.6 & 0xf0 == 0x50 {
+                // Recognize salted IDs from older schedulers only for colliding slots.
+                let base = "task|\(task.courseID.uuidString)|\(Int64(task.start.timeIntervalSinceReferenceDate))|\(task.durationMinutes)" + (task.lessonID.map { "|" + $0 } ?? "")
+                if task.id != stablePlannerID(base) {
+                    let confirmed = tasks.values.filter { $0.courseID == task.courseID && $0.confirmedAt != nil && $0.id != task.id }.map { $0.id.uuidString }.sorted()
+                    if task.id == stablePlannerID(base + "|confirmed|" + confirmed.joined(separator: ",")) { slot.generation = task.id }
+                }
+            }
             if let old = winners[slot] {
                 if (task.confirmedAt != nil) != (old.confirmedAt != nil) {
                     if task.confirmedAt != nil { winners[slot] = task }

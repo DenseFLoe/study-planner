@@ -586,11 +586,14 @@ public struct ScheduleEngine: Sendable {
             let t = tasks[i]
             let base = "task|\(t.courseID.uuidString)|\(Int64(t.start.timeIntervalSinceReferenceDate))|\(t.durationMinutes)" + (t.lessonID.map { "|" + $0 } ?? "")
             var generated = stablePlannerID(base)
-            if state.tasks.contains(where: { !$0.isUnconfirmed && $0.id == generated }) {
+            let replacement = state.tasks.contains { !$0.isUnconfirmed && ($0.id == generated ||
+                ($0.courseID == t.courseID && $0.start == t.start && $0.durationMinutes == t.durationMinutes && $0.lessonID == t.lessonID)) }
+            if replacement {
                 generated = stablePlannerID(base + "|confirmed|" + state.tasks.filter { !$0.isUnconfirmed && $0.courseID == t.courseID }.map { $0.id.uuidString }.sorted().joined(separator: ","))
             }
-            tasks[i].id = state.tasks.first(where: { $0.isUnconfirmed && $0.courseID == t.courseID && $0.start == t.start && $0.durationMinutes == t.durationMinutes && $0.lessonID == t.lessonID })?.id
-                ?? generated
+            let previous = state.tasks.first { $0.isUnconfirmed && $0.courseID == t.courseID && $0.start == t.start && $0.durationMinutes == t.durationMinutes && $0.lessonID == t.lessonID }
+            tasks[i].id = previous?.id ?? generated
+            tasks[i].replacesConfirmedBlock = previous?.replacesConfirmedBlock ?? (replacement ? true : nil)
         }
         for i in tasks.indices { tasks[i].status = calendar.isDate(tasks[i].start, inSameDayAs: today) ? .planned : .future }
         var risks: [ScheduleRisk] = []

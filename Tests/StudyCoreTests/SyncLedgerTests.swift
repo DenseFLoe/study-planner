@@ -2,6 +2,30 @@ import XCTest
 @testable import StudyCore
 
 final class SyncLedgerTests: XCTestCase {
+    func testEarlyCompletionAndReplacementAtSameSlotBothSurviveSync() throws {
+        for legacy in [false, true] {
+            var state = fixture(); let now = state.courses[0].startDate
+            state.settings.availability = (1...7).map { .init(weekday: $0, startMinute: 480, endMinute: 1380) }
+            _ = state.replan(now: now)
+            if legacy, let index = state.tasks.firstIndex(where: { $0.start > now }) { state.tasks[index].id = UUID() }
+            let first = try XCTUnwrap(state.tasks.first { $0.start > now })
+            try state.confirm(taskID: first.id, actualMinutes: first.durationMinutes, now: now)
+            _ = state.replan(now: now)
+            let replacement = try XCTUnwrap(state.tasks.first { $0.isUnconfirmed && $0.start == first.start && $0.durationMinutes == first.durationMinutes })
+            XCTAssertNotEqual(first.id, replacement.id)
+            var ledger = SyncLedger(); try ledger.capture(state)
+            let merged = try ledger.materialize()
+            XCTAssertEqual(Set(merged.tasks.map(\.id)), Set(state.tasks.map(\.id)))
+            XCTAssertEqual(merged.completions.count, 1)
+            XCTAssertNotNil(merged.tasks.first { $0.id == first.id }?.confirmedAt)
+            XCTAssertEqual(merged.tasks.first { $0.id == replacement.id }?.isUnconfirmed, true)
+            try state.confirm(taskID: replacement.id, actualMinutes: replacement.durationMinutes, now: now.addingTimeInterval(1))
+            _ = state.replan(now: now.addingTimeInterval(1)); try ledger.capture(state)
+            XCTAssertEqual(try ledger.materialize().completions.count, 2)
+            XCTAssertEqual(Set(try ledger.materialize().tasks.map(\.id)), Set(state.tasks.map(\.id)))
+        }
+    }
+
     func testLatestEditWinsDespiteLargerOfflineCounterAndSurvivesRestart() throws {
         var mac = SyncLedger(), phone = SyncLedger()
         var state = fixture()
