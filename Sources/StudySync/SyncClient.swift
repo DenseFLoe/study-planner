@@ -70,7 +70,9 @@ enum SyncDiagnostic {
         case "pairing_mismatch": detail = "二维码配对密钥不匹配或已失效。请在 Mac 重新生成二维码并让 Android 扫描。"
         case "unauthorized": detail = "配对凭据已失效，请重新配对两台设备。"
         case "session_invalid": detail = "同步会话已结束，请在手机重新开启接收窗口。"
-        case "data_rejected": detail = "手机未能处理同步数据，请提供手机同步日志中的失败原因。"
+        case "data_rejected": detail = phase == "分块交换日程"
+            ? "手机未能处理分块同步。请确认已安装本次 Android 修复包；若仍失败，请查看手机同步日志。"
+            : "手机未能处理同步数据，请提供手机同步日志中的失败原因。"
         default: detail = phase == "首次配对" ? "手机拒绝配对。请重新生成二维码、让 Android 扫描，并在两分钟内重试。" : "手机拒绝请求，请查看手机同步日志。"
         }
         return .message("\(phase)失败（HTTP \(status)）：\(detail)")
@@ -232,7 +234,7 @@ public enum SyncClient {
             request.setValue("application/json", forHTTPHeaderField: "Content-Type")
             request.setValue("close", forHTTPHeaderField: "Connection")
             request.setValue("Bearer " + token, forHTTPHeaderField: "Authorization")
-            let phase = ["pair": "首次配对", "changes": "交换日程", "finish": "确认完成", "cancel": "关闭窗口"][path] ?? path
+            let phase = ["pair": "首次配对", "changes": "交换日程", "transfer": "分块交换日程", "finish": "确认完成", "cancel": "关闭窗口"][path] ?? path
             if path != "cancel" { await log("开始" + phase) }
             let body: Data, response: URLResponse
             do { (body, response) = try await session.data(for: request) }
@@ -255,7 +257,9 @@ public enum SyncClient {
             let (_, ledger) = try await SyncDatabase.snapshot(url: environment.databaseURL)
             let changes = ledger.changes(after: ledger.sentCursor), sentThrough = ledger.sequence
             let request = Exchange(cursor: ledger.peerCursor, changes: changes, automatic: automatic, date: date)
-            let reply = try JSONDecoder().decode(ExchangeReply.self, from: await post("changes", JSONEncoder().encode(request), token: credentials.token))
+            let reply = try JSONDecoder().decode(ExchangeReply.self, from: await SyncTransfer.exchange(JSONEncoder().encode(request), post: { data in
+                try await post("transfer", data, token: credentials.token)
+            }, progress: log))
             guard reply.protocol == 1, reply.device == credentials.device, reply.cursor >= ledger.peerCursor else { throw ClientError.message("对端身份或同步游标发生变化，请重新配对。") }
             await log("已建立加密连接并验证手机身份")
             let applied = try await SyncDatabase.update(url: environment.databaseURL) { state, current in

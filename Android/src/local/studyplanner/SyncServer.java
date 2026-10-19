@@ -21,6 +21,7 @@ public final class SyncServer implements AutoCloseable {
     private final Consumer<String> notice;private final Runnable changed;private final SharedPreferences prefs;
     private volatile boolean running;private volatile ServerSocket listener;private volatile Socket active;
     private ScheduledExecutorService deadline;private String code="",pairingText="",session="",sessionDate="";private boolean sessionAuto;
+    private SyncTransfer transfer;
     private String lastFailure="";private int attempts;private Thread thread;private final int windowSeconds;
     public SyncServer(Context c,PlannerDatabase d,ExecutorService worker,Consumer<String> notice,Runnable changed){this(c,d,worker,notice,changed,120);}
     SyncServer(Context c,PlannerDatabase d,ExecutorService worker,Consumer<String> notice,Runnable changed,int seconds){context=c;db=d;databaseWorker=worker;this.notice=notice;this.changed=changed;windowSeconds=seconds;prefs=c.getSharedPreferences("local-sync",0);}
@@ -57,13 +58,14 @@ public final class SyncServer implements AutoCloseable {
                     else {authenticate(request.token);switch(request.path){
                         case "/sync/cancel":finish=true;result=new JSONObject().put("ok",true);listener.close();break;
                         case "/sync/status":if(!request.method.equals("GET"))throw new IOException("方法无效");result=new JSONObject().put("protocol",1).put("listening",true);break;
+                        case "/sync/transfer":
+                            if(!request.method.equals("POST"))throw new IOException("方法无效");
+                            if(transfer==null)transfer=new SyncTransfer(context.getCacheDir());
+                            result=transfer.handle(request.body,this::exchange);break;
+                        // Retain the original endpoint for older Mac clients.
                         case "/sync/changes":
                             if(!request.method.equals("POST"))throw new IOException("方法无效");
-                            sessionAuto=request.body.getBoolean("automatic");sessionDate=request.body.getString("date");
-                            if(!sessionDate.matches("[0-9]{4}-[0-9]{2}-[0-9]{2}"))throw new IOException("日期无效");
-                            log((sessionAuto?"自动":"手动")+"同步开始；接收 "+request.body.getJSONArray("changes").length()+" 条变化");
-                            result=databaseWorker.submit(()->{JSONObject response=db.exchange(request.body);changed.run();return response;}).get();
-                            log(result.optString("applied"));session=UUID.randomUUID().toString();result.put("session",session);log("已提交接收变化；发送 "+result.getJSONArray("changes").length()+" 条变化");break;
+                            result=exchange(request.body);break;
                         case "/sync/finish":
                             if(!request.method.equals("POST")||session.isEmpty()||!session.equals(request.body.optString("session")))throw new RequestFailure("session_invalid","会话无效");
                             sessionDate=java.time.LocalDate.now(Planner.ZONE).toString();
@@ -80,6 +82,14 @@ public final class SyncServer implements AutoCloseable {
             }finally{active=null;}}
         }catch(Exception e){if(running){lastFailure="同步失败："+safe(e);log(lastFailure);}}
         finally{close();}
+    }
+    private JSONObject exchange(JSONObject body)throws Exception{
+        sessionAuto=body.getBoolean("automatic");sessionDate=body.getString("date");
+        if(!sessionDate.matches("[0-9]{4}-[0-9]{2}-[0-9]{2}"))throw new IOException("日期无效");
+        log((sessionAuto?"自动":"手动")+"同步开始；接收 "+body.getJSONArray("changes").length()+" 条变化");
+        JSONObject result=databaseWorker.submit(()->{JSONObject response=db.exchange(body);changed.run();return response;}).get();
+        log(result.optString("applied"));session=UUID.randomUUID().toString();result.put("session",session);
+        log("已提交接收变化；发送 "+result.getJSONArray("changes").length()+" 条变化");return result;
     }
     private static String safe(Exception e){Throwable t=e instanceof ExecutionException&&e.getCause()!=null?e.getCause():e;return t.getClass().getSimpleName()+": "+(t.getMessage()==null?"连接结束":t.getMessage());}
     private synchronized JSONObject pair(JSONObject body)throws Exception{
@@ -108,7 +118,7 @@ public final class SyncServer implements AutoCloseable {
     public synchronized void close(){
         if(!running)return;running=false;code="";pairingText="";
         try{if(listener!=null)listener.close();}catch(IOException ignored){}try{if(active!=null)active.close();}catch(IOException ignored){}
-        listener=null;active=null;if(deadline!=null){deadline.shutdownNow();deadline=null;}
+        listener=null;active=null;if(transfer!=null){transfer.close();transfer=null;}if(deadline!=null){deadline.shutdownNow();deadline=null;}
         log((lastFailure.isEmpty()?"":lastFailure+"；")+"网络模块关闭：监听 0，连接 0，同步定时任务 0");
     }
     private static final class RequestFailure extends IOException {
