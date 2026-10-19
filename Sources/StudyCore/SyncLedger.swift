@@ -10,9 +10,12 @@ public struct SyncRecord: Codable, Equatable, Sendable {
     public var version: Int64
     public var device: String
     public var sequence: Int64
+    /// Unix milliseconds of the local edit, independent of unrelated ledger revisions.
+    public var modifiedAt: Int64? = nil
     public var key: String { kind + "/" + id }
     public func wins(over other: SyncRecord) -> Bool {
-        version != other.version ? version > other.version : device > other.device
+        if (modifiedAt ?? 0) != (other.modifiedAt ?? 0) { return (modifiedAt ?? 0) > (other.modifiedAt ?? 0) }
+        return version != other.version ? version > other.version : device > other.device
     }
 }
 public struct SyncLedger: Codable, Sendable {
@@ -37,7 +40,7 @@ public struct SyncLedger: Codable, Sendable {
     public func changes(after cursor: Int64) -> [SyncRecord] {
         records.values.filter { $0.sequence > cursor }.sorted { $0.sequence < $1.sequence }
     }
-    public mutating func capture(_ state: PlannerState) throws {
+    public mutating func capture(_ state: PlannerState, now: Date = Date()) throws {
         var state = state
         state.removeArchivedCourses()
         let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys]
@@ -69,6 +72,7 @@ public struct SyncLedger: Codable, Sendable {
         clock += 1
         for var row in changed.sorted(by: { $0.key < $1.key }) {
             sequence += 1; row.sequence = sequence; row.version = clock; row.device = device
+            row.modifiedAt = max(Int64(now.timeIntervalSince1970 * 1000), (records[row.key]?.modifiedAt ?? 0) + 1)
             records[row.key] = row
         }
     }
@@ -83,6 +87,7 @@ public struct SyncLedger: Codable, Sendable {
         for var row in incoming {
             guard ["courses", "fixedEvents", "tasks", "completions", "settings"].contains(row.kind),
                   row.version > 0, row.version < Int64.max - 1_000_000,
+                  (row.modifiedAt ?? 0) >= 0, (row.modifiedAt ?? 0) < Int64.max - 1_000_000,
                   !row.device.isEmpty, row.device.count <= 64,
                   (row.kind == "settings" ? row.id == "settings" : UUID(uuidString: row.id)?.uuidString == row.id),
                   row.payload.count <= 1_000_000 else { throw SyncFailure.invalidData }
@@ -114,6 +119,7 @@ public struct SyncLedger: Codable, Sendable {
             try decoder.decode(ScheduledTask.self, from: $0.payload)
         }
         try state.reconcileMergedCourseProgress(deletedIDs: deletedIDs, deletedTasks: deletedTasks)
+        try reconcileConfirmations(in: &state)
         state.purgeDeletedLessonRecords(additionalTasks: deletedTasks)
         state.removeArchivedCourses()
         state.removeCourses(ids: deletedIDs)
@@ -121,9 +127,70 @@ public struct SyncLedger: Codable, Sendable {
         guard state.settings.minimumScheduleUnit > 0,
               state.tasks.allSatisfy({ ids.contains($0.courseID) && $0.durationMinutes > 0 }),
               state.completions.allSatisfy({ ids.contains($0.courseID) && $0.minutes >= 0 }) else { throw SyncFailure.invalidData }
-        state.tasks.sort { $0.start < $1.start }
+        state.tasks.sort { $0.start == $1.start ? $0.id.uuidString < $1.id.uuidString : $0.start < $1.start }
         return state
     }
+    /// Completion rows (including explicit undo tombstones) own confirmation state.
+    /// A regenerated draft must never erase a confirmation just by having a newer task row.
+    private func reconcileConfirmations(in state: inout PlannerState) throws {
+        let decoder = JSONDecoder()
+        var tasks = Dictionary(uniqueKeysWithValues: state.tasks.map { ($0.id, $0) })
+        for record in state.completions where tasks[record.taskID] == nil {
+            if let row = records["tasks/" + record.taskID.uuidString], row.deleted {
+                let old = try decoder.decode(ScheduledTask.self, from: row.payload)
+                // A removed draft can still have been confirmed by the offline peer.
+                if old.confirmedAt == nil { tasks[old.id] = old }
+            }
+        }
+        let completions = Dictionary(uniqueKeysWithValues: state.completions.map { ($0.taskID, $0) })
+        for id in tasks.keys.sorted(by: { $0.uuidString < $1.uuidString }) {
+            var task = tasks[id]!
+            let key = "completions/" + stablePlannerID("completion|" + id.uuidString).uuidString
+            if let row = records[key], row.deleted {
+                if task.confirmedAt != nil { task.status = .planned }
+                task.confirmedAt = nil; task.completedMinutes = 0
+            } else if let record = completions[id], record.courseID == task.courseID {
+                guard record.minutes >= 0, record.minutes <= task.durationMinutes else { throw SyncFailure.invalidData }
+                task.confirmedAt = record.recordedAt; task.completedMinutes = record.minutes
+                task.status = record.minutes == 0 ? .missed : (record.minutes == task.durationMinutes ? .completed : .partial)
+            }
+            tasks[id] = task
+        }
+        // Old random IDs and stable IDs may describe the same lesson block.
+        struct Slot: Hashable {
+            var course: UUID; var lesson: String?; var start: Date; var duration: Int
+            var windowStart: Date?; var windowEnd: Date?
+        }
+        var winners: [Slot: ScheduledTask] = [:]
+        for task in tasks.values.sorted(by: { $0.id.uuidString < $1.id.uuidString }) {
+            let slot = Slot(course: task.courseID, lesson: task.lessonID, start: task.start, duration: task.durationMinutes,
+                            windowStart: task.floatingWindowStart, windowEnd: task.floatingWindowEnd)
+            if let old = winners[slot] {
+                if (task.confirmedAt != nil) != (old.confirmedAt != nil) {
+                    if task.confirmedAt != nil { winners[slot] = task }
+                    continue
+                }
+                let a = records["completions/" + stablePlannerID("completion|" + task.id.uuidString).uuidString]
+                    ?? records["tasks/" + task.id.uuidString]!
+                let b = records["completions/" + stablePlannerID("completion|" + old.id.uuidString).uuidString]
+                    ?? records["tasks/" + old.id.uuidString]!
+                if !a.wins(over: b) && b.wins(over: a) { continue }
+            }
+            winners[slot] = task
+        }
+        let kept = Set(winners.values.map(\.id))
+        state.tasks = Array(winners.values)
+        state.completions.removeAll { tasks[$0.taskID] != nil && !kept.contains($0.taskID) }
+        // Backfill legacy task-only confirmations, but never override an explicit undo.
+        for task in state.tasks where completions[task.id] == nil {
+            if let confirmed = task.confirmedAt {
+                state.completions.append(CompletionRecord(id: stablePlannerID("completion|" + task.id.uuidString),
+                    courseID: task.courseID, taskID: task.id, minutes: task.completedMinutes, recordedAt: confirmed))
+            }
+        }
+        state.completions.sort { $0.id.uuidString < $1.id.uuidString }
+    }
+
 }
 public enum SyncFailure: Error, LocalizedError {
     case invalidData

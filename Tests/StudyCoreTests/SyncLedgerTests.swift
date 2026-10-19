@@ -2,6 +2,120 @@ import XCTest
 @testable import StudyCore
 
 final class SyncLedgerTests: XCTestCase {
+    func testLatestEditWinsDespiteLargerOfflineCounterAndSurvivesRestart() throws {
+        var mac = SyncLedger(), phone = SyncLedger()
+        var state = fixture()
+        let t = Date(timeIntervalSince1970: 2_000_000_000)
+        try mac.capture(state, now: t); try phone.merge(mac.changes(after: 0))
+        for i in 1...20 {
+            state.courses[0].notes = "旧修改 \(i)"
+            try phone.capture(state, now: t.addingTimeInterval(Double(i)))
+        }
+        var newer = try mac.materialize(); newer.courses[0].notes = "较新的电脑修改"
+        try mac.capture(newer, now: t.addingTimeInterval(30))
+        let left = mac.changes(after: 0), right = phone.changes(after: 0)
+        try mac.merge(right); try phone.merge(left)
+        XCTAssertEqual(try mac.materialize(), try phone.materialize())
+        XCTAssertEqual(try phone.materialize().courses[0].notes, "较新的电脑修改")
+        phone = try JSONDecoder().decode(SyncLedger.self, from: JSONEncoder().encode(phone))
+        newer = try phone.materialize(); newer.courses[0].notes = "更晚的手机修改"
+        try phone.capture(newer, now: t.addingTimeInterval(40)); try mac.merge(phone.changes(after: 0))
+        XCTAssertEqual(try mac.materialize().courses[0].notes, "更晚的手机修改")
+        let sequence = mac.sequence; try mac.capture(mac.materialize(), now: t.addingTimeInterval(50))
+        XCTAssertEqual(sequence, mac.sequence)
+    }
+
+    func testConfirmedHistorySurvivesStaleDraftsDuplicatesAndExplicitUndo() throws {
+        let now = Date(timeIntervalSince1970: 2_000_000_000)
+        for minutes in [0, 20, 60] {
+            var mac = SyncLedger(), phone = SyncLedger(); var state = fixture()
+            let task = ScheduledTask(courseID: state.courses[0].id, start: now.addingTimeInterval(-7200), durationMinutes: 60)
+            state.tasks = [task]
+            try mac.capture(state, now: now); try phone.merge(mac.changes(after: 0))
+            var confirmed = try mac.materialize()
+            try confirmed.confirm(taskID: task.id, actualMinutes: minutes, now: now)
+            try mac.capture(confirmed, now: now.addingTimeInterval(1))
+            // A later replan/save on the stale peer is not an undo operation.
+            var stale = try phone.materialize(); stale.tasks[0].status = .future
+            var duplicate = task; duplicate.id = UUID(); stale.tasks.append(duplicate)
+            try phone.capture(stale, now: now.addingTimeInterval(2))
+            let left = mac.changes(after: 0), right = phone.changes(after: 0)
+            try mac.merge(right); try phone.merge(left)
+            XCTAssertEqual(try mac.materialize(), try phone.materialize())
+            let merged = try mac.materialize()
+            XCTAssertEqual(merged.tasks.count, 1)
+            XCTAssertEqual(merged.tasks.first?.confirmedAt, now)
+            XCTAssertEqual(merged.completions.first?.minutes, minutes)
+            XCTAssertTrue(merged.confirmationCandidates(at: now).isEmpty)
+            try mac.capture(merged, now: now.addingTimeInterval(3)); try phone.merge(mac.changes(after: 0))
+            var undone = try phone.materialize(); try undone.undoConfirmation(taskID: task.id, now: now)
+            try phone.capture(undone, now: now.addingTimeInterval(4)); try mac.merge(phone.changes(after: 0))
+            XCTAssertNil(try mac.materialize().tasks.first?.confirmedAt)
+            XCTAssertTrue(try mac.materialize().completions.isEmpty)
+            // A stale confirmed task alone must not restore the undone completion.
+            var row = try XCTUnwrap(mac.records["tasks/" + task.id.uuidString])
+            row.payload = try JSONEncoder().encode(confirmed.tasks[0]); row.modifiedAt = Int64(now.timeIntervalSince1970 * 1000) + 5000
+            row.version += 1
+            try mac.merge([row])
+            XCTAssertNil(try mac.materialize().tasks.first?.confirmedAt)
+            var redone = try mac.materialize(); try redone.confirm(taskID: task.id, actualMinutes: minutes, now: now)
+            try mac.capture(redone, now: now.addingTimeInterval(6)); try phone.merge(mac.changes(after: 0))
+            XCTAssertEqual(try phone.materialize().tasks.first?.confirmedAt, now)
+        }
+    }
+
+    func testOfflineConfirmationRecoversDeletedDraft() throws {
+        var mac = SyncLedger(), phone = SyncLedger(); var state = fixture()
+        let task = ScheduledTask(courseID: state.courses[0].id, start: Date().addingTimeInterval(-7200), durationMinutes: 60)
+        state.tasks = [task]; try mac.capture(state); try phone.merge(mac.changes(after: 0))
+        var confirmed = state; try confirmed.confirm(taskID: task.id, actualMinutes: 60, now: Date()); try mac.capture(confirmed)
+        state.tasks = []; try phone.capture(state)
+        try phone.merge(mac.changes(after: 0)); try mac.merge(phone.changes(after: 0))
+        XCTAssertEqual(try mac.materialize(), try phone.materialize())
+        XCTAssertEqual(try phone.materialize().tasks.first?.confirmedAt, confirmed.tasks[0].confirmedAt)
+    }
+
+    func testLegacyRecordsPreserveConfirmationAndNewEditsTakePriority() throws {
+        var ledger = SyncLedger(); var state = fixture()
+        let task = ScheduledTask(courseID: state.courses[0].id, start: Date().addingTimeInterval(-7200), durationMinutes: 60)
+        state.tasks = [task]; try state.confirm(taskID: task.id, actualMinutes: 0, now: Date())
+        try ledger.capture(state)
+        for key in Array(ledger.records.keys) { ledger.records[key]?.modifiedAt = nil }
+        ledger = try JSONDecoder().decode(SyncLedger.self, from: JSONEncoder().encode(ledger))
+        let courseKey = "courses/" + state.courses[0].id.uuidString
+        var legacy = try XCTUnwrap(ledger.records[courseKey]); legacy.version = 100_000
+        try ledger.merge([legacy])
+        var updated = try ledger.materialize(); updated.courses[0].notes = "新修改"
+        try ledger.capture(updated)
+        legacy.version += 1; try ledger.merge([legacy])
+        XCTAssertEqual(try ledger.materialize().courses[0].notes, "新修改")
+        XCTAssertNotNil(try ledger.materialize().tasks[0].confirmedAt)
+        XCTAssertEqual(try ledger.materialize().completions[0].minutes, 0)
+    }
+
+    func testConfirmationWireRoundTrip() throws {
+        var ledger = SyncLedger(); var state = fixture()
+        let now = Date(timeIntervalSinceReferenceDate: 800_000_000)
+        state.courses[0].id = UUID(uuidString: "AAAAAAAA-AAAA-4AAA-8AAA-AAAAAAAAAAAA")!
+        var task = ScheduledTask(courseID: state.courses[0].id, start: now.addingTimeInterval(-7200), durationMinutes: 60)
+        task.id = stablePlannerID("confirmation-wire-task")
+        state.tasks = [task]; try ledger.capture(state, now: now)
+        try state.confirm(taskID: task.id, actualMinutes: 20, now: now)
+        try ledger.capture(state, now: now.addingTimeInterval(1))
+        var stale = try XCTUnwrap(ledger.records["tasks/" + task.id.uuidString])
+        stale.payload = try JSONEncoder().encode(task); stale.version += 100
+        stale.modifiedAt = Int64(now.timeIntervalSince1970 * 1000) + 2000
+        try ledger.merge([stale])
+        try JSONEncoder().encode(ledger).write(to: URL(fileURLWithPath: "/tmp/study-confirmation-swift-fixture.json"))
+        let reply = URL(fileURLWithPath: "/tmp/study-confirmation-java-fixture.json")
+        if FileManager.default.fileExists(atPath: reply.path) {
+            let phone = try JSONDecoder().decode(SyncLedger.self, from: Data(contentsOf: reply))
+            try ledger.merge(phone.changes(after: 0))
+            XCTAssertNil(try ledger.materialize().tasks.first?.confirmedAt)
+            XCTAssertTrue(try ledger.materialize().completions.isEmpty)
+        }
+    }
+
     func fixture() -> PlannerState {
         var s = PlannerState(); s.settings.availability = []
         s.courses = [Course(name: "数学", totalMinutes: 600, startDate: Date(timeIntervalSinceReferenceDate: 800_000_000), deadline: Date(timeIntervalSinceReferenceDate: 800_864_000))]
@@ -67,7 +181,7 @@ final class SyncLedgerTests: XCTestCase {
             XCTAssertTrue(state.tasks.allSatisfy(\.isFloating))
         }
         var s = fixture(); s.courses[0].id = UUID(uuidString: "AAAAAAAA-AAAA-4AAA-8AAA-AAAAAAAAAAAA")!
-        var l = SyncLedger(); l.device = "MAC-FIXTURE"; try l.capture(s)
+        var l = SyncLedger(); l.device = "MAC-FIXTURE"; try l.capture(s, now: Date(timeIntervalSince1970: 1))
         try JSONEncoder().encode(l).write(to: URL(fileURLWithPath: "/tmp/study-sync-swift-fixture.json"))
         XCTAssertEqual(stablePlannerID("task|AAAAAAAA-AAAA-4AAA-8AAA-AAAAAAAAAAAA|800000000|60").uuidString, "897861BE-3B8A-5F5C-84D2-6194FA9D75CD")
         let path = URL(fileURLWithPath: "/tmp/study-sync-java-fixture.json")

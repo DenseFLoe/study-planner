@@ -25,7 +25,7 @@ final class SyncExchange {
         if(header.getInt("protocol")!=1)throw new IllegalArgumentException("协议版本不兼容");
         long cursor=header.getLong("cursor");if(cursor<0||cursor>originalSequence)throw new IllegalArgumentException("同步游标无效，请重新配对");
         header.getBoolean("automatic");if(!header.getString("date").matches("[0-9]{4}-[0-9]{2}-[0-9]{2}"))throw new IOException("日期无效");
-        JSONObject state=ledger.materialize();reconcileTasks(ledger,state);reconcileConfirmations(state);
+        JSONObject state=ledger.materialize();
         byte[][] after=signature(state);boolean changed=false;
         for(int i=0;i<before.length;i++)changed|=!Arrays.equals(before[i],after[i]);
         if(changed||invalidPending(state,now))Planner.replan(state,now);
@@ -49,18 +49,16 @@ final class SyncExchange {
     static void reconcileTasks(SyncLedger ledger,JSONObject state)throws Exception {
         java.util.Map<String,JSONObject> winners=new java.util.TreeMap<>();
         for(JSONObject task:Planner.list(state.getJSONArray("tasks"))){
-            String key=task.getString("courseID")+"|"+task.getDouble("start")+"|"+task.getInt("durationMinutes");
+            String key=new JSONArray().put(task.getString("courseID")).put(task.optString("lessonID")).put(task.getDouble("start")).put(task.getInt("durationMinutes"))
+                .put(task.opt("floatingWindowStart")).put(task.opt("floatingWindowEnd")).toString();
             JSONObject old=winners.get(key);
             if(old==null){winners.put(key,task);continue;}
-            JSONObject a=ledger.records().getJSONObject("tasks/"+task.getString("id")),b=ledger.records().getJSONObject("tasks/"+old.getString("id"));
+            if(task.has("confirmedAt")!=old.has("confirmedAt")){if(task.has("confirmedAt"))winners.put(key,task);continue;}
+            JSONObject a=ledger.records().optJSONObject("completions/"+Planner.stableID("completion|"+task.getString("id"))),b=ledger.records().optJSONObject("completions/"+Planner.stableID("completion|"+old.getString("id")));
+            if(a==null)a=ledger.records().getJSONObject("tasks/"+task.getString("id"));if(b==null)b=ledger.records().getJSONObject("tasks/"+old.getString("id"));
             if(SyncLedger.wins(a,b)||(!SyncLedger.wins(b,a)&&task.getString("id").compareTo(old.getString("id"))>0))winners.put(key,task);
         }
         state.put("tasks",new JSONArray(winners.values()));
-    }
-    static void reconcileConfirmations(JSONObject state)throws Exception {
-        JSONArray records=new JSONArray();for(JSONObject t:Planner.list(state.getJSONArray("tasks")))if(t.has("confirmedAt"))
-            records.put(new JSONObject().put("id",Planner.stableID("completion|"+t.getString("id"))).put("taskID",t.getString("id")).put("courseID",t.getString("courseID")).put("minutes",t.getInt("completedMinutes")).put("recordedAt",t.getDouble("confirmedAt")));
-        state.put("completions",records);
     }
     static boolean needsReplan(JSONObject previous,JSONObject state,double now)throws Exception {
         for(String kind:new String[]{"courses","fixedEvents","settings"})if(!SyncLedger.equivalent(previous.get(kind),state.get(kind)))return true;

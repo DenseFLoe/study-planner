@@ -29,6 +29,15 @@ public final class SyncTests {
     }
     public static void main(String[] args)throws Exception{
         courseDeletionRegression();
+        Path confirmationPath=Paths.get("/tmp/study-confirmation-swift-fixture.json");
+        if(Files.exists(confirmationPath)){
+            SyncLedger confirmation=new SyncLedger(new JSONObject(new String(Files.readAllBytes(confirmationPath),"UTF-8")));
+            JSONObject confirmed=confirmation.materialize();JSONObject task=confirmed.getJSONArray("tasks").getJSONObject(0);
+            check(task.has("confirmedAt")&&task.getInt("completedMinutes")==20,"Swift confirmation lost to newer stale draft");
+            check(confirmed.getJSONArray("completions").length()==1,"Swift completion missing");
+            Planner.undoConfirmation(confirmed,task.getString("id"),Planner.now());confirmation.value.put("device","PHONE-FIXTURE");confirmation.capture(confirmed);
+            Files.write(Paths.get("/tmp/study-confirmation-java-fixture.json"),confirmation.value.toString().getBytes("UTF-8"));
+        }
         JSONObject source=new JSONObject(new String(Files.readAllBytes(Paths.get("/tmp/study-sync-swift-fixture.json")),"UTF-8"));
         SyncLedger mac=new SyncLedger(source),phone=new SyncLedger();phone.value.put("device","PHONE-FIXTURE");phone.merge(mac.changes(0));
         JSONObject a=phone.materialize();check(a.getJSONArray("courses").length()==1,"Swift base64 decoding");a.getJSONArray("courses").getJSONObject(0).put("notes","Java round trip 中文");phone.capture(a);

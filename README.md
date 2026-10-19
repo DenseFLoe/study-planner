@@ -21,7 +21,7 @@ macOS 14 及以上（Apple Silicon）可使用 macOS 版本；Android 8.0 及以
 
 隔离预览：运行 `.build/debug/StudyPlanner --demo`，所有示例操作仅使用内存数据库。不会改动正式数据库。
 
-两端构建版本统一从 `Scripts/version.env` 读取，目前为 1.5.0（构建号 10）。本轮将 Mac 的交换、搜索、周统计、学习负荷、风险详情、课程合并、智能排序、预览、网站和网盘导入接入 Android；保留 1.4.4 的网站进度去重、撤销与同步修复。对应入口、自动测试和待手机验收项目见 [Android 功能对照](Android/FEATURE_PARITY.md)。本地包为 `dist/学习日程.app` 和 `dist/学习日程-安卓版.apk`，Android 沿用已有本地签名。
+两端构建版本统一从 `Scripts/version.env` 读取，目前为 1.5.3（构建号 13）。本版修复同步后已确认课程回退为待确认的问题：按记录的实际修改时间合并，保留确认、部分完成和 0 分钟确认，同时支持较新的主动撤销。两端需同时升级到此版本。对应入口、自动测试和待手机验收项目见 [Android 功能对照](Android/FEATURE_PARITY.md)。本地包为 `dist/学习日程.app` 和 `dist/学习日程-安卓版.apk`，Android 沿用已有本地签名。
 
 ## 开发与本地验收
 

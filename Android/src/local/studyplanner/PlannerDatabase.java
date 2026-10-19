@@ -46,7 +46,7 @@ public final class PlannerDatabase extends SQLiteOpenHelper {
         return result.header.put("applied",result.reply.getString("applied")).put("received",result.received).put("sent",changes.length());
     }
     static void reconcileTasks(SyncLedger ledger,JSONObject state)throws Exception{SyncExchange.reconcileTasks(ledger,state);}
-    static void reconcileConfirmations(JSONObject state)throws Exception{SyncExchange.reconcileConfirmations(state);}
+    static void reconcileConfirmations(SyncLedger ledger,JSONObject state)throws Exception{ledger.reconcileConfirmations(state);}
     static boolean needsReplan(JSONObject previous,JSONObject state,double now)throws Exception{return SyncExchange.needsReplan(previous,state,now);}
     public synchronized JSONObject metadata()throws Exception{
         try(Cursor c=getReadableDatabase().rawQuery("SELECT body FROM metadata WHERE id='sync'",null)){
