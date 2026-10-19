@@ -705,5 +705,5 @@ public final class Planner {
         history.addAll(packed);history.sort(Comparator.comparingDouble(t->t.optDouble("start")));s.put("tasks",array(history));s.put("androidWarnings",new JSONArray(warnings));return warnings;
     }
     /** Derived UI diagnostics are recalculated after SQLite/sync reads without replacing shared tasks. */
-    public static void refreshDiagnostics(JSONObject state,double now)throws Exception{JSONObject preview=new JSONObject(state.toString());replan(preview,now);state.put("androidWarnings",preview.getJSONArray("androidWarnings")).put("androidRisks",preview.getJSONArray("androidRisks"));}
+    public static void refreshDiagnostics(JSONObject state,double now)throws Exception{JSONObject preview=CourseTools.copy(state);replan(preview,now);state.put("androidWarnings",preview.getJSONArray("androidWarnings")).put("androidRisks",preview.getJSONArray("androidRisks"));}
 }

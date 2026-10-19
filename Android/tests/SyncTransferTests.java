@@ -18,12 +18,12 @@ public final class SyncTransferTests {
             if(args.length>0&&args[0].equals("bridge")){
                 BufferedReader input=new BufferedReader(new InputStreamReader(System.in,StandardCharsets.UTF_8));
                 for(String line;(line=input.readLine())!=null;){
-                    JSONObject result=transfer.handle(new JSONObject(line),request->request);
+                    JSONObject result=transfer.handle(new JSONObject(line),(request,response)->Files.copy(request.toPath(),response.toPath(),java.nio.file.StandardCopyOption.REPLACE_EXISTING));
                     System.out.println(result.toString());
                 }
                 return;
             }
-            int[] commits={0};SyncTransfer.Exchange exchange=request->{commits[0]++;return request;};
+            int[] commits={0};SyncTransfer.Exchange exchange=(request,response)->{commits[0]++;Files.copy(request.toPath(),response.toPath(),java.nio.file.StandardCopyOption.REPLACE_EXISTING);};
             rejects(()->transfer.handle(op("begin").put("length",SyncTransfer.MAXIMUM_SIZE+1),exchange));
             transfer.handle(op("begin").put("length",100),exchange);
             rejects(()->transfer.handle(op("exchange"),exchange));check(commits[0]==0,"incomplete upload committed");

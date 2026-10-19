@@ -21,25 +21,55 @@ public final class SyncLedger {
         return o instanceof String ? JSONObject.quote((String)o) : String.valueOf(o);
     }
     static JSONObject payload(JSONObject row)throws Exception{return new JSONObject(new String(Base64.getDecoder().decode(row.getString("payload")),StandardCharsets.UTF_8));}
+    // Preserve payload strings when copying headers or rows; never serialize the whole ledger.
+    static JSONObject shallowCopy(JSONObject object)throws Exception{
+        JSONObject copy=new JSONObject();Iterator<String> keys=object.keys();
+        while(keys.hasNext()){String key=keys.next();copy.put(key,object.get(key));}return copy;
+    }
+    public JSONObject metadata()throws Exception{
+        JSONObject result=new JSONObject();Iterator<String> keys=value.keys();
+        while(keys.hasNext()){String key=keys.next();if(!key.equals("records"))result.put(key,value.get(key));}return result;
+    }
+    static boolean equivalent(Object left,Object right)throws Exception{
+        if(left==right)return true;
+        if(left instanceof JSONObject&&right instanceof JSONObject){
+            JSONObject a=(JSONObject)left,b=(JSONObject)right;if(a.length()!=b.length())return false;
+            Iterator<String> keys=a.keys();while(keys.hasNext()){String key=keys.next();if(!b.has(key)||!equivalent(a.get(key),b.get(key)))return false;}return true;
+        }
+        if(left instanceof JSONArray&&right instanceof JSONArray){
+            JSONArray a=(JSONArray)left,b=(JSONArray)right;if(a.length()!=b.length())return false;
+            for(int i=0;i<a.length();i++)if(!equivalent(a.get(i),b.get(i)))return false;return true;
+        }
+        if(left instanceof Number&&right instanceof Number)return new java.math.BigDecimal(left.toString()).compareTo(new java.math.BigDecimal(right.toString()))==0;
+        return Objects.equals(left,right);
+    }
     public void capture(JSONObject state)throws Exception{
-        state=new JSONObject(state.toString());Planner.removeArchivedCourses(state);
-        JSONObject desired=new JSONObject(),records=records();List<JSONObject> changes=new ArrayList<>();
+        Set<String> archived=new HashSet<>(),desired=new HashSet<>();
+        for(JSONObject course:Planner.list(state.getJSONArray("courses")))if(course.optBoolean("isArchived"))archived.add(course.getString("id"));
+        JSONObject records=records();List<JSONObject> changes=new ArrayList<>();
         for(String kind:KINDS){List<JSONObject> values=kind.equals("settings")?Collections.singletonList(state.getJSONObject(kind)):Planner.list(state.getJSONArray(kind));
-            for(JSONObject source:values){JSONObject data=new JSONObject(source.toString());
+            for(JSONObject source:values){
+                if(archived.contains(source.optString(kind.equals("courses")?"id":"courseID")))continue;
+                JSONObject data=shallowCopy(source);
                 if(kind.equals("completions"))data.put("id",Planner.stableID("completion|"+data.getString("taskID")));
                 if(kind.equals("fixedEvents"))for(String field:new String[]{"weekdays","excludedDates"}){JSONArray a=data.optJSONArray(field);if(a!=null){List<Double> items=new ArrayList<>();for(int i=0;i<a.length();i++)items.add(a.getDouble(i));Collections.sort(items);data.put(field,new JSONArray(items));}}
-                String id=kind.equals("settings")?"settings":data.getString("id");JSONObject r=new JSONObject().put("kind",kind).put("id",id).put("deleted",false).put("payload",Base64.getEncoder().encodeToString(data.toString().getBytes(StandardCharsets.UTF_8)));String k=key(r);desired.put(k,r);JSONObject old=records.optJSONObject(k);if(old==null||old.getBoolean("deleted")||!canonical(payload(old)).equals(canonical(data)))changes.add(r);}}
-        Iterator<String> it=records.keys();while(it.hasNext()){String k=it.next();JSONObject old=records.getJSONObject(k);if(!desired.has(k)&&!old.getBoolean("deleted"))changes.add(new JSONObject(old.toString()).put("deleted",true));}
+                String id=kind.equals("settings")?"settings":data.getString("id"),k=kind+"/"+id;desired.add(k);
+                JSONObject old=records.optJSONObject(k);
+                if(old!=null&&!old.getBoolean("deleted")&&equivalent(payload(old),data))continue;
+                changes.add(new JSONObject().put("kind",kind).put("id",id).put("deleted",false).put("payload",Base64.getEncoder().encodeToString(data.toString().getBytes(StandardCharsets.UTF_8))));
+            }
+        }
+        Iterator<String> it=records.keys();while(it.hasNext()){String k=it.next();JSONObject old=records.getJSONObject(k);if(!desired.contains(k)&&!old.getBoolean("deleted"))changes.add(shallowCopy(old).put("deleted",true));}
         if(changes.isEmpty())return;long clock=value.getLong("clock")+1;value.put("clock",clock);changes.sort(Comparator.comparing(r->r.optString("kind")+"/"+r.optString("id")));
         for(JSONObject r:changes){long seq=sequence()+1;value.put("sequence",seq);r.put("version",clock).put("device",value.getString("device")).put("sequence",seq);records.put(key(r),r);}
     }
     public JSONArray changes(long after)throws Exception{if(after<0||after>sequence())throw new IllegalArgumentException("游标无效，请重新配对");List<JSONObject> out=new ArrayList<>();Iterator<String> it=records().keys();while(it.hasNext()){JSONObject r=records().getJSONObject(it.next());if(r.getLong("sequence")>after)out.add(r);}out.sort(Comparator.comparingLong(r->r.optLong("sequence")));return new JSONArray(out);}
-    public void merge(JSONArray incoming)throws Exception{
-        for(JSONObject item:Planner.list(incoming)){JSONObject r=new JSONObject(item.toString());String kind=r.getString("kind"),id=r.getString("id");long v=r.getLong("version");
-            if(!Arrays.asList(KINDS).contains(kind)||v<=0||v>Long.MAX_VALUE-1000000||r.getString("device").isEmpty()||r.getString("device").length()>64||r.getString("payload").length()>1400000)throw new IllegalArgumentException("同步记录无效");
-            if(kind.equals("settings")?!id.equals("settings"):!UUID.fromString(id).toString().toUpperCase(Locale.ROOT).equals(id))throw new IllegalArgumentException("同步 ID 无效");
-            value.put("clock",Math.max(value.getLong("clock"),v));JSONObject old=records().optJSONObject(key(r));if(old!=null&&!wins(r,old))continue;long seq=sequence()+1;value.put("sequence",seq);r.put("sequence",seq);records().put(key(r),r);
-        }
+    public void merge(JSONArray incoming)throws Exception{for(int i=0;i<incoming.length();i++)mergeRecord(incoming.getJSONObject(i));}
+    void mergeRecord(JSONObject item)throws Exception{
+        JSONObject r=shallowCopy(item);String kind=r.getString("kind"),id=r.getString("id");long v=r.getLong("version");
+        if(!Arrays.asList(KINDS).contains(kind)||v<=0||v>Long.MAX_VALUE-1000000||r.getString("device").isEmpty()||r.getString("device").length()>64||r.getString("payload").length()>1400000)throw new IllegalArgumentException("同步记录无效");
+        if(kind.equals("settings")?!id.equals("settings"):!UUID.fromString(id).toString().toUpperCase(Locale.ROOT).equals(id))throw new IllegalArgumentException("同步 ID 无效");
+        value.put("clock",Math.max(value.getLong("clock"),v));JSONObject old=records().optJSONObject(key(r));if(old!=null&&!wins(r,old))return;long seq=sequence()+1;value.put("sequence",seq);r.put("sequence",seq);records().put(key(r),r);
     }
     public JSONObject materialize()throws Exception{
         JSONObject s=new JSONObject().put("schemaVersion",1);for(String kind:KINDS)if(!kind.equals("settings"))s.put(kind,new JSONArray());

@@ -7,7 +7,15 @@ import java.util.regex.*;
 
 /** Course/lesson operations use the same Codable fields as the Mac. */
 public final class CourseTools {
-    static JSONObject copy(JSONObject value)throws Exception{return new JSONObject(value.toString());}
+    static JSONObject copy(JSONObject value)throws Exception{
+        JSONObject result=new JSONObject();Iterator<String> keys=value.keys();
+        while(keys.hasNext()){String key=keys.next();result.put(key,copyValue(value.get(key)));}return result;
+    }
+    static Object copyValue(Object value)throws Exception{
+        if(value instanceof JSONObject)return copy((JSONObject)value);
+        if(value instanceof JSONArray){JSONArray source=(JSONArray)value,result=new JSONArray();for(int i=0;i<source.length();i++)result.put(copyValue(source.get(i)));return result;}
+        return value;
+    }
     static int chinese(String text){String digits="零一二三四五六七八九";int total=0,pending=0;for(char c:text.toCharArray()){int n=digits.indexOf(c);if(c=='〇')n=0;if(c=='两')n=2;if(n>=0)pending=n;else{total+=Math.max(1,pending)*(c=='百'?100:10);pending=0;}}return total+pending;}
     static class SortKey {
         List<String> numbers=new ArrayList<>();String text;int part;
