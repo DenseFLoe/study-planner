@@ -52,6 +52,8 @@ public struct Course: Identifiable, Codable, Equatable, Sendable {
     public var lessonOrder: [String]?
     /// nil marks data saved before website-order tracking; false follows the website on refresh.
     public var lessonOrderCustomized: Bool?
+    /// Explicit lesson deletions survive website refreshes and late peer confirmations.
+    public var deletedLessonIDs: [String]?
     /// Original courses retained so merging preserves source metadata and progress semantics.
     public var mergedSources: [Course]?
     public init(name: String, totalMinutes: Int, startDate: Date, deadline: Date, minimumBlockMinutes: Int = 60) {

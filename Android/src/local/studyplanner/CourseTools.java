@@ -38,5 +38,67 @@ public final class CourseTools {
         for(JSONObject task:Planner.list(state.getJSONArray("tasks")))if(ids.contains(task.getString("courseID")))task.put("lessonID",task.getString("courseID")+"/"+task.optString("lessonID","whole")).put("courseID",merged.getString("id"));for(JSONObject record:Planner.list(state.getJSONArray("completions")))if(ids.contains(record.getString("courseID")))record.put("courseID",merged.getString("id"));
         JSONArray courses=new JSONArray();for(JSONObject course:Planner.list(state.getJSONArray("courses")))if(!ids.contains(course.getString("id")))courses.put(course);courses.put(merged);state.put("courses",courses);return merged;
     }
+    static Set<String> deletedIDs(JSONObject course)throws Exception {
+        Set<String> ids=new HashSet<>();JSONArray raw=course.optJSONArray("deletedLessonIDs");
+        if(raw!=null)for(int i=0;i<raw.length();i++)ids.add(raw.getString(i));return ids;
+    }
+    public static void removeLessons(JSONObject state,String courseID,Set<String> ids)throws Exception {
+        JSONObject next=copy(state),course=Planner.course(next,courseID);
+        if(course==null||course.optBoolean("isArchived"))throw new IllegalArgumentException("课程已不存在，请重新打开。");
+        Set<String> known=new HashSet<>(order(course));
+        if(!"不定时录播课程".equals(course.optString("type"))||ids.isEmpty()||!known.containsAll(ids))throw new IllegalArgumentException("请选择现有课节后重试。");
+        if(ids.equals(known))throw new IllegalArgumentException("请至少保留一节课；删除整门课程请使用「删除课程」。");
+        Map<String,JSONObject> taskByID=new HashMap<>();for(JSONObject task:Planner.list(next.getJSONArray("tasks")))if(task.optString("courseID").equals(courseID))taskByID.put(task.getString("id"),task);
+        for(JSONObject record:Planner.list(next.getJSONArray("completions")))if(record.optString("courseID").equals(courseID)){
+            JSONObject task=taskByID.get(record.optString("taskID"));if(task==null||!known.contains(task.optString("lessonID")))throw new IllegalArgumentException("部分旧完成记录没有课节标识，暂不能安全删除部分课节。");
+        }
+        Planner.put(next.getJSONArray("courses"),removingLessons(next,course,ids));purgeDeletedLessonRecords(next,Collections.emptyList());
+        for(String key:new String[]{"courses","tasks","completions"})state.put(key,next.get(key));
+    }
+    static JSONObject sourceState(JSONObject state,JSONObject source,JSONObject parent)throws Exception {
+        JSONObject subset=copy(state);JSONArray tasks=new JSONArray(),records=new JSONArray();Set<String> taskIDs=new HashSet<>();String prefix=source.getString("id")+"/";
+        for(JSONObject task:Planner.list(state.getJSONArray("tasks")))if(task.optString("courseID").equals(parent.getString("id"))&&task.optString("lessonID").startsWith(prefix)){
+            JSONObject t=copy(task);t.put("courseID",source.getString("id")).put("lessonID",task.getString("lessonID").substring(prefix.length()));tasks.put(t);taskIDs.add(t.getString("id"));
+        }
+        for(JSONObject record:Planner.list(state.getJSONArray("completions")))if(record.optString("courseID").equals(parent.getString("id"))&&taskIDs.contains(record.optString("taskID")))records.put(copy(record).put("courseID",source.getString("id")));
+        return subset.put("tasks",tasks).put("completions",records).put("courses",new JSONArray().put(copy(source)));
+    }
+    static JSONObject removingLessons(JSONObject state,JSONObject course,Set<String> ids)throws Exception {
+        JSONObject updated=copy(course);JSONArray sources=course.optJSONArray("mergedSources"),manual=course.optJSONArray("manualLessons");JSONObject web=course.optJSONObject("webCourse");
+        if(sources!=null){
+            JSONArray retained=new JSONArray();int total=0,initial=0;
+            for(JSONObject source:Planner.list(sources)){
+                String prefix=source.getString("id")+"/";Set<String> selected=new HashSet<>();for(String id:ids)if(id.startsWith(prefix))selected.add(id.substring(prefix.length()));
+                JSONObject keep=copy(source);if(!selected.isEmpty()){
+                    Set<String> known=new HashSet<>(order(source));if(known.isEmpty())known.add("whole");if(selected.equals(known))continue;
+                    keep=removingLessons(sourceState(state,source,course),source,selected);
+                }
+                retained.put(keep);total+=keep.getInt("totalMinutes");initial+=keep.optInt("initialCompletedMinutes");
+            }
+            updated.put("mergedSources",retained).put("totalMinutes",total).put("initialCompletedMinutes",initial);
+        }else if(web!=null){
+            JSONObject snapshot=copy(web),subset=copy(state);JSONArray lessons=new JSONArray();for(JSONObject lesson:Planner.list(snapshot.getJSONArray("lessons")))if(!ids.contains(lesson.getString("id")))lessons.put(lesson);snapshot.put("lessons",lessons);snapshot.remove("netdisk");
+            JSONArray tasks=new JSONArray(),records=new JSONArray();Set<String> removed=new HashSet<>();for(JSONObject task:Planner.list(subset.getJSONArray("tasks")))if(task.optString("courseID").equals(course.getString("id"))&&ids.contains(task.optString("lessonID")))removed.add(task.getString("id"));else tasks.put(task);
+            for(JSONObject record:Planner.list(subset.getJSONArray("completions")))if(!removed.contains(record.optString("taskID")))records.put(record);
+            subset.put("tasks",tasks).put("completions",records).put("courses",new JSONArray().put(copy(course)));double now=Planner.now();WebCourseImport.save(subset,Collections.singletonList(snapshot),Math.max(now,course.getDouble("deadline")),now);updated=subset.getJSONArray("courses").getJSONObject(0);
+        }else if(manual!=null){
+            int baseline=Math.max(0,course.optInt("initialCompletedMinutes")),removedBaseline=0,total=0;JSONArray retained=new JSONArray();
+            for(JSONObject lesson:Planner.list(manual)){int credit=Math.min(baseline,lesson.getInt("durationMinutes"));baseline-=credit;if(ids.contains(lesson.getString("id")))removedBaseline+=credit;else{retained.put(lesson);total+=lesson.getInt("durationMinutes");}}
+            updated.put("manualLessons",retained).put("totalMinutes",total).put("initialCompletedMinutes",Math.max(0,course.optInt("initialCompletedMinutes")-removedBaseline));
+        }else throw new IllegalArgumentException("这门课程没有可删除的独立课节。");
+        Set<String> deleted=deletedIDs(course);deleted.addAll(ids);updated.put("deletedLessonIDs",new JSONArray(new TreeSet<>(deleted)));
+        JSONArray order=updated.optJSONArray("lessonOrder");if(order!=null){JSONArray retained=new JSONArray();for(int i=0;i<order.length();i++)if(!ids.contains(order.getString(i)))retained.put(order.getString(i));updated.put("lessonOrder",retained);}
+        for(String key:new String[]{"netdiskLessons","webCompletionOverlaps"}){JSONObject values=updated.optJSONObject(key);if(values!=null)for(String id:ids)values.remove(id);}
+        return updated;
+    }
+    static Set<String> allDeletedIDs(JSONObject course)throws Exception {
+        Set<String> ids=deletedIDs(course);JSONArray sources=course.optJSONArray("mergedSources");if(sources!=null)for(JSONObject source:Planner.list(sources))for(String id:allDeletedIDs(source))ids.add(source.getString("id")+"/"+id);return ids;
+    }
+    static void purgeDeletedLessonRecords(JSONObject state,Collection<JSONObject> additionalTasks)throws Exception {
+        Map<String,Set<String>> deleted=new HashMap<>();for(JSONObject course:Planner.list(state.getJSONArray("courses")))deleted.put(course.getString("id"),allDeletedIDs(course));
+        List<JSONObject> all=new ArrayList<>(Planner.list(state.getJSONArray("tasks")));all.addAll(additionalTasks);Set<String> removed=new HashSet<>();
+        for(JSONObject task:all)if(deleted.getOrDefault(task.optString("courseID"),Collections.emptySet()).contains(task.optString("lessonID")))removed.add(task.getString("id"));
+        for(String key:new String[]{"tasks","completions"}){JSONArray retained=new JSONArray();for(JSONObject row:Planner.list(state.getJSONArray(key)))if(!removed.contains(row.optString(key.equals("tasks")?"id":"taskID")))retained.put(row);state.put(key,retained);}
+    }
     public static List<JSONObject> preview(JSONObject state,JSONObject course,double now)throws Exception {JSONObject next=copy(state);Planner.put(next.getJSONArray("courses"),copy(course));Planner.replan(next,now);List<JSONObject> tasks=new ArrayList<>();for(JSONObject task:Planner.list(next.getJSONArray("tasks")))if(task.optString("courseID").equals(course.getString("id"))&&Planner.pending(task))tasks.add(task);return tasks;}
 }

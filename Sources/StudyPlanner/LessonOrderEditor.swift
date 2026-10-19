@@ -9,6 +9,8 @@ struct LessonOrderEditor: View {
     @State private var selected = Set<String>()
     @State private var destination = 1
     @State private var message = ""
+    @State private var deleted = Set<String>()
+    @State private var deletePrompt = false
 
     init(store: PlannerStore, course: Course) {
         self.store = store
@@ -19,16 +21,13 @@ struct LessonOrderEditor: View {
     private var originalOrder: [String] { store.state.lessonWorkItems(for: course).map(\.id) }
     private var websiteOrder: [String]? {
         guard let website = course.webCourse else { return nil }
-        return LessonOrdering.resolved(ids: originalOrder, preferred: website.lessons.map(\.id))
+        return LessonOrdering.resolved(ids: originalOrder, preferred: website.lessons.map(\.id)).filter { !deleted.contains($0) }
     }
-    private var editedCourse: Course {
-        var copy = store.course(course.id) ?? course
-        copy.lessonOrder = order
-        return copy
-    }
+    private var editedCourse: Course { previewState.courses.first { $0.id == course.id } ?? course }
     private var previewState: PlannerState {
         var copy = store.state
-        if let index = copy.courses.firstIndex(where: { $0.id == course.id }) { copy.courses[index] = editedCourse }
+        if !deleted.isEmpty { try? copy.removeLessons(courseID: course.id, ids: deleted) }
+        if let index = copy.courses.firstIndex(where: { $0.id == course.id }) { copy.courses[index].lessonOrder = order }
         return copy
     }
     private var lessons: [LessonWorkItem] { previewState.lessonWorkItems(for: editedCourse) }
@@ -37,7 +36,7 @@ struct LessonOrderEditor: View {
         VStack(alignment: .leading, spacing: 15) {
             HStack {
                 VStack(alignment: .leading, spacing: 4) {
-                    Text("调整课节学习顺序").font(.title2.bold())
+                    Text("调整课节顺序与删除").font(.title2.bold())
                     Text(course.name).font(.callout).foregroundStyle(.secondary)
                 }
                 Spacer()
@@ -45,8 +44,8 @@ struct LessonOrderEditor: View {
             }
             HStack(alignment: .top, spacing: 18) {
                 VStack(alignment: .leading, spacing: 11) {
-                    Text("选择要一起移动的课节").font(.headline)
-                    Text("按左侧顺序学习。已看完和正在进行的课节保留原记录。")
+                    Text("选择要移动或删除的课节").font(.headline)
+                    Text("可多选课节调整顺序或删除。删除会清除所选课节的安排和完成记录。")
                         .font(.caption).foregroundStyle(.secondary)
                     ScrollView {
                         LazyVStack(spacing: 5) {
@@ -75,6 +74,7 @@ struct LessonOrderEditor: View {
                         Text("已选 \(selected.count) 节")
                             .font(.caption).foregroundStyle(.secondary)
                         Spacer()
+                        Button("删除所选课节", role: .destructive) { deletePrompt = true }.disabled(selected.isEmpty)
                         Button("移到最前") { move(before: 0) }.disabled(selected.isEmpty)
                         Button("移到最后") { move(before: order.count) }.disabled(selected.isEmpty)
                     }
@@ -103,14 +103,15 @@ struct LessonOrderEditor: View {
             }
             if !message.isEmpty { Text(message).font(.caption).foregroundStyle(.red) }
             HStack {
-                Text("保存后会重新安排尚未开始的任务。")
+                Text(deleted.isEmpty ? "保存后会重新安排未确认任务。" : "待删除 \(deleted.count) 节；保存后生效，并重新排程。")
                     .font(.caption).foregroundStyle(.secondary)
                 Spacer()
                 Button("取消") { dismiss() }.keyboardShortcut(.cancelAction)
-                Button("保存顺序并重新排程") {
+                Button("保存并重新排程") {
                     let updatedOrder = order
                     let followsWebsite = websiteOrder == updatedOrder
                     if store.change({ state in
+                        if !deleted.isEmpty { try state.removeLessons(courseID: course.id, ids: deleted) }
                         guard let index = state.courses.firstIndex(where: { $0.id == course.id && !$0.isArchived }) else {
                             throw WebCourseImportError.invalid("课程已不存在，请重新打开。")
                         }
@@ -121,22 +122,37 @@ struct LessonOrderEditor: View {
                 }
                 .buttonStyle(.borderedProminent)
                 .keyboardShortcut(.defaultAction)
-                .disabled(order == originalOrder)
+                .disabled(order == originalOrder && deleted.isEmpty)
             }
+        }
+        .confirmationDialog("删除所选的 \(selected.count) 节课？", isPresented: $deletePrompt, titleVisibility: .visible) {
+            Button("删除所选课节", role: .destructive) {
+                do {
+                    let next = deleted.union(selected)
+                    var check = store.state
+                    try check.removeLessons(courseID: course.id, ids: next)
+                    deleted = next
+                    order.removeAll { selected.contains($0) }
+                    selected.removeAll()
+                    message = ""
+                } catch { message = error.localizedDescription }
+            }
+            Button("取消", role: .cancel) {}
+        } message: {
+            Text("保存后将删除这些课节的全部安排和完成记录，重算总学习量，并保留其他课节。取消或关闭窗口不会保存删除。请至少保留一节。")
         }
         .padding(22)
         .frame(width: 940, height: 690)
     }
 
     private func lessonRow(_ lesson: LessonWorkItem, number: Int) -> some View {
-        let movable = lesson.remainingMinutes > 0
         return Button {
             if selected.contains(lesson.id) { selected.remove(lesson.id) }
             else { selected.insert(lesson.id) }
         } label: {
             HStack(spacing: 9) {
-                Image(systemName: movable ? (selected.contains(lesson.id) ? "checkmark.square.fill" : "square") : "lock.fill")
-                    .foregroundStyle(movable ? Color.accentColor : .secondary)
+                Image(systemName: selected.contains(lesson.id) ? "checkmark.square.fill" : "square")
+                    .foregroundStyle(Color.accentColor)
                     .frame(width: 20)
                 Text("\(number).").font(.caption.monospacedDigit()).foregroundStyle(.secondary)
                 VStack(alignment: .leading, spacing: 2) {
@@ -156,7 +172,6 @@ struct LessonOrderEditor: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .disabled(!movable)
     }
 
     private func move(before index: Int) {

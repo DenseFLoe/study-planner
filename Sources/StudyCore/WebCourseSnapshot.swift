@@ -237,10 +237,15 @@ extension PlannerState {
         }
         var next = courses
         for snapshot in snapshots {
+            guard snapshot.importProblem == nil else {
+                throw WebCourseImportError.invalid(snapshot.name + "：" + snapshot.importProblem!)
+            }
             let matches = next.indices.filter { next[$0].webCourse?.packageID == snapshot.packageID }
             guard matches.count <= 1 else { throw WebCourseImportError.invalid("已有多个课程绑定同一课程包，请先整理重复课程。") }
             let index = matches.first
             let course = index.map { next[$0] } ?? Course(name: snapshot.name, totalMinutes: 1, startDate: now, deadline: deadline)
+            var snapshot = snapshot
+            snapshot.lessons.removeAll { course.deletedLessonIDs?.contains($0.id) == true }
             let logged = completions.filter { $0.courseID == course.id }.reduce(0) { $0 + $1.minutes }
             guard let updated = snapshot.applying(to: course, loggedMinutes: logged) else {
                 throw WebCourseImportError.invalid(snapshot.name + "：" + (snapshot.importProblem ?? "已有完成流水超过网站课程总量，需人工核对。"))

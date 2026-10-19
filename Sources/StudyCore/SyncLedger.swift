@@ -114,6 +114,7 @@ public struct SyncLedger: Codable, Sendable {
             try decoder.decode(ScheduledTask.self, from: $0.payload)
         }
         try state.reconcileMergedCourseProgress(deletedIDs: deletedIDs, deletedTasks: deletedTasks)
+        state.purgeDeletedLessonRecords(additionalTasks: deletedTasks)
         state.removeArchivedCourses()
         state.removeCourses(ids: deletedIDs)
         let ids = Set(state.courses.map(\.id))

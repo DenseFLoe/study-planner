@@ -50,6 +50,7 @@ public final class SyncLedger {
         Set<String> confirmationTasks=new HashSet<>();for(JSONObject record:Planner.list(s.getJSONArray("completions")))confirmationTasks.add(record.getString("taskID"));
         Map<String,JSONObject> deletedTasks=new HashMap<>();for(String k:keys){JSONObject row=records().getJSONObject(k);if(row.getString("kind").equals("tasks")&&row.getBoolean("deleted")&&confirmationTasks.contains(row.getString("id")))deletedTasks.put(row.getString("id"),payload(row));}
         Planner.reconcileMergedCourseProgress(s,deletedIDs,deletedTasks);
+        CourseTools.purgeDeletedLessonRecords(s,deletedTasks.values());
         Planner.removeArchivedCourses(s);Planner.removeCourses(s,deletedIDs);
         Planner.validate(s);return s;
     }
