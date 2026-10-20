@@ -128,7 +128,7 @@ final class PlannerStore {
         saveEvent(event, skippingDates: [])
     }
     @discardableResult
-    func saveEvent(_ event: FixedEvent, skippingDates: Set<Date>) -> Bool {
+    func saveEvent(_ event: FixedEvent, skippingDates: Set<Date>, skippingExistingDates: Set<Date> = []) -> Bool {
         guard !syncBusy else { errorMessage = "正在同步，请等待完成后再保存修改。"; return false }
         guard !orderSaveBusy else { errorMessage = "正在保存课程顺序，请稍后再试。"; return false }
         guard let repository, isReady else { return false }
@@ -136,7 +136,7 @@ final class PlannerStore {
         errorMessage = nil
         do {
             var next = state
-            try next.updateFixedEvent(event, now: Date(), skippingDates: skippingDates)
+            try next.updateFixedEvent(event, now: Date(), skippingDates: skippingDates, skippingExistingDates: skippingExistingDates)
             let planned = next.replan(now: Date())
             try repository.save(next)
             state = next; result = planned

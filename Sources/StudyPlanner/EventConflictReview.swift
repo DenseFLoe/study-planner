@@ -1,16 +1,21 @@
 import SwiftUI
 import StudyCore
 
+private enum ConflictChoice: Int {
+    case unresolved, skipNew, skipLocal
+}
+
 struct EventConflictReview: View {
     @Bindable var store: PlannerStore
     var event: FixedEvent
     var onSaved: () -> Void
     @Environment(\.dismiss) private var dismiss
-    @State private var skipped: Set<Date> = []
+    @State private var choices: [Date: ConflictChoice] = [:]
     @State private var message = ""
     @State var conflicts: [FixedEventConflict]
     private var dates: [Date] { Array(Set(conflicts.map(\.date))).sorted() }
-    private var remaining: Int { Set(dates).subtracting(skipped).count }
+    private var remaining: Int { dates.filter { choices[$0, default: .unresolved] == .unresolved }.count }
+    private var canSkipAllLocal: Bool { !conflicts.contains { $0.reason == .activeTask } }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
@@ -19,41 +24,47 @@ struct EventConflictReview: View {
             Text("「\(event.title)」 · \(clockTime(event.startMinute))–\(clockTime(event.endMinute))" +
                  (event.isFloating ? " · 浮动占用 \(event.occupiedMinutes) 分钟" : ""))
                 .font(.headline)
-            Text("是否在冲突当天跳过这项安排？每一天可独立确认；同一天的冲突一起处理。已有事项及其他日期不受影响。")
+            Text("每个冲突日期可选择：跳过新课程，保留本地安排；或跳过当天冲突的本地固定事项，保留新课程。同一天的多个冲突一起处理。")
                 .font(.callout).foregroundStyle(.secondary)
             HStack {
                 Text("\(conflicts.count) 处冲突 · \(dates.count) 天 · \(remaining) 天未确认").font(.caption)
                 Spacer()
-                Button("清除选择") { skipped = [] }.disabled(skipped.isEmpty)
+                Button("清除选择") { choices = [:] }.disabled(choices.isEmpty)
             }
             ScrollView {
                 LazyVStack(spacing: 12) {
                     ForEach(dates, id: \.self) { day in
                         ConflictDayCard(day: day, conflicts: conflicts.filter { $0.date == day },
-                                        selected: Binding(get: { skipped.contains(day) }, set: { value in
-                            if value { skipped.insert(day) } else { skipped.remove(day) }
-                        }))
+                                        choice: Binding(get: { choices[day, default: .unresolved] },
+                                                        set: { choices[day] = $0 }))
                     }
                 }.padding(2)
             }
             if event.weekdays.isEmpty {
-                Text("这是单次事项；跳过这一天后，该事项不会产生安排。").font(.caption).foregroundStyle(.orange)
+                Text("这是单次事项；选择跳过新课程后，该事项不会产生安排。").font(.caption).foregroundStyle(.orange)
             }
             if !message.isEmpty { Text(message).font(.caption).foregroundStyle(.red) }
-            Text(remaining > 0 ? "尚有冲突未确认。可逐日选择跳过，或返回修改时间。" : "保存后会跳过已确认日期，并重新安排学习任务。")
+            Text(remaining > 0 ? "请为每个冲突日期选择处理方式，或返回修改时间。" : "保存后按所选方式跳过当天安排，并重新安排学习任务。其他日期保留。")
                 .font(.caption).foregroundStyle(.secondary)
             HStack {
                 Button("返回修改") { dismiss() }.keyboardShortcut(.cancelAction)
                 Spacer()
-                Button("全部跳过并保存") { skipped.formUnion(dates); save() }
-                    .disabled(dates.isEmpty)
-                Button("保存已确认的选择") { save() }
+                Button("全部跳过新课程并保存") { chooseAll(.skipNew) }.disabled(dates.isEmpty)
+                Button("全部跳过本地并保存") { chooseAll(.skipLocal) }
+                    .disabled(dates.isEmpty || !canSkipAllLocal)
+                Button("保存选择") { save() }
                     .buttonStyle(.borderedProminent).disabled(remaining > 0 || dates.isEmpty)
             }
-        }.padding(24).frame(width: 680, height: 650)
+        }.padding(24).frame(width: 780, height: 680)
+    }
+    private func chooseAll(_ choice: ConflictChoice) {
+        for day in dates { choices[day] = choice }
+        save()
     }
     private func save() {
-        if store.saveEvent(event, skippingDates: skipped) {
+        let skipped = Set(choices.filter { $0.value == .skipNew }.map(\.key))
+        let skippedLocal = Set(choices.filter { $0.value == .skipLocal }.map(\.key))
+        if store.saveEvent(event, skippingDates: skipped, skippingExistingDates: skippedLocal) {
             dismiss()
             onSaved()
         } else {
@@ -63,25 +74,30 @@ struct EventConflictReview: View {
     }
 }
 
-
 private struct ConflictDayCard: View {
     var day: Date
     var conflicts: [FixedEventConflict]
-    @Binding var selected: Bool
-    private var tint: Color { selected ? .teal : .orange }
+    @Binding var choice: ConflictChoice
+    private var tint: Color { choice == .unresolved ? .orange : .teal }
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            HStack {
-                Text(day.formatted(.dateTime.year().month().day().weekday())).font(.headline)
-                Spacer()
-                Toggle(selected ? "已确认跳过" : "跳过这一天", isOn: $selected).toggleStyle(.checkbox)
-            }
+            Text(day.formatted(.dateTime.year().month().day().weekday())).font(.headline)
             ForEach(conflicts) { conflict in
                 VStack(alignment: .leading, spacing: 5) {
-                    Text("与「\(conflict.title)」冲突").fontWeight(.medium)
+                    Text("与本地「\(conflict.title)」冲突").fontWeight(.medium)
                     Text(conflict.timeDescription).monospacedDigit()
                     Text(conflict.explanation).foregroundStyle(.secondary)
                 }.font(.callout).frame(maxWidth: .infinity, alignment: .leading)
+            }
+            Picker("处理方式", selection: $choice) {
+                Text("请选择").tag(ConflictChoice.unresolved)
+                Text("跳过新课程（不植入）").tag(ConflictChoice.skipNew)
+                if !conflicts.contains(where: { $0.reason == .activeTask }) {
+                    Text("跳过本地固定事项").tag(ConflictChoice.skipLocal)
+                }
+            }.pickerStyle(.segmented)
+            if choice == .skipLocal {
+                Text("仅跳过上列本地事项在当天的安排，可在主页恢复。").font(.caption).foregroundStyle(.secondary)
             }
         }
         .padding(16)

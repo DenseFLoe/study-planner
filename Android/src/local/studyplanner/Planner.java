@@ -252,6 +252,20 @@ public final class Planner {
         StringBuilder out=new StringBuilder();for(EventConflict c:conflicts){if(out.length()>0)out.append("\n");out.append(c.date).append(" · 「").append(c.title).append("」").append(c.timeDescription()).append("；").append(c.explanation());}return out.toString();
     }
     public static void saveEvent(JSONObject s,JSONObject event,double now)throws Exception{saveEvent(s,event,now,Collections.emptySet());}
+    public static void saveEvent(JSONObject s,JSONObject event,double now,Set<LocalDate> skippingDates,Set<LocalDate> skippingExistingDates)throws Exception{
+        if(skippingExistingDates.isEmpty()){saveEvent(s,event,now,skippingDates);return;}
+        // Validate and resolve on copies; no local cancellation survives a failed save.
+        JSONObject next=new JSONObject(s.toString()),draft=new JSONObject(event.toString());
+        Set<LocalDate> localDates=new HashSet<>(skippingExistingDates);localDates.removeAll(skippingDates);
+        try{saveEvent(new JSONObject(s.toString()),new JSONObject(event.toString()),now,skippingDates);}
+        catch(EventConflictException error){
+            for(EventConflict conflict:error.conflicts)if(localDates.contains(conflict.date)&&!conflict.reason.equals("active"))
+                setEventSkipped(next,conflict.eventID,conflict.date,true,now);
+        }
+        saveEvent(next,draft,now,skippingDates);
+        s.put("fixedEvents",next.getJSONArray("fixedEvents"));
+        event.put("id",draft.get("id")).put("startDate",draft.get("startDate")).put("excludedDates",draft.get("excludedDates"));
+    }
     public static void saveEvent(JSONObject s,JSONObject event,double now,Set<LocalDate> skippingDates)throws Exception{
         JSONObject input=event; event=new JSONObject(event.toString());
         Set<LocalDate> excluded=new TreeSet<>(skippingDates);JSONArray oldExcluded=event.optJSONArray("excludedDates");

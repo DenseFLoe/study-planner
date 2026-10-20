@@ -266,7 +266,27 @@ public struct PlannerState: Codable, Equatable, Sendable {
     }
 
     /// Keep recurring rules for past dates and today's already-started occurrence intact.
-    public mutating func updateFixedEvent(_ event: FixedEvent, now: Date, calendar: Calendar = .current, skippingDates: Set<Date> = []) throws {
+    public mutating func updateFixedEvent(_ event: FixedEvent, now: Date, calendar: Calendar = .current,
+                                         skippingDates: Set<Date> = [], skippingExistingDates: Set<Date> = []) throws {
+        if !skippingExistingDates.isEmpty {
+            // Resolve on a copy so an unhandled date or invalid edit cannot partially
+            // cancel local occurrences. Skipping the incoming item takes precedence.
+            var next = self
+            let localDates = Set(skippingExistingDates.map { calendar.startOfDay(for: $0) })
+                .subtracting(skippingDates.map { calendar.startOfDay(for: $0) })
+            var probe = self
+            do {
+                try probe.updateFixedEvent(event, now: now, calendar: calendar, skippingDates: skippingDates)
+            } catch let PlannerError.fixedConflict(conflicts) {
+                for conflict in conflicts where localDates.contains(conflict.date) && conflict.reason != .activeTask {
+                    try next.setFixedEventSkipped(id: conflict.eventID, on: conflict.date, skipped: true,
+                                                  now: now, calendar: calendar)
+                }
+            }
+            try next.updateFixedEvent(event, now: now, calendar: calendar, skippingDates: skippingDates)
+            self = next
+            return
+        }
         guard event.startMinute >= 0, event.endMinute <= 1440, event.startMinute < event.endMinute,
               event.validDuration, event.weekdays.allSatisfy({ (1...7).contains($0) }) else { throw PlannerError.invalidFixedEvent }
         let today = calendar.startOfDay(for: now)
