@@ -643,6 +643,10 @@ struct MainView: View {
                         .buttonStyle(SoftButtonStyle(prominent: true))
                 }
 
+                FixedEventRecognitionCard { event in
+                    sheet = .fixed(event)
+                }
+
                 ForEach(store.state.fixedEvents.sorted { $0.startDate < $1.startDate }) { event in
                     FixedEventListRow(
                         event: event,
