@@ -53,7 +53,7 @@ public class CourseImportActivity extends Activity {
         netdisk = "netdisk".equals(getIntent().getStringExtra("mode"));
         try { for (String name : new String[]{"CourseCrawler", "GenericCrawler", "XuechengCrawler", "XuechengReplay", "QuarkCrawler", "QuarkScan"}) scripts.put(name, MainActivity.read(getAssets().open("crawlers/"+name+".js"))); }
         catch (Exception error) { finish(); return; }
-        root = column(); root.setPadding(dp(12),dp(8),dp(12),dp(8)); root.setFitsSystemWindows(true); root.setBackgroundColor(0xfff5f7fb);ScrollView content=new ScrollView(this);content.setFillViewport(true);content.addView(root);setContentView(content);
+        root = column(); root.setPadding(dp(12),dp(8),dp(12),dp(8)); root.setFitsSystemWindows(true); root.setBackgroundColor(0xffededed);ScrollView content=new ScrollView(this);content.setFillViewport(true);content.addView(root);setContentView(content);
         root.addView(label(netdisk ? "夸克分享课程导入" : "网站课程导入",20));
         address = field(root,"HTTPS 网址",netdisk ? "https://pan.quark.cn/" : "https://www.kaoyanvip.cn/appmanage/my/mycourse",false);
         LinearLayout controls = row(); controls.addView(button("打开",()->open(address.getText().toString()))); controls.addView(button("默认地址",()->open(netdisk?"https://pan.quark.cn/":"https://www.kaoyanvip.cn/appmanage/my/mycourse"))); controls.addView(button("后退",()->{if(browser.canGoBack())browser.goBack();})); controls.addView(button("重新登录",this::resetSession)); controls.addView(button("关闭",this::finish)); root.addView(controls);
@@ -129,7 +129,7 @@ public class CourseImportActivity extends Activity {
     int dp(int value){return (int)(value*getResources().getDisplayMetrics().density+.5f);}
     LinearLayout column(){LinearLayout layout=new LinearLayout(this);layout.setOrientation(LinearLayout.VERTICAL);return layout;}
     LinearLayout row(){LinearLayout layout=new LinearLayout(this);layout.setOrientation(LinearLayout.HORIZONTAL);return layout;}
-    TextView label(String value,int size){TextView text=new TextView(this);text.setText(value);text.setTextSize(size);text.setTextColor(0xff1d2b3e);return text;}
+    TextView label(String value,int size){TextView text=new TextView(this);text.setText(value);text.setTextSize(size);text.setTextColor(0xff191919);return text;}
     Button button(String title,Runnable action){Button button=new Button(this);button.setText(title);button.setTextSize(12);button.setAllCaps(false);button.setMinWidth(0);button.setMinimumWidth(0);button.setOnClickListener(v->action.run());return button;}
     EditText field(LinearLayout parent,String hint,String value,boolean numeric){EditText input=new EditText(this);input.setHint(hint);input.setText(value);input.setTextSize(13);input.setSingleLine();if(numeric)input.setInputType(android.text.InputType.TYPE_CLASS_NUMBER);parent.addView(input,new LinearLayout.LayoutParams(parent.getOrientation()==LinearLayout.HORIZONTAL?0:-1,-2,parent.getOrientation()==LinearLayout.HORIZONTAL?1:0));return input;}
     @Override protected void onDestroy(){generation++;if(popup!=null)popup.dismiss();handler.removeCallbacksAndMessages(null);worker.shutdownNow();if(browser!=null){browser.stopLoading();browser.clearCache(true);browser.destroy();}if(replay!=null){replay.stopLoading();replay.destroy();}CookieManager.getInstance().removeAllCookies(null);WebStorage.getInstance().deleteAllData();super.onDestroy();}
