@@ -56,16 +56,38 @@ public class CourseImportActivity extends Activity {
         root = column(); root.setPadding(dp(12),dp(8),dp(12),dp(8)); root.setFitsSystemWindows(true); root.setBackgroundColor(0xffededed);ScrollView content=new ScrollView(this);content.setFillViewport(true);content.addView(root);setContentView(content);
         root.addView(label(netdisk ? "夸克分享课程导入" : "网站课程导入",20));
         address = field(root,"HTTPS 网址",netdisk ? "https://pan.quark.cn/" : "https://www.kaoyanvip.cn/appmanage/my/mycourse",false);
-        LinearLayout controls = row(); controls.addView(button("打开",()->open(address.getText().toString()))); controls.addView(button("默认地址",()->open(netdisk?"https://pan.quark.cn/":"https://www.kaoyanvip.cn/appmanage/my/mycourse"))); controls.addView(button("后退",()->{if(browser.canGoBack())browser.goBack();})); controls.addView(button("重新登录",this::resetSession)); controls.addView(button("关闭",this::finish)); root.addView(controls);
+        PlannerUi.Flow controls = new PlannerUi.Flow(this);
+        controls.addView(button("打开",()->open(address.getText().toString())));
+        controls.addView(button("默认地址",()->open(netdisk?"https://pan.quark.cn/":"https://www.kaoyanvip.cn/appmanage/my/mycourse")));
+        controls.addView(button("后退",()->{if(browser.canGoBack())browser.goBack();}));
+        controls.addView(button("重新登录",this::resetSession));
+        controls.addView(button("关闭",this::finish));
+        root.addView(controls);
         if (netdisk) { LinearLayout share = row(); passcode = field(share,"提取码（可留空）","",false); passcode.setInputType(android.text.InputType.TYPE_CLASS_TEXT | android.text.InputType.TYPE_TEXT_VARIATION_PASSWORD); folderLimit=field(share,"目录上限","60",true); fileLimit=field(share,"条目上限","2000",true); root.addView(share); }
         status=label("请在网页中登录并打开课程页面。关闭导入窗口后会清除本次登录会话。",12);root.addView(status);
         browser = webView(false); root.addView(browser,new LinearLayout.LayoutParams(-1,dp(320)));root.addView(button("展开 / 收起网页",()->browser.setVisibility(browser.getVisibility()==View.VISIBLE?View.GONE:View.VISIBLE)));
-        LinearLayout actions=row(); refreshButton=button(netdisk?"读取分享目录":"抓取 / 刷新课程",this::capture);actions.addView(refreshButton);autoRefresh=new CheckBox(this);autoRefresh.setText("每5分钟刷新");autoRefresh.setVisibility(netdisk?View.GONE:View.VISIBLE);actions.addView(autoRefresh);if(netdisk)actions.addView(button("分享目录",this::directory));root.addView(actions);
+        PlannerUi.Flow actions=new PlannerUi.Flow(this);
+        refreshButton=button(netdisk?"读取分享目录":"抓取 / 刷新课程",this::capture);
+        actions.addView(refreshButton);
+        autoRefresh=new CheckBox(this);
+        autoRefresh.setText("每5分钟刷新");
+        autoRefresh.setVisibility(netdisk?View.GONE:View.VISIBLE);
+        actions.addView(autoRefresh);
+        if(netdisk)actions.addView(button("分享目录",this::directory));
+        root.addView(actions);
         query=field(root,"搜索课程、课节或目录路径","",false);query.addTextChangedListener(new TextWatcher(){public void beforeTextChanged(CharSequence s,int start,int count,int after){}public void onTextChanged(CharSequence s,int start,int before,int count){renderResults();}public void afterTextChanged(Editable s){}});
-        LinearLayout selectActions=row();selectActions.addView(button("勾选搜索结果",()->selectMatches(true)));selectActions.addView(button("取消搜索结果",()->selectMatches(false)));root.addView(selectActions);ScrollView scroll=new ScrollView(this);results=column();scroll.addView(results);root.addView(scroll,new LinearLayout.LayoutParams(-1,dp(240)));
+        PlannerUi.Flow selectActions=new PlannerUi.Flow(this);
+        selectActions.addView(button("勾选搜索结果",()->selectMatches(true)));
+        selectActions.addView(button("取消搜索结果",()->selectMatches(false)));
+        root.addView(selectActions);ScrollView scroll=new ScrollView(this);results=column();scroll.addView(results);root.addView(scroll,new LinearLayout.LayoutParams(-1,dp(240)));
         LinearLayout options=row();deadline=field(options,"新课程截止日期",LocalDate.now(Planner.ZONE).plusMonths(3).toString(),false);deadline.setFocusable(false);deadline.setOnClickListener(v->{LocalDate date;try{date=LocalDate.parse(deadline.getText().toString());}catch(Exception e){date=LocalDate.now(Planner.ZONE);}new DatePickerDialog(this,(picker,y,m,d)->deadline.setText(LocalDate.of(y,m+1,d).toString()),date.getYear(),date.getMonthValue()-1,date.getDayOfMonth()).show();});root.addView(options);
         if(netdisk){mergeSelected=new CheckBox(this);mergeSelected.setText("将所选目录合为一门课程");root.addView(mergeSelected);mergedName=field(root,"合并名称","合并课程",false);}
-        LinearLayout bottom=row();bottom.addView(button("编排预览",this::preview));importButton=button("导入所选课程",this::deliver);importButton.setEnabled(false);bottom.addView(importButton);root.addView(bottom);
+        PlannerUi.Flow bottom=new PlannerUi.Flow(this);
+        bottom.addView(button("编排预览",this::preview));
+        importButton=button("导入所选课程",this::deliver);
+        importButton.setEnabled(false);
+        bottom.addView(importButton);
+        root.addView(bottom);
         handler.postDelayed(refreshTimer,30000);
         handler.postDelayed(passive,3000);
         CookieManager.getInstance().removeAllCookies(removed->{WebStorage.getInstance().deleteAllData();browser.clearCache(true);open(address.getText().toString());});
@@ -130,7 +152,7 @@ public class CourseImportActivity extends Activity {
     LinearLayout column(){LinearLayout layout=new LinearLayout(this);layout.setOrientation(LinearLayout.VERTICAL);return layout;}
     LinearLayout row(){LinearLayout layout=new LinearLayout(this);layout.setOrientation(LinearLayout.HORIZONTAL);return layout;}
     TextView label(String value,int size){TextView text=new TextView(this);text.setText(value);text.setTextSize(size);text.setTextColor(0xff191919);return text;}
-    Button button(String title,Runnable action){Button button=new Button(this);button.setText(title);button.setTextSize(12);button.setAllCaps(false);button.setMinWidth(0);button.setMinimumWidth(0);button.setOnClickListener(v->action.run());return button;}
+    Button button(String title,Runnable action){return PlannerUi.compactButton(this,title,action);}
     EditText field(LinearLayout parent,String hint,String value,boolean numeric){EditText input=new EditText(this);input.setHint(hint);input.setText(value);input.setTextSize(13);input.setSingleLine();if(numeric)input.setInputType(android.text.InputType.TYPE_CLASS_NUMBER);parent.addView(input,new LinearLayout.LayoutParams(parent.getOrientation()==LinearLayout.HORIZONTAL?0:-1,-2,parent.getOrientation()==LinearLayout.HORIZONTAL?1:0));return input;}
     @Override protected void onDestroy(){generation++;if(popup!=null)popup.dismiss();handler.removeCallbacksAndMessages(null);worker.shutdownNow();if(browser!=null){browser.stopLoading();browser.clearCache(true);browser.destroy();}if(replay!=null){replay.stopLoading();replay.destroy();}CookieManager.getInstance().removeAllCookies(null);WebStorage.getInstance().deleteAllData();super.onDestroy();}
 }

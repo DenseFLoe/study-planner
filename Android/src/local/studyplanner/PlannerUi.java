@@ -1,10 +1,18 @@
 package local.studyplanner;
 
 import android.content.Context;
+import android.content.res.ColorStateList;
 import android.graphics.Canvas;
 import android.graphics.Paint;
+import android.graphics.Typeface;
+import android.graphics.drawable.GradientDrawable;
+import android.graphics.drawable.RippleDrawable;
+import android.text.TextUtils;
+import android.view.Gravity;
 import android.view.View;
 import android.view.ViewGroup;
+import android.widget.Button;
+import android.widget.LinearLayout;
 
 /** Small native UI primitives shared by the calendar and bottom navigation. */
 final class PlannerUi {
@@ -42,6 +50,47 @@ final class PlannerUi {
             }
             c.restore();
         }
+    }
+
+    /** Shared compact pill button for native screens. */
+    static Button compactButton(Context context,String label,Runnable action){
+        Button button=new Button(context);
+        button.setText(label);
+        styleButton(button);
+        button.setLayoutParams(new LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT,LinearLayout.LayoutParams.WRAP_CONTENT));
+        button.setOnClickListener(v->action.run());
+        return button;
+    }
+
+    /** Apply the one shared native button look; safe to call again after changing state text. */
+    static void styleButton(Button button){
+        float density=button.getResources().getDisplayMetrics().density;
+        button.setTextSize(14);
+        button.setTypeface(Typeface.create("sans-serif-medium",Typeface.NORMAL));
+        button.setAllCaps(false);
+        button.setSingleLine(true);
+        button.setMaxLines(1);
+        button.setEllipsize(TextUtils.TruncateAt.END);
+        button.setMinWidth(0);
+        button.setMinimumWidth(0);
+        int minHeight=Math.round(40*density);
+        button.setMinHeight(minHeight);
+        button.setMinimumHeight(minHeight);
+        int horizontal=Math.round(12*density),vertical=Math.round(6*density);
+        button.setPadding(horizontal,vertical,horizontal,vertical);
+        button.setGravity(Gravity.CENTER);
+        button.setStateListAnimator(null);
+        button.setBackgroundTintList(null);
+        GradientDrawable shape=new GradientDrawable();
+        shape.setShape(GradientDrawable.RECTANGLE);
+        shape.setCornerRadius(999*density);
+        shape.setColor(0xffe8f5ed);
+        GradientDrawable mask=new GradientDrawable();
+        mask.setShape(GradientDrawable.RECTANGLE);
+        mask.setCornerRadius(999*density);
+        mask.setColor(0xffffffff);
+        button.setBackground(new RippleDrawable(ColorStateList.valueOf(0xffc5efd7),shape,mask));
+        button.setTextColor(new ColorStateList(new int[][]{new int[]{-android.R.attr.state_enabled},new int[]{}},new int[]{0xff888888,0xff191919}));
     }
 
     /** Wrap-content actions flow onto another line when text or screen width requires it. */

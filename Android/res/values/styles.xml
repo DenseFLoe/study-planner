@@ -6,6 +6,9 @@
         <item name="android:textColorSecondary">#555555</item>
         <item name="android:colorAccent">#07C160</item>
         <item name="android:colorControlActivated">#07C160</item>
+        <item name="android:buttonStyle">@style/CompactActionButton</item>
+        <item name="android:alertDialogTheme">@style/PlannerDialogTheme</item>
+        <item name="android:datePickerDialogTheme">@style/PlannerDialogTheme</item>
         <item name="android:windowBackground">#EDEDED</item>
         <item name="android:statusBarColor">#EDEDED</item>
         <item name="android:navigationBarColor">#FFFFFF</item>
@@ -13,5 +16,32 @@
         <item name="android:windowActionModeOverlay">true</item>
         <item name="android:windowLayoutInDisplayCutoutMode">default</item>
         <item name="android:windowOptOutEdgeToEdgeEnforcement">true</item>
+    </style>
+    <style name="CompactActionButton" parent="android:style/Widget.Material.Button">
+        <item name="android:background">@drawable/compact_action</item>
+        <item name="android:backgroundTint">@null</item>
+        <item name="android:stateListAnimator">@null</item>
+        <item name="android:fontFamily">sans-serif-medium</item>
+        <item name="android:textColor">@color/compact_action_text</item>
+        <item name="android:textSize">14sp</item>
+        <item name="android:textAllCaps">false</item>
+        <item name="android:singleLine">true</item>
+        <item name="android:maxLines">1</item>
+        <item name="android:ellipsize">end</item>
+        <item name="android:minWidth">0dp</item>
+        <item name="android:minHeight">40dp</item>
+        <item name="android:paddingStart">12dp</item>
+        <item name="android:paddingEnd">12dp</item>
+        <item name="android:paddingTop">6dp</item>
+        <item name="android:paddingBottom">6dp</item>
+        <item name="android:gravity">center</item>
+    </style>
+    <style name="PlannerDialogTheme" parent="android:style/Theme.Material.Light.Dialog.Alert">
+        <item name="android:colorAccent">#07C160</item>
+        <item name="android:buttonStyle">@style/CompactActionButton</item>
+        <item name="android:buttonBarButtonStyle">@style/CompactActionButton</item>
+        <item name="android:buttonBarPositiveButtonStyle">@style/CompactActionButton</item>
+        <item name="android:buttonBarNegativeButtonStyle">@style/CompactActionButton</item>
+        <item name="android:buttonBarNeutralButtonStyle">@style/CompactActionButton</item>
     </style>
 </resources>

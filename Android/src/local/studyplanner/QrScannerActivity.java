@@ -45,7 +45,8 @@ public final class QrScannerActivity extends Activity {
         LinearLayout overlay=new LinearLayout(this);overlay.setOrientation(LinearLayout.VERTICAL);overlay.setGravity(Gravity.CENTER_HORIZONTAL);overlay.setPadding(dp(22),dp(18),dp(22),dp(28));overlay.setBackgroundColor(0x88000000);
         TextView title=new TextView(this);title.setText("扫描 Mac 上的配对二维码");title.setTextColor(Color.WHITE);title.setTextSize(19);title.setGravity(Gravity.CENTER);overlay.addView(title,new LinearLayout.LayoutParams(-1,-2));
         TextView detail=new TextView(this);detail.setText("二维码只用于本次配对，摄像头画面不会保存。");detail.setTextColor(0xffd7dce5);detail.setTextSize(13);detail.setGravity(Gravity.CENTER);detail.setPadding(0,dp(7),0,0);overlay.addView(detail,new LinearLayout.LayoutParams(-1,-2));
-        Button cancel=new Button(this);cancel.setText("取消");cancel.setOnClickListener(v->finish());overlay.addView(cancel,new LinearLayout.LayoutParams(-2,-2));
+        Button cancel=PlannerUi.compactButton(this,"取消",this::finish);
+        overlay.addView(cancel,new LinearLayout.LayoutParams(-2,-2));
         FrameLayout.LayoutParams op=new FrameLayout.LayoutParams(-1,-2,Gravity.BOTTOM);root.addView(overlay,op);setContentView(root);
         preview.setSurfaceTextureListener(new TextureView.SurfaceTextureListener(){
             public void onSurfaceTextureAvailable(SurfaceTexture texture,int width,int height){openCamera();}
