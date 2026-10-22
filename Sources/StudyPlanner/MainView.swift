@@ -35,6 +35,7 @@ struct MainView: View {
     @State private var month = Date()
     @State private var sheet: EditorSheet?
     @State private var showingAddMenu = false
+    @AppStorage("dailyStudyLoadWarningMinutes") private var dailyLoadWarningMinutes = 480
     @Namespace private var navigationSelection
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -294,7 +295,7 @@ struct MainView: View {
 
             if !store.result.risks.isEmpty || !store.result.diagnostics.isEmpty {
                 Button { sheet = .risks } label: {
-                    Label("排程需要调整", systemImage: "exclamationmark.triangle.fill")
+                    Label("查看排程情况", systemImage: "exclamationmark.triangle.fill")
                 }
                 .buttonStyle(SoftButtonStyle())
                 .focusEffectDisabled()
@@ -567,7 +568,9 @@ struct MainView: View {
                 CourseProgressPanel(
                     courses: store.courses,
                     demands: store.result.demands,
-                    studyLoad: store.studyLoad,
+                    health: ScheduleHealthAnalyzer().assess(state: store.state, result: store.result, now: Date(), heavyDayMinutes: dailyLoadWarningMinutes),
+                    adjustments: store.result.adjustments,
+                    showDetails: { sheet = .risks },
                     completedMinutes: { store.state.completedMinutes(for: $0) },
                     edit: { sheet = .course($0) }
                 )
@@ -1283,7 +1286,9 @@ private struct FlowLegend: View {
 private struct CourseProgressPanel: View {
     var courses: [Course]
     var demands: [UUID: CourseDemand]
-    var studyLoad: StudyLoadAssessment?
+    var health: ScheduleHealth?
+    var adjustments: [String]
+    var showDetails: () -> Void
     var completedMinutes: (Course) -> Int
     var edit: (Course) -> Void
 
@@ -1291,8 +1296,8 @@ private struct CourseProgressPanel: View {
         VStack(alignment: .leading, spacing: 16) {
             PlannerSectionTitle(title: "课程进度", detail: "\(courses.count) 门")
 
-            if let studyLoad {
-                StudyLoadWarning(load: studyLoad)
+            if let health {
+                ScheduleHealthWarning(health: health, adjustments: adjustments, showDetails: showDetails)
             }
 
             if courses.isEmpty {

@@ -21,6 +21,9 @@ public struct ScheduleResult: Sendable {
     public var risks: [ScheduleRisk]
     public var demands: [UUID: CourseDemand]
     public var diagnostics: [String]
+    public var conflicts: [ScheduleConstraintConflict] = []
+    public var dayPlans: [ScheduleDayPlan] = []
+    public var adjustments: [String] = []
 }
 
 /// Pure, minute-based local scheduling. No persistence, UI, system Calendar, or EventKit dependencies.
@@ -92,6 +95,12 @@ public struct ScheduleEngine: Sendable {
             return valid
         }
         var days: [Day] = []
+        var hardDays: [Day] = []
+        var eventWindows: [ScheduleFeasibilitySearch.Window] = []
+        var floatingJobs: [ScheduleFeasibilitySearch.Floating] = []
+        var jointSearchSupported = true
+        var adjustments: [String] = []
+        func minute(_ date: Date) -> Int { Int(ceil(date.timeIntervalSinceReferenceDate / 60)) }
         var floatingRegions: [Span] = []
         let lastDay = max(today, courses.map { calendar.startOfDay(for: $0.deadline) }.max() ?? today)
         // A bounded horizon protects the UI from accidentally entered dates thousands of years away.
@@ -130,16 +139,26 @@ public struct ScheduleEngine: Sendable {
                 blocks += regions
             }
             // Only retained history reserves time; a planned start is not evidence of actual study.
-            blocks += state.tasks.filter {
+            let history = state.tasks.filter {
                 let replacingToday = actualStart != nil && calendar.isDate($0.start, inSameDayAs: now)
                 return $0.planningStart < now && (($0.isUnconfirmed && $0.planningEnd <= now && !replacingToday) || $0.completedMinutes > 0)
             }
                 .map { buffered(start: $0.retainedHistoryInterval.start,
                                 end: $0.retainedHistoryInterval.end) }
+            blocks += history
+            hardDays.append(.init(date: day, free: subtract(exact + history, from: windows)))
+            eventWindows += subtract(exact + history, from: [.init(start: day, end: instant(day: day, minute: 1440))])
+                .map { .init(start: minute($0.start), end: Int(floor($0.end.timeIntervalSinceReferenceDate / 60))) }
+            let floating = events.filter(\.isFloating)
+            if floating.count > 1 { jointSearchSupported = false }
+            for event in floating {
+                floatingJobs.append(.init(key: day, start: minute(instant(day: day, minute: event.startMinute)),
+                                          end: minute(instant(day: day, minute: event.endMinute)), minutes: event.occupiedMinutes))
+            }
             days.append(.init(date: day, free: subtract(blocks, from: windows)))
             day = calendar.date(byAdding: .day, value: 1, to: day)!
         }
-        let originalDays = days
+        var originalDays = days
         var demands: [UUID: CourseDemand] = [:]
         var required: [UUID: Int] = [:]
         struct Work {
@@ -299,7 +318,8 @@ public struct ScheduleEngine: Sendable {
             }
             missing[course.id] = pending[course.id]!.reduce(0) { $0 + $1.minutes }
         }
-        // Prefer daily diversity when whole blocks fit, ahead of priority and sub-3x boosts.
+        let feasibleTasks = tasks, feasibleMissing = missing
+        // Daily diversity is a preference; it must not lose an earlier deadline.
         // Rebuild from ALL unfinished work, including blocks the deadline-first pass
         // could not book; otherwise a monopolizing course can hide the other courses.
         if courses.count >= 3 {
@@ -409,6 +429,43 @@ public struct ScheduleEngine: Sendable {
             for course in courses {
                 missing[course.id] = allWork[course.id]!.dropFirst(positions[course.id]!).reduce(0) { $0 + $1.minutes }
             }
+            for cutoff in Set(courses.map { calendar.startOfDay(for: $0.deadline) }).sorted() {
+                let group = courses.filter { calendar.startOfDay(for: $0.deadline) <= cutoff }
+                let before = group.reduce(0) { $0 + feasibleMissing[$1.id, default: 0] }
+                let after = group.reduce(0) { $0 + missing[$1.id, default: 0] }
+                if before == after { continue }
+                if before < after {
+                    tasks = feasibleTasks; missing = feasibleMissing
+                    for i in days.indices { days[i].free = subtract(tasks.map { buffered(start: $0.start, end: $0.end) }, from: originalDays[i].free) }
+                    adjustments.append("为守住截止日期，已适当放宽每天的科目混排和学习倍率偏好。")
+                }
+                break
+            }
+        }
+        // Rescue incomplete heuristic allocations by jointly placing whole lessons
+        // and floating events. The bounded search only replaces a plan with a full witness.
+        if missing.values.contains(where: { $0 > 0 }), jointSearchSupported,
+           let solution = ScheduleFeasibilitySearch.find(
+            queues: ordered.map { course in
+                .init(courseID: course.id, start: minute(calendar.startOfDay(for: course.startDate)),
+                      end: minute(instant(day: course.deadline, minute: 1440)),
+                      work: allWork[course.id, default: []].map { .init(minutes: $0.minutes, lessonID: $0.lessonID, lessonName: $0.lessonName) })
+            },
+            study: hardDays.flatMap(\.free).map { .init(start: minute($0.start), end: Int(floor($0.end.timeIntervalSinceReferenceDate / 60))) },
+            eventWindows: eventWindows, floating: floatingJobs, floor: minute(nextMinute), initial: minute(today)) {
+            tasks = solution.tasks
+            for i in originalDays.indices {
+                let jobs = floatingJobs.filter { calendar.isDate($0.key, inSameDayAs: originalDays[i].date) }
+                let reserved: [Span] = jobs.compactMap { job in
+                    guard let start = solution.floatingStarts[job.key] else { return nil }
+                    return .init(start: Date(timeIntervalSinceReferenceDate: Double(start) * 60),
+                                 end: Date(timeIntervalSinceReferenceDate: Double(start + job.minutes) * 60))
+                }
+                originalDays[i].free = subtract(reserved, from: hardDays[i].free)
+                days[i].free = subtract(tasks.map { buffered(start: $0.start, end: $0.end) }, from: originalDays[i].free)
+            }
+            missing = Dictionary(uniqueKeysWithValues: courses.map { ($0.id, 0) })
+            adjustments.append("已联合调整浮动事项在原窗口内的位置与课程分配，保持截止日期和整节课顺序。")
         }
         // Rebuild the feasible allocation day by day. Unlike merely shuffling one interval,
         // this gives equal-priority courses a share of days that were filled by a single course.
@@ -605,6 +662,35 @@ public struct ScheduleEngine: Sendable {
             risks.append(.init(deadline: cutoff, requiredMinutes: group.reduce(0) { $0 + required[$1.id, default: 0] }, availableMinutes: capacity,
                                unscheduledMinutes: absent, courseNames: group.filter { missing[$0.id, default: 0] > 0 }.map(\.name)))
         }
-        return .init(tasks: tasks, risks: risks, demands: demands, diagnostics: Array(Set(diagnostics)).sorted())
+        var result = ScheduleResult(tasks: tasks, risks: risks, demands: demands, diagnostics: Array(Set(diagnostics)).sorted())
+        result.adjustments = adjustments
+        result.dayPlans = originalDays.map { day in
+            .init(date: day.date, availableMinutes: day.free.reduce(0) { $0 + $1.minutes },
+                  plannedMinutes: tasks.filter { calendar.isDate($0.start, inSameDayAs: day.date) }.reduce(0) { $0 + $1.durationMinutes })
+        }
+        // Ignoring floating occupancy and breaks gives an optimistic upper bound.
+        // Only a deficit against that bound is a proven shortage.
+        if !courses.contains(where: { calendar.startOfDay(for: $0.deadline) > horizon }) {
+            for start in Set([today] + courses.map { max(today, calendar.startOfDay(for: $0.startDate)) }).sorted() {
+                for end in Set(courses.map { calendar.startOfDay(for: $0.deadline) }).sorted() {
+                    let group = courses.filter { max(today, calendar.startOfDay(for: $0.startDate)) >= start && calendar.startOfDay(for: $0.deadline) <= end }
+                    let needed = group.reduce(0) { $0 + required[$1.id, default: 0] }
+                    let upper = hardDays.filter { $0.date >= start && $0.date <= end }.reduce(0) { $0 + $1.free.reduce(0) { $0 + $1.minutes } }
+                    if needed > upper {
+                        result.conflicts.append(.init(windowStart: start, deadline: end, requiredMinutes: needed,
+                                                      availableMinutes: upper, courseNames: group.map(\.name)))
+                    }
+                }
+            }
+            for course in courses {
+                let longest = hardDays.filter { eligible(course, $0.date) }.flatMap(\.free).map(\.minutes).max() ?? 0
+                if let blocked = allWork[course.id]?.first(where: { $0.minutes > longest }) {
+                    result.conflicts.append(.init(windowStart: max(today, calendar.startOfDay(for: course.startDate)), deadline: course.deadline,
+                                                  requiredMinutes: blocked.minutes, availableMinutes: longest, courseNames: [course.name],
+                                                  minimumContinuousMinutes: blocked.minutes))
+                }
+            }
+        }
+        return result
     }
 }

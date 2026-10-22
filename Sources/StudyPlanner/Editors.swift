@@ -243,6 +243,7 @@ struct SettingsView: View {
     @State private var saved = false
     @State private var syncHost = ""
     @State private var pairingRequest: PairingRequest?
+    @AppStorage("dailyStudyLoadWarningMinutes") private var dailyLoadWarningMinutes = 480
     @AppStorage("timelineTimeFontSize") private var timelineTimeFontSize = 17.0
     /// Display-only preference: it never travels through `AppSettings`, so
     /// adjusting it neither saves business settings nor triggers rescheduling.
@@ -304,6 +305,10 @@ struct SettingsView: View {
                             }
                         }.padding(.vertical, 6)
                     }
+                }
+                Section("学习负担提醒") {
+                    Stepper("一天超过 \(hours(dailyLoadWarningMinutes)) 时提醒", value: $dailyLoadWarningMinutes, in: 60...960, step: 30)
+                    Text("这是负担提醒线，不会减少可学习时间或改动截止日。调整后立即生效，仅保存在本机。").font(.caption).foregroundStyle(.secondary)
                 }
                 Section("默认规则") {
                     TextField("默认最小时间块（分钟）", value: $settings.minimumScheduleUnit, format: .number)
@@ -434,32 +439,75 @@ struct RiskView: View {
     @Bindable var store: PlannerStore
     var adjustSettings: () -> Void
     var editCourse: (Course) -> Void
+    @AppStorage("dailyStudyLoadWarningMinutes") private var dailyLoadWarningMinutes = 480
     @Environment(\.dismiss) private var dismiss
+    private var health: ScheduleHealth? {
+        ScheduleHealthAnalyzer().assess(state: store.state, result: store.result, now: Date(), heavyDayMinutes: dailyLoadWarningMinutes)
+    }
     var body: some View {
-        VStack(alignment: .leading, spacing: 20) {
-            Label("排程需要调整", systemImage: "exclamationmark.triangle.fill").font(.title2.bold()).foregroundStyle(.orange)
+        VStack(alignment: .leading, spacing: 18) {
+            Text(health?.title ?? "当前没有待排课程").font(.title2.bold())
+            Text("截止日期保持不变。先核对补回安排和每天的负担，再决定是否调整可学习时段。")
+                .font(.callout).foregroundStyle(.secondary)
             ScrollView {
-                VStack(alignment: .leading, spacing: 18) {
+                VStack(alignment: .leading, spacing: 16) {
+                    if let health {
+                        Text(health.explanation).font(.callout)
+                        if health.pausedMinutes > 0 { Text("暂停自动排程的学习量：\(hours(health.pausedMinutes))。请在课程中恢复自动排程后重新核对。").foregroundStyle(.orange) }
+                    }
+                    ForEach(store.result.adjustments, id: \.self) { Text($0).font(.callout) }
+                    ForEach(Array(store.result.conflicts.enumerated()), id: \.offset) { _, conflict in
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text("已确认的约束冲突 · 截止 \(conflict.deadline.formatted(date: .abbreviated, time: .omitted))").font(.headline)
+                            if let continuous = conflict.minimumContinuousMinutes {
+                                Text("有一块内容需要连续 \(continuous) 分钟，现有最长连续空档只有 \(conflict.availableMinutes) 分钟。")
+                            } else {
+                                Text("\(conflict.windowStart.formatted(date: .abbreviated, time: .omitted)) 起需要 \(hours(conflict.requiredMinutes))，即使暂不扣除浮动事项和课间休息，最多也只有 \(hours(conflict.availableMinutes))。")
+                                Text("至少缺少 \(hours(conflict.provenDeficit ?? 0))。")
+                            }
+                            Text("涉及：" + conflict.courseNames.joined(separator: "、")).font(.caption)
+                        }.foregroundStyle(.red)
+                    }
                     ForEach(store.result.diagnostics, id: \.self) { Text($0).foregroundStyle(.orange) }
                     ForEach(store.result.risks) { risk in
-                        VStack(alignment: .leading, spacing: 12) {
-                            Text("截止 \(risk.deadline.formatted(date: .abbreviated, time: .omitted))").font(.headline)
-                            Text(risk.capacityDeficit > 0 ? "按照当前可用时间，无法按期完成这些课程。" : "当前时间块安排仍有学习量未排入，请调整时段或最小时间块。")
-                            LabeledContent("此日期前剩余学习量", value: hours(risk.requiredMinutes))
-                            LabeledContent("此日期前空闲时间", value: hours(risk.availableMinutes))
-                            LabeledContent("尚未排入的学习量", value: hours(risk.unscheduledMinutes)).foregroundStyle(.orange)
-                            if risk.capacityDeficit > 0 { LabeledContent("可用时间缺口", value: hours(risk.capacityDeficit)).foregroundStyle(.orange) }
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text("截止 \(risk.deadline.formatted(date: .abbreviated, time: .omitted)) · 暂未排入 \(hours(risk.unscheduledMinutes))").font(.headline)
+                            Text("这表示当前排法尚不完整，未排入量不能直接当作真实时间缺口。").font(.callout)
                             Text("涉及：" + risk.courseNames.joined(separator: "、")).font(.caption).foregroundStyle(.secondary)
-                        }.frame(maxWidth: .infinity, alignment: .leading).padding(16).background(Color.orange.opacity(0.06), in: RoundedRectangle(cornerRadius: 12))
+                        }.padding(12).frame(maxWidth: .infinity, alignment: .leading).background(Color.orange.opacity(0.06), in: RoundedRectangle(cornerRadius: 10))
                     }
-                    Text("可延长截止日期、增加可学习时间或缩小最小时间块。降低优先级只会改变分配顺序，不能补足时间缺口。").font(.callout).foregroundStyle(.secondary)
-                    ForEach(store.courses.filter { course in store.result.risks.contains { $0.courseNames.contains(course.name) } }) { course in
-                        Button("调整「\(course.name)」截止日期 / 时间块") { editCourse(course) }
+                    if !(store.result.risks.isEmpty && store.result.conflicts.isEmpty) {
+                        Text("按整节排程的课程需要连续空档；缩小普通课程的最小时间块不会自动拆开课节。可增加或连通学习时段，或核对课节编排。")
+                            .font(.callout).foregroundStyle(.secondary)
+                        ForEach(store.courses.filter { course in store.result.risks.contains { $0.courseNames.contains(course.name) } }) { course in
+                            Button("查看「\(course.name)」课程与课节") { editCourse(course) }
+                        }
                     }
-                }
+                    if let health {
+                        if !health.recovery.isEmpty {
+                            GroupBox("今日确认任务中已排入的待补内容") {
+                                VStack(spacing: 8) {
+                                    ForEach(health.recovery) { day in
+                                        LabeledContent(day.date.formatted(date: .abbreviated, time: .omitted), value: hours(day.plannedMinutes))
+                                    }
+                                }.frame(maxWidth: .infinity)
+                            }
+                        }
+                        if !health.dayPlans.isEmpty {
+                            GroupBox("未来每日学习量 · 不含课间休息") {
+                                LazyVStack(spacing: 8) {
+                                    ForEach(health.dayPlans) { day in
+                                        LabeledContent(day.date.formatted(date: .abbreviated, time: .omitted), value: hours(day.plannedMinutes))
+                                            .foregroundStyle(day.plannedMinutes > dailyLoadWarningMinutes ? Color.orange : Color.primary)
+                                    }
+                                }.frame(maxWidth: .infinity)
+                            }
+                        }
+                    }
+                }.frame(maxWidth: .infinity, alignment: .leading)
             }
-            HStack { Button("调整可学习时间") { adjustSettings() }; Spacer(); Button("知道了") { dismiss() }.keyboardShortcut(.cancelAction) }
-        }.padding(28).frame(width: 610, height: 600)
+            HStack { Button("调整可学习时间与负担提醒线", action: adjustSettings); Spacer(); Button("知道了") { dismiss() }.keyboardShortcut(.cancelAction) }
+        }.padding(28).frame(width: 650, height: 680)
     }
 }
 struct SheetHeading: View {

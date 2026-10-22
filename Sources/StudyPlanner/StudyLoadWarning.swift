@@ -1,87 +1,49 @@
 import SwiftUI
 import StudyCore
 
-struct StudyLoadWarning: View {
-    let load: StudyLoadAssessment
-
+struct ScheduleHealthWarning: View {
+    let health: ScheduleHealth
+    let adjustments: [String]
+    var showDetails: () -> Void
     private var tint: Color {
-        switch load.level {
-        case .normal: .teal
-        case .warning: .orange
-        case .critical: .red
+        switch health.status {
+        case .scheduled: .teal
+        case .heavy, .pending: .orange
+        case .shortage: .red
         }
     }
-    private var title: String {
-        if load.isHorizonLimited { return "总学习负荷 · 未来十年内估算" }
-        return switch load.level {
-        case .normal: "总学习负荷 · 尚有余量"
-        case .warning: "时间紧张 · 已达 80% 上限线"
-        case .critical: "最高警告 · 已无法按期完成"
-        }
-    }
-    private func daily(_ minutes: Double) -> String {
-        (minutes / 60).formatted(.number.precision(.fractionLength(2))) + " 小时"
-    }
-    private var utilizationText: String {
-        guard let ratio = load.utilization else { return "截止前已无可分配时间" }
-        let percent = (load.level == .critical ? ceil(ratio * 10000) : floor(ratio * 10000)) / 100
-        return "已占可分配时长的 \(percent.formatted(.number.precision(.fractionLength(0...2))))%"
-    }
-    private var countdown: String {
-        if load.isHorizonLimited { return "请将超出范围的课程日期调整到未来十年内，再查看完整负荷与倒计时。" }
-        if load.level == .critical { return "请增加可学习时间、减少学习量或延长截止日期。" }
-        var lines: [String] = []
-        if load.level == .normal, let days = load.daysUntilWarning {
-            lines.append("再不学习 \(days) 天 → 时间紧张警告")
-        }
-        if let days = load.daysUntilCritical {
-            lines.append("再不学习 \(days) 天 → 无法按期完成")
-        }
-        return lines.joined(separator: "\n")
-    }
-
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Label(title, systemImage: load.level == .critical ? "exclamationmark.octagon.fill" : (load.level == .warning ? "exclamationmark.triangle.fill" : "gauge.with.dots.needle.33percent"))
-                .font(.system(size: 13, weight: .bold))
-                .foregroundStyle(load.level == .normal ? tint : .white)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(10)
-                .background(load.level == .normal ? tint.opacity(0.12) : tint, in: RoundedRectangle(cornerRadius: 9))
-
-            VStack(alignment: .leading, spacing: 6) {
-                Text("日均最低总学习时间")
-                    .font(.caption).foregroundStyle(.secondary)
-                Text(daily(load.requiredDailyMinutes))
-                    .font(.system(size: 24, weight: .bold, design: .rounded))
-                    .foregroundStyle(tint)
-                Text("临界日均上限 \(daily(load.criticalDailyMinutes))")
-                    .font(.caption.weight(.semibold))
-                Text(utilizationText)
-                    .font(.caption.weight(.bold))
-                    .foregroundStyle(tint)
-                if load.level == .critical {
-                    Text("\(load.isHorizonLimited ? "计算范围内" : "截止前")至少缺少 \(load.requiredMinutes - load.availableMinutes) 分钟")
-                        .font(.caption.weight(.bold))
-                        .foregroundStyle(tint)
-                }
+        VStack(alignment: .leading, spacing: 10) {
+            Label(health.title, systemImage: health.status == .scheduled ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
+                .font(.system(size: 13, weight: .bold)).foregroundStyle(tint)
+            Text(health.explanation).font(.caption).fixedSize(horizontal: false, vertical: true)
+            LabeledContent("剩余学习量", value: hours(health.remainingMinutes)).font(.caption)
+            if health.unscheduledMinutes > 0 {
+                LabeledContent("暂未排入", value: hours(health.unscheduledMinutes)).font(.caption.weight(.semibold)).foregroundStyle(tint)
             }
-
-            Text(countdown)
-                .font(.system(size: 12, weight: .semibold))
-                .fixedSize(horizontal: false, vertical: true)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(10)
-                .background(tint.opacity(0.12), in: RoundedRectangle(cornerRadius: 8))
-
-            Text("最紧张区间：\(load.windowStart.formatted(.dateTime.month().day()))—\(load.deadline.formatted(.dateTime.month().day()))。按完整自然日估算，包含暂停排程的未完成课程。")
-                .font(.caption2).foregroundStyle(.secondary)
-            Text(load.isHorizonLimited ? "部分课程日期超出支持范围，本次仅计算未来十年。" : "仅扣除每日重复事项，忽略非每日事项。超过理论上限即无法按期完成；未超过仍以实际排程为准。倒计时假设从今天起连续不学习。")
+            if health.pausedMinutes > 0 {
+                Text("其中暂停自动排程：\(hours(health.pausedMinutes))，需恢复排程后核对。").font(.caption)
+            }
+            LabeledContent("后续最重一天", value: hours(health.peakMinutes))
+            LabeledContent("有学习安排的日均", value: hours(Int(health.averageMinutes.rounded()))).font(.caption)
+            if health.heavyDays > 0 {
+                Text("\(health.heavyDays) 天超过你设置的每日负担提醒线。").font(.caption).foregroundStyle(tint)
+            }
+            if health.reviewedMinutes > 0 {
+                Text("今日已确认：实际学习 \(hours(health.creditedMinutes)) / 原计划 \(hours(health.reviewedMinutes))。")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            if !health.recovery.isEmpty {
+                Text("已排入的待补内容分布在 \(health.recovery.count) 个日期；点开查看具体安排。")
+                    .font(.caption.weight(.medium))
+            }
+            if let adjustment = adjustments.first { Text(adjustment).font(.caption2).foregroundStyle(.secondary) }
+            Button("查看补回安排与每日负担", action: showDetails).buttonStyle(.link).font(.caption)
+            Text("截止日期保持不变；科目混排和倍率会在需要时让步。")
                 .font(.caption2).foregroundStyle(.secondary)
         }
         .padding(12)
-        .background(tint.opacity(0.06), in: RoundedRectangle(cornerRadius: 13))
-        .overlay(RoundedRectangle(cornerRadius: 13).strokeBorder(tint.opacity(load.level == .normal ? 0.25 : 0.8), lineWidth: load.level == .normal ? 1 : 2))
-        .accessibilityElement(children: .combine)
+        .background(tint.opacity(0.07), in: RoundedRectangle(cornerRadius: 13))
+        .overlay(RoundedRectangle(cornerRadius: 13).strokeBorder(tint.opacity(0.4)))
     }
 }

@@ -7,6 +7,7 @@ struct LessonSchedulePreview: View {
     let course: Course
     @State private var scheduled: [String: ScheduledTask] = [:]
     @State private var risks: [ScheduleRisk] = []
+    @State private var conflicts: [ScheduleConstraintConflict] = []
     @State private var calculated = false
 
     private var lessons: [LessonWorkItem] { state.lessonWorkItems(for: course) }
@@ -30,10 +31,10 @@ struct LessonSchedulePreview: View {
                         Text("此课程已归档，当前不会自动排程。")
                     } else if !course.autoScheduleEnabled {
                         Text("此课程已暂停自动排程。")
-                    } else if let risk = risks.first(where: { $0.courseNames.contains(course.name) }) {
-                        Text(risk.capacityDeficit > 0
-                             ? "截止日前可用时间不足，请调整学习时段或截止日。"
-                             : "总时长可能够用，但连续空档不足；请调整时段或课节编排。")
+                    } else if conflicts.contains(where: { $0.courseNames.contains(course.name) }) {
+                        Text("已确认存在时间或连续空档不足，请查看排程详情中的具体原因。")
+                    } else if risks.contains(where: { $0.courseNames.contains(course.name) }) {
+                        Text("当前排法尚未完整，不等于客观上学不完。截止日保持不变，可调整学习时段或课节编排。")
                     }
                 }
             } else {
@@ -80,6 +81,7 @@ struct LessonSchedulePreview: View {
                 task.lessonID.map { ($0, task) }
             }, uniquingKeysWith: { _, latest in latest })
             risks = result.risks
+            conflicts = result.conflicts
             calculated = true
         }
     }

@@ -551,12 +551,13 @@ final class ScheduleEngineTests: XCTestCase {
         assertValid(r, s)
     }
 
-    func testDiversityTakesPrecedenceOverUrgencyAndIncludesPreviouslyUnbookedCourses() {
+    func testEarlierDeadlineTakesPrecedenceOverDiversityWhenCapacityIsTight() {
         var s = diversityState(days: 1, minutes: [600, 60, 60])
         s.courses[1].deadline = date(15)
         s.courses[2].deadline = date(15)
         let r = result(s)
-        XCTAssertEqual(Set(r.tasks.filter { cal.isDate($0.start, inSameDayAs: date(14)) }.map(\.courseID)).count, 3)
+        XCTAssertEqual(Set(r.tasks.filter { cal.isDate($0.start, inSameDayAs: date(14)) }.map(\.courseID)), [s.courses[0].id])
+        XCTAssertFalse(r.adjustments.isEmpty)
         XCTAssertGreaterThan(r.risks.first?.unscheduledMinutes ?? 0, 0)
         assertValid(r, s)
     }
