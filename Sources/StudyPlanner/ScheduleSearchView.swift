@@ -16,6 +16,14 @@ enum ScheduleSearch {
             return $0.id.uuidString < $1.id.uuidString
         }
     }
+
+    /// Search results show history as it was recorded: signed-off tasks report the
+    /// status and minutes actually studied, while only unconfirmed plans show 未确认.
+    static func confirmationLabel(for task: ScheduledTask) -> String {
+        task.isUnconfirmed
+            ? "未确认 · 计划 \(hours(task.durationMinutes))"
+            : "\(statusLabel(task)) · 实际完成 \(hours(task.completedMinutes))"
+    }
 }
 
 struct ScheduleSearchView: View {
@@ -92,7 +100,7 @@ struct ScheduleSearchView: View {
                 if task.lessonName != nil {
                     Text(course?.name ?? "已删除课程").font(.subheadline).foregroundStyle(.secondary)
                 }
-                Text("\(task.planningStart.formatted(date: .omitted, time: .shortened))–\(task.planningEnd.formatted(date: .omitted, time: .shortened)) · \(task.isUnconfirmed ? "未确认" : "已确认")\(task.isFloating ? " · 时段内完成" : "")")
+                Text("\(task.planningStart.formatted(date: .omitted, time: .shortened))–\(task.planningEnd.formatted(date: .omitted, time: .shortened)) · \(ScheduleSearch.confirmationLabel(for: task))\(task.isFloating ? " · 时段内完成" : "")")
                     .font(.caption).foregroundStyle(.secondary)
             }
             .padding(14)
