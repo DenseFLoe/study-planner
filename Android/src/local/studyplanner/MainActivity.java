@@ -98,6 +98,7 @@ public class MainActivity extends Activity {
         Button b=button(label,action);b.setTextSize(14);b.setTextColor(ink);b.setMinHeight(dp(40));b.setMinimumHeight(dp(40));b.setPadding(dp(12),dp(4),dp(12),dp(4));
         b.setBackground(new android.graphics.drawable.RippleDrawable(android.content.res.ColorStateList.valueOf(0xffc5efd7),rounded(0xffe8f5ed,24),null));return b;
     }
+    Button taskAction(String label,Runnable action){Button b=pill(label,action);b.setPadding(dp(8),dp(4),dp(8),dp(4));return b;}
     int color(String c){switch(c){case "green":return 0xff168875;case "purple":return 0xff8b60ba;case "orange":return 0xffc17d30;case "pink":return 0xffc45f92;default:return 0xff2766c3;}}
     String hours(int n){return String.format(Locale.CHINA,"%.1f 小时",n/60.0);}
     void calendar()throws Exception{
@@ -126,7 +127,26 @@ public class MainActivity extends Activity {
         startCard.addView(button("生成新课表",()->run(()->{int minute=Planner.minute(value(startTime));if(minute>=1440)throw new Exception("实际开课时间须为 00:00–23:59");mutate(s->Planner.recordActualStudyStart(s,minute,Planner.now()),true,()->{selected=LocalDate.now(Planner.ZONE);month=selected.withDayOfMonth(1);});})));
         body.addView(button("重新排程",()->mutate(s->{},true,null)));
     }
-    void taskCard(LinearLayout parent,JSONObject t)throws Exception{JSONObject c=Planner.course(state,t.getString("courseID"));LinearLayout box=card(parent);cardBorder(box,color(c.optString("color")));if(Planner.floatingTask(t))floatingStyle(box,color(c.optString("color")));box.addView(text(Planner.clock(Planner.planningStart(t))+" — "+Planner.clock(Planner.planningEnd(t))+"   "+t.getInt("durationMinutes")+" 分钟"+(Planner.floatingTask(t)?" · ↔ 时段内完成":""),12,muted));TextView name=text(c.getString("name"),18,ink);name.setTypeface(null,Typeface.BOLD);box.addView(name);if(!t.optString("lessonName").isEmpty())box.addView(text(t.optString("lessonName"),16,ink));if(Planner.pending(t)){PlannerUi.Flow actions=new PlannerUi.Flow(this);actions.addView(pill(Planner.planningStart(t)>Planner.now()?"提前完成":"全部完成",()->mutate(s->Planner.confirm(s,t.optString("id"),t.optInt("durationMinutes"),Planner.now()),Planner.confirmationRequiresReplan(t,t.optInt("durationMinutes"),Planner.now()),null)));actions.addView(pill("部分 / 未完成",()->completion(t)));box.addView(actions);}else{LinearLayout result=row();weighted(result,text(t.optString("status").equals("missed")?"未完成 · 已保留剩余学习量":"已确认 "+t.optInt("completedMinutes")+" 分钟",13,muted));result.addView(pill("撤销",()->mutate(s->Planner.undoConfirmation(s,t.optString("id"),Planner.now()),true,null)));box.addView(result);}new PlannerFeatures(this).taskDrag(box,t);}
+    void taskCard(LinearLayout parent,JSONObject t)throws Exception{
+        JSONObject c=Planner.course(state,t.getString("courseID"));
+        LinearLayout box=card(parent);cardBorder(box,color(c.optString("color")));
+        if(Planner.floatingTask(t))floatingStyle(box,color(c.optString("color")));
+        box.addView(text(Planner.clock(Planner.planningStart(t))+" — "+Planner.clock(Planner.planningEnd(t))+"   "+t.getInt("durationMinutes")+" 分钟"+(Planner.floatingTask(t)?" · ↔ 时段内完成":""),12,muted));
+        TextView name=text(c.getString("name"),18,ink);name.setTypeface(null,Typeface.BOLD);box.addView(name);
+        if(!t.optString("lessonName").isEmpty())box.addView(text(t.optString("lessonName"),16,ink));
+        if(Planner.pending(t)){
+            PlannerUi.Flow actions=new PlannerUi.Flow(this);
+            actions.addView(taskAction(Planner.planningStart(t)>Planner.now()?"提前完成":"全部完成",()->mutate(s->Planner.confirm(s,t.optString("id"),t.optInt("durationMinutes"),Planner.now()),Planner.confirmationRequiresReplan(t,t.optInt("durationMinutes"),Planner.now()),null)));
+            actions.addView(taskAction("部分/未完成",()->completion(t)));
+            box.addView(actions);
+            new PlannerFeatures(this).taskDrag(box,actions,t);
+        }else{
+            LinearLayout result=row();
+            weighted(result,text(t.optString("status").equals("missed")?"未完成 · 已保留剩余学习量":"已确认 "+t.optInt("completedMinutes")+" 分钟",13,muted));
+            result.addView(pill("撤销",()->mutate(s->Planner.undoConfirmation(s,t.optString("id"),Planner.now()),true,null)));
+            box.addView(result);
+        }
+    }
     void completion(JSONObject t){LinearLayout form=col();form.setPadding(dp(20),dp(8),dp(20),0);EditText actual=field(form,"实际完成分钟（0 = 未完成）",""+t.optInt("durationMinutes"),true);AlertDialog d=new AlertDialog.Builder(this).setTitle("确认学习进度").setView(form).setNegativeButton("取消",null).setPositiveButton("确认",null).create();d.setOnShowListener(v->d.getButton(-1).setOnClickListener(x->run(()->{int n=Integer.parseInt(actual.getText().toString());if(n<0||n>t.getInt("durationMinutes"))throw new Exception("实际时长超出计划范围");mutate(s->Planner.confirm(s,t.getString("id"),n,Planner.now()),Planner.confirmationRequiresReplan(t,n,Planner.now()),d::dismiss);})));d.show();}
     void review(){LinearLayout list=col();list.setPadding(dp(16),0,dp(16),dp(16));Map<String,EditText> values=new LinkedHashMap<>();for(JSONObject t:Planner.review(state,Planner.now())){JSONObject c=Planner.course(state,t.optString("courseID"));EditText e=field(list,Planner.date(t.optDouble("start"))+" "+Planner.clock(Planner.planningStart(t))+(Planner.floatingTask(t)?"–"+Planner.clock(Planner.planningEnd(t))+" 内浮动":"")+" · "+c.optString("name")+(t.optString("lessonName").isEmpty()?"":" / "+t.optString("lessonName"))+"（最多 "+t.optInt("durationMinutes")+" 分钟）","",true);e.setHint("留空暂不确认，0 表示未完成");values.put(t.optString("id"),e);}ScrollView sv=new ScrollView(this);sv.addView(list);AlertDialog d=new AlertDialog.Builder(this).setTitle("逐项确认实际学习分钟").setView(sv).setNegativeButton("稍后",null).setPositiveButton("保存已填写项",null).create();d.setOnShowListener(v->d.getButton(-1).setOnClickListener(x->run(()->{Map<String,Integer> filled=new HashMap<>();for(Map.Entry<String,EditText> e:values.entrySet()){String a=e.getValue().getText().toString().trim();if(!a.isEmpty())filled.put(e.getKey(),Integer.parseInt(a));}if(filled.isEmpty())throw new Exception("请至少填写一项");boolean needsReplan=false;for(JSONObject task:Planner.review(state,Planner.now()))if(filled.containsKey(task.optString("id"))&&Planner.confirmationRequiresReplan(task,filled.get(task.optString("id")),Planner.now()))needsReplan=true;mutate(s->{double now=Planner.now();for(Map.Entry<String,Integer> e:filled.entrySet())Planner.confirm(s,e.getKey(),e.getValue(),now);},needsReplan,d::dismiss);})));d.show();}
     void showReviewNotice(){if(!reviewShown&&!Planner.review(state,Planner.now()).isEmpty()){reviewShown=true;render();}}
