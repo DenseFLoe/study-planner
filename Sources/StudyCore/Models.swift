@@ -191,6 +191,8 @@ public struct CompletionRecord: Identifiable, Codable, Equatable, Sendable {
     public var taskID: UUID
     public var minutes: Int
     public var recordedAt: Date
+    /// Actual study day, distinct from the timestamp of a late confirmation.
+    public var studyDate: Date? = nil
 }
 
 public struct DailyAvailability: Identifiable, Codable, Equatable, Sendable {
@@ -384,16 +386,18 @@ public struct PlannerState: Codable, Equatable, Sendable {
     }
 
     /// Idempotent confirmations are essential: saving/reopening must never add progress twice.
-    public mutating func confirm(taskID: UUID, actualMinutes: Int, now: Date) throws {
+    public mutating func confirm(taskID: UUID, actualMinutes: Int, now: Date, studyDate: Date? = nil, calendar: Calendar = .current) throws {
         guard let index = tasks.firstIndex(where: { $0.id == taskID }), tasks[index].isUnconfirmed,
               let course = courses.first(where: { $0.id == tasks[index].courseID }) else { throw PlannerError.alreadyConfirmed }
         guard actualMinutes >= 0, actualMinutes <= tasks[index].durationMinutes else { throw PlannerError.invalidCompletion }
+        let actualDay = calendar.startOfDay(for: studyDate ?? now)
+        guard actualDay <= calendar.startOfDay(for: now) else { throw PlannerError.invalidCompletion }
         let lessonRemaining = lessonWorkItems(for: course).first { $0.id == tasks[index].lessonID }?.remainingMinutes
         let credited = min(actualMinutes, lessonRemaining ?? remainingMinutes(for: course))
         tasks[index].completedMinutes = credited
         tasks[index].confirmedAt = now
         tasks[index].status = actualMinutes == 0 ? .missed : (actualMinutes == tasks[index].durationMinutes ? .completed : .partial)
-        completions.append(.init(id: stablePlannerID("completion|" + taskID.uuidString), courseID: course.id, taskID: taskID, minutes: credited, recordedAt: now))
+        completions.append(.init(id: stablePlannerID("completion|" + taskID.uuidString), courseID: course.id, taskID: taskID, minutes: credited, recordedAt: now, studyDate: actualDay))
     }
     /// Remove a task confirmation and restore its original plan so the released progress
     /// is included in the next automatic replan.

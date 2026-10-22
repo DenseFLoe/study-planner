@@ -366,6 +366,7 @@ struct CompletionEditor: View {
     @Bindable var store: PlannerStore
     let task: ScheduledTask
     @State private var actual = 0
+    @State private var studyDate = Date()
     @Environment(\.dismiss) private var dismiss
     var body: some View {
         VStack(alignment: .leading, spacing: 20) {
@@ -374,11 +375,12 @@ struct CompletionEditor: View {
             if let lessonName = task.lessonName { Text(lessonName).font(.callout).foregroundStyle(.secondary) }
             Text("\(task.planningStart.formatted(date: .abbreviated, time: .shortened))\(task.isFloating ? "–" + task.planningEnd.formatted(date: .omitted, time: .shortened) + " 时段内" : "") · 计划 \(hours(task.durationMinutes))").foregroundStyle(.secondary)
             CompletionInput(actual: $actual, planned: task.durationMinutes)
+            DatePicker("实际学习日期", selection: $studyDate, in: ...Date(), displayedComponents: .date)
             Text("只有实际完成的学习量会计入进度；其余部分会自动重新分配。").font(.callout).foregroundStyle(.secondary)
             HStack { Spacer(); Button("取消") { dismiss() }.keyboardShortcut(.cancelAction)
-                Button("确认并重新排程") { if store.confirm(task, minutes: actual) { dismiss() } }.buttonStyle(.borderedProminent).disabled(actual < 0 || actual > task.durationMinutes)
+                Button("确认并重新排程") { if store.confirm(task, minutes: actual, studyDate: studyDate) { dismiss() } }.buttonStyle(.borderedProminent).disabled(actual < 0 || actual > task.durationMinutes)
             }
-        }.padding(28).frame(width: 500).onAppear { actual = task.durationMinutes }
+        }.padding(28).frame(width: 500).onAppear { actual = task.durationMinutes; studyDate = min(task.start, Date()) }
     }
 }
 struct DailyReviewView: View {
@@ -387,6 +389,7 @@ struct DailyReviewView: View {
     @State private var tasks: [ScheduledTask] = []
     @State private var values: [UUID: Int] = [:]
     @State private var reviewed: Set<UUID> = []
+    @State private var studyDates: [UUID: Date] = [:]
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
             SheetHeading(title: "确认学习完成情况", subtitle: "请逐项选择实际完成量，包含昨天及更早的未确认计划。")
@@ -398,6 +401,7 @@ struct DailyReviewView: View {
                             HStack { Text(store.course(task.courseID)?.name ?? "课程").font(.headline); Spacer(); Text(task.planningStart.formatted(date: .abbreviated, time: .shortened) + (task.isFloating ? "–" + task.planningEnd.formatted(date: .omitted, time: .shortened) + " 内浮动" : "")).foregroundStyle(.secondary) }
                             if let lessonName = task.lessonName { Text(lessonName).font(.callout).foregroundStyle(.secondary) }
                             CompletionInput(actual: Binding(get: { values[task.id] ?? 0 }, set: { values[task.id] = $0; reviewed.insert(task.id) }), planned: task.durationMinutes)
+                            DatePicker("实际学习日期（补录请核对）", selection: Binding(get: { studyDates[task.id] ?? min(task.start, Date()) }, set: { studyDates[task.id] = $0 }), in: ...Date(), displayedComponents: .date)
                             if !reviewed.contains(task.id) { Text("尚未选择完成情况").font(.caption).foregroundStyle(.orange) }
                         }.padding(16).background(Color.primary.opacity(0.035), in: RoundedRectangle(cornerRadius: 10))
                     }
@@ -412,7 +416,7 @@ struct DailyReviewView: View {
                     let now = Date()
                     let needsReplan = tasks.contains { $0.confirmationRequiresReplan(actualMinutes: values[$0.id] ?? 0, now: now) }
                     let success = store.change(replan: needsReplan) { state in
-                        for task in tasks { try state.confirm(taskID: task.id, actualMinutes: values[task.id] ?? 0, now: now) }
+                        for task in tasks { try state.confirm(taskID: task.id, actualMinutes: values[task.id] ?? 0, now: now, studyDate: studyDates[task.id] ?? min(task.start, now)) }
                     }
                     if success { dismiss() }
                 }.buttonStyle(.borderedProminent).disabled(tasks.isEmpty || reviewed.count != tasks.count || tasks.contains { !(0...$0.durationMinutes).contains(values[$0.id] ?? -1) })

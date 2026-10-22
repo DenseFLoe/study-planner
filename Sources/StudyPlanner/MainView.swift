@@ -565,12 +565,15 @@ struct MainView: View {
                     courses: store.courses
                 )
 
+                if let health = ScheduleHealthAnalyzer().assess(state: store.state, result: store.result, now: Date(), heavyDayMinutes: dailyLoadWarningMinutes) {
+                    ScheduleHealthWarning(health: health, adjustments: store.result.adjustments, showDetails: { sheet = .risks })
+                }
+
+                if !store.courses.isEmpty { DailyConsequencesView(store: store) }
+
                 CourseProgressPanel(
                     courses: store.courses,
                     demands: store.result.demands,
-                    health: ScheduleHealthAnalyzer().assess(state: store.state, result: store.result, now: Date(), heavyDayMinutes: dailyLoadWarningMinutes),
-                    adjustments: store.result.adjustments,
-                    showDetails: { sheet = .risks },
                     completedMinutes: { store.state.completedMinutes(for: $0) },
                     edit: { sheet = .course($0) }
                 )
@@ -839,7 +842,11 @@ private struct DailyTaskTimeline: View {
                 TimelineRow(
                     item: item, course: item.task.flatMap { store.course($0.courseID) },
                     isLast: index == items.count - 1,
-                    confirm: { _ = store.confirm($0, minutes: $0.durationMinutes) },
+                    confirm: { task in
+                        if Calendar.current.startOfDay(for: task.start) < Calendar.current.startOfDay(for: Date()) {
+                            editTask(task)
+                        } else { _ = store.confirm(task, minutes: task.durationMinutes) }
+                    },
                     editTask: editTask, editEvent: editEvent, skipEvent: skipEvent,
                     canSkipEvent: canEdit && !store.orderSaveBusy,
                     canReorder: canEdit && !store.orderSaveBusy && item.task != nil,
@@ -1286,19 +1293,12 @@ private struct FlowLegend: View {
 private struct CourseProgressPanel: View {
     var courses: [Course]
     var demands: [UUID: CourseDemand]
-    var health: ScheduleHealth?
-    var adjustments: [String]
-    var showDetails: () -> Void
     var completedMinutes: (Course) -> Int
     var edit: (Course) -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
             PlannerSectionTitle(title: "课程进度", detail: "\(courses.count) 门")
-
-            if let health {
-                ScheduleHealthWarning(health: health, adjustments: adjustments, showDetails: showDetails)
-            }
 
             if courses.isEmpty {
                 Text("添加课程后，可在这里查看进度和每日学习建议。")

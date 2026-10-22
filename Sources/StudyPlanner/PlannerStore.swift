@@ -159,12 +159,12 @@ final class PlannerStore {
     func setEventSkipped(_ event: FixedEvent, on day: Date, skipped: Bool) {
         change { try $0.setFixedEventSkipped(id: event.id, on: day, skipped: skipped, now: Date()) }
     }
-    func confirm(_ task: ScheduledTask, minutes: Int) -> Bool {
+    func confirm(_ task: ScheduledTask, minutes: Int, studyDate: Date? = nil) -> Bool {
         // Preserve active/future full completions; ended tasks may already have
         // replacement work scheduled, which must shrink when progress is credited.
         let now = Date()
         return change(replan: task.confirmationRequiresReplan(actualMinutes: minutes, now: now)) {
-            try $0.confirm(taskID: task.id, actualMinutes: minutes, now: now)
+            try $0.confirm(taskID: task.id, actualMinutes: minutes, now: now, studyDate: studyDate)
         }
     }
     func undoConfirmation(_ task: ScheduledTask) -> Bool {
