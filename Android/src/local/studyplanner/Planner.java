@@ -96,7 +96,15 @@ public final class Planner {
     public static List<JSONObject> review(JSONObject s,double now){List<JSONObject> out=new ArrayList<>();LocalDate today=day(now);int m=(int)((now-at(today,0))/60);for(JSONObject t:list(s.optJSONArray("tasks"))){JSONObject c=course(s,t.optString("courseID"));if(pending(t)&&c!=null&&!c.optBoolean("isArchived")&&(planningEnd(t)<=at(today,0)||(m>=s.optJSONObject("settings").optInt("notificationMinute")&&planningEnd(t)<=now)))out.add(t);}return out;}
     // Ended work may already be redistributed; floating work stays reserved until its window ends.
     public static boolean confirmationRequiresReplan(JSONObject task,int actual,double now){return actual!=task.optInt("durationMinutes")||planningEnd(task)<=now;}
-    public static void confirm(JSONObject s,String taskID,int actual,double now)throws Exception{JSONObject t=null;for(JSONObject v:list(s.getJSONArray("tasks")))if(v.getString("id").equals(taskID))t=v;if(t==null||!pending(t))throw new IllegalArgumentException("该任务已确认，请刷新后重试");if(actual<0||actual>t.getInt("durationMinutes"))throw new IllegalArgumentException("实际时长必须在 0 与计划时长之间");JSONObject c=course(s,t.getString("courseID"));if(c==null)throw new IllegalArgumentException("找不到课程");int available=remaining(s,c);for(Work w:lessonWorkAll(s,c))if(w.lessonID.equals(t.optString("lessonID"))){available=w.minutes;break;}int credit=Math.min(actual,available);t.put("completedMinutes",credit).put("confirmedAt",now).put("status",actual==0?"missed":actual==t.getInt("durationMinutes")?"completed":"partial");s.getJSONArray("completions").put(new JSONObject().put("id",stableID("completion|"+taskID)).put("courseID",c.getString("id")).put("taskID",taskID).put("minutes",credit).put("recordedAt",now));}
+    public static void confirm(JSONObject s,String taskID,int actual,double now)throws Exception{confirm(s,taskID,actual,now,day(now));}
+    public static void confirm(JSONObject s,String taskID,int actual,double now,LocalDate studyDate)throws Exception{
+        if(studyDate.isAfter(day(now)))throw new IllegalArgumentException("实际学习日期不能晚于今天");
+        JSONObject t=null;for(JSONObject v:list(s.getJSONArray("tasks")))if(v.getString("id").equals(taskID))t=v;if(t==null||!pending(t))throw new IllegalArgumentException("该任务已确认，请刷新后重试");if(actual<0||actual>t.getInt("durationMinutes"))throw new IllegalArgumentException("实际时长必须在 0 与计划时长之间");JSONObject c=course(s,t.getString("courseID"));if(c==null)throw new IllegalArgumentException("找不到课程");int available=remaining(s,c);for(Work w:lessonWorkAll(s,c))if(w.lessonID.equals(t.optString("lessonID"))){available=w.minutes;break;}int credit=Math.min(actual,available);t.put("completedMinutes",credit).put("confirmedAt",now).put("status",actual==0?"missed":actual==t.getInt("durationMinutes")?"completed":"partial");s.getJSONArray("completions").put(new JSONObject().put("id",stableID("completion|"+taskID)).put("courseID",c.getString("id")).put("taskID",taskID).put("minutes",credit).put("recordedAt",now).put("studyDate",at(studyDate,0)));}
+    static String completionDescription(JSONObject task){
+        if(pending(task))return "未确认 · 计划 "+task.optInt("durationMinutes")+" 分钟";
+        int actual=task.optInt("completedMinutes"),planned=task.optInt("durationMinutes");
+        return (actual==0?"未完成":actual>=planned?"已完成":"部分完成")+" · 实际完成 "+actual+" 分钟";
+    }
     public static void undoConfirmation(JSONObject s,String taskID,double now)throws Exception{JSONObject t=null;for(JSONObject v:list(s.getJSONArray("tasks")))if(v.getString("id").equals(taskID))t=v;if(t==null||!t.has("confirmedAt"))throw new IllegalArgumentException("该任务尚未确认，无需撤销");JSONArray records=s.getJSONArray("completions");boolean removed=false;for(int i=records.length()-1;i>=0;i--)if(records.getJSONObject(i).optString("taskID").equals(taskID)){records.remove(i);removed=true;}if(!removed)throw new IllegalArgumentException("找不到该任务的完成记录");t.remove("confirmedAt");t.put("completedMinutes",0).put("status",day(t.getDouble("start")).equals(day(now))?"planned":"future");JSONObject c=course(s,t.getString("courseID"));if(c!=null)reconcileWebsiteBaseline(s,c);}
 
     static void reconcileWebsiteBaseline(JSONObject state,JSONObject course)throws Exception {
@@ -578,7 +586,10 @@ public final class Planner {
         for(JSONObject c:list(s.getJSONArray("courses")))if(!c.optBoolean("isArchived")&&c.optBoolean("autoScheduleEnabled",true)&&remaining(s,c)>0){courses.add(c);if(day(c.getDouble("deadline")).isAfter(horizon))horizon=day(c.getDouble("deadline"));}
         if(horizon.isAfter(today.plusYears(10))){horizon=today.plusYears(10);warnings.add("仅生成未来十年的计划");}
         for(JSONObject t:list(s.getJSONArray("tasks"))){if(!pending(t)||(planningEnd(t)<=now&&!(actualStart!=null&&day(t.getDouble("start")).equals(today))))history.add(t);}
-        List<Span> floatingRegions=new ArrayList<>();
+        List<Span> floatingRegions=new ArrayList<>();List<Day> hardDays=new ArrayList<>();
+        List<ScheduleFeasibilitySearch.Window> eventWindows=new ArrayList<>();
+        List<ScheduleFeasibilitySearch.Floating> floatingJobs=new ArrayList<>();boolean jointSupported=true;
+        JSONArray adjustments=new JSONArray();
         List<Day> days=new ArrayList<>();for(LocalDate d=today;!d.isAfter(horizon);d=d.plusDays(1)){
             List<Span> windows=new ArrayList<>(),blocks=new ArrayList<>();for(JSONObject a:list(s.getJSONObject("settings").getJSONArray("availability")))if(a.getInt("weekday")==weekday(d))windows.add(new Span(Math.max(scheduleStart,at(d,a.getInt("startMinute"))),at(d,a.getInt("endMinute"))));
             List<JSONObject> events=new ArrayList<>();List<Span> regions=new ArrayList<>();
@@ -587,6 +598,13 @@ public final class Planner {
                 if(floating(e))regions.add(span);else blocks.add(span);
             }
             regions=merge(regions);
+            List<Span> hardBlocks=new ArrayList<>(blocks);
+            for(JSONObject t:history)if(planningStart(t)<now&&(pending(t)||t.optInt("completedMinutes")>0))hardBlocks.add(buffered(retainedHistoryStart(t),retainedHistoryEnd(t)));
+            hardDays.add(new Day(d,subtract(windows,hardBlocks)));
+            for(Span span:subtract(Collections.singletonList(new Span(at(d,0),at(d,1440))),hardBlocks))
+                eventWindows.add(new ScheduleFeasibilitySearch.Window(ScheduleFeasibilitySearch.minute(span.a),(int)Math.floor(span.b/60)));
+            int floatingCount=0;for(JSONObject e:events)if(floating(e)){floatingCount++;floatingJobs.add(new ScheduleFeasibilitySearch.Floating(d,e));}
+            if(floatingCount>1)jointSupported=false;
             for(Span span:subtract(windows,blocks))for(Span region:regions){Span clipped=new Span(Math.max(span.a,region.a),Math.min(span.b,region.b));if(clipped.minutes()>0)floatingRegions.add(clipped);}
             boolean[] study=new boolean[1440];
             for(JSONObject a:list(s.getJSONObject("settings").getJSONArray("availability")))if(a.optInt("weekday")==weekday(d))
@@ -632,7 +650,8 @@ public final class Planner {
                 }
             }if(!repaired)break;
         }int left=0;for(Work w:work)left+=w.minutes;missing.put(cid,left);}
-        // Prefer daily diversity when whole blocks fit, ahead of priority and sub-3x boosts. Rebuild
+        List<JSONObject> feasibleTasks=new ArrayList<>(tasks);Map<String,Integer> feasibleMissing=new HashMap<>(missing);
+        // Daily diversity remains a preference behind deadline feasibility. Rebuild
         // from ALL unfinished work, including blocks the deadline-first pass could not book;
         // otherwise a monopolizing course can hide the other courses.
         if(courses.size()>=3){
@@ -642,6 +661,22 @@ public final class Planner {
             diversity.schedule(courses,original);
             tasks=diversity.tasks;
             for(JSONObject c:courses){String id=c.getString("id");List<Work> work=allWork.get(id);int left=0;for(int i=diversity.positions.get(id);i<work.size();i++)left+=work.get(i).minutes;missing.put(id,left);}
+            Set<LocalDate> deadlines=new TreeSet<>();for(JSONObject c:courses)deadlines.add(day(c.optDouble("deadline")));
+            for(LocalDate cutoff:deadlines){int before=0,after=0;for(JSONObject c:courses)if(!day(c.optDouble("deadline")).isAfter(cutoff)){before+=feasibleMissing.get(c.optString("id"));after+=missing.get(c.optString("id"));}
+                if(before==after)continue;if(before<after){tasks=feasibleTasks;missing=feasibleMissing;List<Span> occupied=new ArrayList<>();for(JSONObject t:tasks)occupied.add(buffered(t.optDouble("start"),end(t)));for(int i=0;i<days.size();i++)days.get(i).free=subtract(original.get(i).free,occupied);
+                    adjustments.put("为守住截止日期，已适当放宽每天的科目混排和学习倍率偏好。");}break;
+            }
+        }
+        if(jointSupported&&missing.values().stream().anyMatch(n->n>0)){
+            List<ScheduleFeasibilitySearch.Queue> queues=new ArrayList<>();for(JSONObject c:courses)queues.add(new ScheduleFeasibilitySearch.Queue(c,allWork.get(c.optString("id"))));
+            ScheduleFeasibilitySearch.Solution solution=ScheduleFeasibilitySearch.find(queues,ScheduleFeasibilitySearch.windows(hardDays),eventWindows,floatingJobs,ScheduleFeasibilitySearch.minute(scheduleStart),ScheduleFeasibilitySearch.minute(at(today,0)));
+            if(solution!=null){tasks=solution.tasks;List<Span> occupied=new ArrayList<>();for(JSONObject t:tasks)occupied.add(buffered(t.optDouble("start"),end(t)));
+                for(int i=0;i<days.size();i++){List<Span> reservations=new ArrayList<>();for(ScheduleFeasibilitySearch.Floating job:floatingJobs)if(job.date.equals(original.get(i).d)){Integer start=solution.floatingStarts.get(job.date);if(start!=null)reservations.add(new Span(start*60.0,(start+job.minutes)*60.0));}
+                    original.get(i).free=subtract(hardDays.get(i).free,reservations);days.get(i).free=subtract(original.get(i).free,occupied);}
+                for(JSONObject c:courses)missing.put(c.optString("id"),0);
+                adjustments.put("已联合调整浮动事项在原窗口内的位置与课程分配，保持截止日期和整节课顺序。");
+                warnings.removeIf(w->w.startsWith("浮动事项的连续时长"));
+            }
         }
         // Try a day-by-day rotation, retaining the feasible allocation if any booked block fails to fit.
         if(courses.size()<3&&(hasDailyBoost||courses.size()==2)){
@@ -716,8 +751,9 @@ public final class Planner {
             t.put("id",stable);
         }
         JSONArray risks=new JSONArray();Set<LocalDate> cutoffs=new TreeSet<>();for(JSONObject c:courses)cutoffs.add(day(c.getDouble("deadline")));for(LocalDate cutoff:cutoffs){List<JSONObject> group=new ArrayList<>();JSONArray names=new JSONArray();int requiredMinutes=0,absent=0,capacity=0;for(JSONObject c:courses)if(!day(c.getDouble("deadline")).isAfter(cutoff)){group.add(c);requiredMinutes+=required.get(c.getString("id"));absent+=missing.get(c.getString("id"));if(missing.get(c.getString("id"))>0)names.put(c.getString("name"));}if(absent==0)continue;for(Day d:original)if(!d.d.isAfter(cutoff)){boolean learnable=false;for(JSONObject c:group)if(eligible(c,d.d))learnable=true;if(learnable)for(Span span:d.free)capacity+=span.minutes();}risks.put(new JSONObject().put("deadline",at(cutoff,0)).put("requiredMinutes",requiredMinutes).put("availableMinutes",capacity).put("unscheduledMinutes",absent).put("courseNames",names));}s.put("androidRisks",risks);
+        ScheduleHealth.record(s,courses,required,missing,allWork,hardDays,original,packed,today,horizon,adjustments);
         history.addAll(packed);history.sort(Comparator.comparingDouble(t->t.optDouble("start")));s.put("tasks",array(history));s.put("androidWarnings",new JSONArray(warnings));return warnings;
     }
     /** Derived UI diagnostics are recalculated after SQLite/sync reads without replacing shared tasks. */
-    public static void refreshDiagnostics(JSONObject state,double now)throws Exception{JSONObject preview=CourseTools.copy(state);replan(preview,now);state.put("androidWarnings",preview.getJSONArray("androidWarnings")).put("androidRisks",preview.getJSONArray("androidRisks"));}
+    public static void refreshDiagnostics(JSONObject state,double now)throws Exception{JSONObject preview=CourseTools.copy(state);replan(preview,now);for(String key:new String[]{"androidWarnings","androidRisks","androidMissing","androidDayPlans","androidConflicts","androidAdjustments"})state.put(key,preview.get(key));}
 }

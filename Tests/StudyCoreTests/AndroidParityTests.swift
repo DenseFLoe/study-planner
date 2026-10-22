@@ -2,6 +2,22 @@ import XCTest
 @testable import StudyCore
 
 final class AndroidParityTests: XCTestCase {
+    func testAndroidBackfillDatesRemainActualStudyDatesOnMac() throws {
+        let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+        let url = root.appendingPathComponent("Android/build/tests/daily-consequence-parity.json")
+        guard FileManager.default.fileExists(atPath: url.path) else {
+            throw XCTSkip("Run ./Android/test.sh to generate the synthetic Android backfill fixture")
+        }
+        let state = try JSONDecoder().decode(PlannerState.self, from: Data(contentsOf: url))
+        let actualDay = calendar.date(from: .init(year: 2026, month: 9, day: 14))!
+        let recordedDay = calendar.date(byAdding: .day, value: 1, to: actualDay)!
+        XCTAssertFalse(state.completions.isEmpty)
+        XCTAssertTrue(state.completions.allSatisfy { $0.studyDate == actualDay })
+        XCTAssertTrue(state.completions.allSatisfy { calendar.isDate($0.recordedAt, inSameDayAs: recordedDay) })
+        let analyzer = DailyConsequenceAnalyzer(calendar: calendar)
+        XCTAssertEqual(analyzer.confirmed(on: actualDay, state: state), 30)
+        XCTAssertEqual(analyzer.confirmed(on: recordedDay, state: state), 0)
+    }
     private func fixture() throws -> PlannerState {
         let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
         return try JSONDecoder().decode(PlannerState.self, from: Data(contentsOf: root.appendingPathComponent("Android/tests/fixtures/desktop-parity.json")))

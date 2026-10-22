@@ -79,7 +79,8 @@ public class PlannerTests {
   JSONObject s=diversityState(1,new int[]{600,60,60},1);JSONArray courses=s.getJSONArray("courses");
   courses.getJSONObject(1).put("deadline",Planner.at(next,0));courses.getJSONObject(2).put("deadline",Planner.at(next,0));
   Planner.replan(s,now);
-  check(owners(s,start).size()==3,"Urgency displaced the daily diversity");
+  check(owners(s,start).equals(Collections.singleton(courses.getJSONObject(0).getString("id"))),"Daily diversity displaced the earlier deadline");
+  check(s.getJSONArray("androidAdjustments").length()>0,"Deadline fallback was not explained");
   check(s.getJSONArray("androidRisks").length()>0&&s.getJSONArray("androidRisks").getJSONObject(0).getInt("unscheduledMinutes")>0,"Diversity must not invent capacity");
   invariant(s,now);
  }

@@ -31,7 +31,13 @@ final class PlannerUi {
             }else if(kind==3){
                 c.drawCircle(12,12,7,paint);c.drawCircle(12,12,2.5f,paint);
                 for(int i=0;i<8;i++){c.save();c.rotate(i*45,12,12);c.drawLine(12,2,12,5,paint);c.restore();}
+            }else if(kind==5){
+                c.drawRoundRect(3,15,7,21,1.2f,1.2f,paint);
+                c.drawRoundRect(10,11,14,21,1.2f,1.2f,paint);
+                c.drawRoundRect(17,7,21,21,1.2f,1.2f,paint);
+                c.drawLine(5,12,11,8,paint);c.drawLine(11,8,18,4,paint);
             }else{
+                // kind 4: search magnifier; unknown kinds fall back to it.
                 c.drawCircle(10,10,6.5f,paint);c.drawLine(15,15,21,21,paint);
             }
             c.restore();
