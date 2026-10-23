@@ -236,6 +236,152 @@ enum SchedulePreferenceOptimizer {
             }
         }
 
+        struct BeamKey: Hashable {
+            var positions: [Int]
+            var day: Int
+            var mask: Int
+            var previous: Int
+        }
+        struct BeamNode {
+            var key: BeamKey
+            var end: Int
+            var task: Int
+            var start: Int
+            var parent: Int
+            var coverage: Double
+            var earlyCoverage: Double
+            var repetitions: Double
+            var rank: [Double]
+        }
+
+        func needsQueueReconstruction(_ plan: Plan) -> Bool {
+            guard courses.count >= 2, tasks.count >= 20, days.count >= 7,
+                  Set(tasks.map(\.durationMinutes)).count >= 3 else { return false }
+            var lastDay = [Int](repeating: -1, count: courses.count)
+            for d in days.indices { for t in plan.rows[d] { lastDay[owners[t]] = d } }
+            return days.indices.contains { d in
+                let available = courses.indices.filter { allowed[$0][d] && lastDay[$0] >= d }.count
+                return Set(plan.rows[d].map { owners[$0] }).count < min(3, available)
+            }
+        }
+
+        func rankPrecedes(_ a: [Double], _ b: [Double]) -> Bool {
+            for (x, y) in zip(a, b) where x != y { return x < y }
+            return false
+        }
+
+        /// Keep several complete queue prefixes alive. A short-term preference
+        /// must not discard the only prefix that can still finish a long course.
+        /// This constructs an alternative; the normal whole-plan score decides
+        /// whether it replaces the existing feasible timetable.
+        func queueBeam(paceFirst: Bool) -> Plan? {
+            guard courses.count <= 6, tasks.count <= 600, days.count <= 366 else { return nil }
+            let queues = courses.indices.map { c in tasks.indices.filter { owners[$0] == c } }
+            let windows = days.indices.flatMap { d in days[d].windows.map {
+                (start: Int(ceil($0.start.timeIntervalSinceReferenceDate / 60)), end: Int(floor($0.end.timeIntervalSinceReferenceDate / 60)), day: d)
+            } }
+            guard !windows.isEmpty, windows.count <= 1500 else { return nil }
+            let beamWidth = min(32, max(4, 60_000 / max(1, tasks.count * courses.count)))
+            let rest = ScheduleEngine.breakMinutes
+            var suffix: [[Int]] = [], latest: [[Int]] = [], totalCapacity: [Int] = []
+            for c in courses.indices {
+                var sums = [Int](repeating: 0, count: queues[c].count + 1)
+                var last = [Int](repeating: Int.max / 4, count: queues[c].count + 1)
+                var end = windows.last!.end
+                for p in queues[c].indices.reversed() {
+                    let size = tasks[queues[c][p]].durationMinutes
+                    guard let w = windows.last(where: { allowed[c][$0.day] && min(end, $0.end) - size >= $0.start }) else { return nil }
+                    last[p] = min(end, w.end) - size; end = last[p] - rest
+                    sums[p] = sums[p + 1] + size
+                }
+                suffix.append(sums); latest.append(last)
+                totalCapacity.append(windows.filter { allowed[c][$0.day] }.reduce(0) { $0 + $1.end - $1.start })
+            }
+            let deadlines = Set(courses.indices.compactMap { allowed[$0].lastIndex(of: true) }).sorted()
+            func assessment(_ key: BeamKey, _ end: Int) -> Double? {
+                for c in courses.indices where key.positions[c] < queues[c].count {
+                    if end + rest > latest[c][key.positions[c]] { return nil }
+                }
+                for cutoff in deadlines {
+                    let group = courses.indices.filter { (allowed[$0].lastIndex(of: true) ?? -1) <= cutoff }
+                    let required = group.reduce(0) { $0 + suffix[$1][key.positions[$1]] }
+                    let blocks = group.reduce(0) { $0 + queues[$1].count - key.positions[$1] }
+                    var capacity = 0, regions = 0
+                    for w in windows where w.day <= cutoff && w.end > end {
+                        capacity += w.end - max(end, w.start); regions += 1
+                    }
+                    if required + rest * max(0, blocks - regions) > capacity { return nil }
+                }
+                var pace = 0.0
+                for c in courses.indices where suffix[c][0] > 0 {
+                    let used = windows.filter { allowed[c][$0.day] && $0.start < end }
+                        .reduce(0) { $0 + max(0, min(end, $1.end) - $1.start) }
+                    let expected = min(1, Double(used) / Double(max(1, totalCapacity[c])) * courses[c].dailyWeight)
+                    let completed = Double(suffix[c][0] - suffix[c][key.positions[c]]) / Double(suffix[c][0])
+                    pace += (completed - expected) * (completed - expected)
+                }
+                return pace
+            }
+            let first = BeamKey(positions: courses.map { _ in 0 }, day: -1, mask: 0, previous: -1)
+            var nodes = [BeamNode(key: first, end: windows[0].start - rest, task: -1, start: 0, parent: -1,
+                                  coverage: 0, earlyCoverage: 0, repetitions: 0, rank: [])]
+            var beam = [0], expansions = 0
+            for _ in tasks.indices {
+                var candidates: [BeamKey: BeamNode] = [:]
+                for parent in beam {
+                    let previous = nodes[parent]
+                    for c in courses.indices where previous.key.positions[c] < queues[c].count {
+                        expansions += 1
+                        if expansions > 60_000 { return nil }
+                        let t = queues[c][previous.key.positions[c]], size = tasks[t].durationMinutes
+                        guard let w = windows.first(where: { allowed[c][$0.day] && max(previous.end + rest, $0.start) + size <= $0.end }) else { continue }
+                        let start = max(previous.end + rest, w.start), end = start + size
+                        var key = previous.key
+                        key.positions[c] += 1
+                        if key.day != w.day { key.day = w.day; key.mask = 0; key.previous = -1 }
+                        let count = min(3, key.mask.nonzeroBitCount)
+                        let gain = key.mask & (1 << c) == 0 && count < 3 ? Double(count) : 0
+                        let repetitions = previous.repetitions + (key.previous == c ? 1 : 0)
+                        key.mask |= 1 << c; key.previous = c
+                        guard let pace = assessment(key, end) else { continue }
+                        let coverage = previous.coverage + gain
+                        let earlyCoverage = previous.earlyCoverage + gain * Double(days.count - w.day)
+                        let rank = paceFirst ? [pace, -coverage, -earlyCoverage, repetitions, Double(end)]
+                            : [-coverage, -earlyCoverage, pace, repetitions, Double(end)]
+                        if let old = candidates[key], !rankPrecedes(rank, old.rank) { continue }
+                        candidates[key] = .init(key: key, end: end, task: t, start: start, parent: parent,
+                                                coverage: coverage, earlyCoverage: earlyCoverage, repetitions: repetitions, rank: rank)
+                    }
+                }
+                guard !candidates.isEmpty else { return nil }
+                let selected = candidates.values.sorted { a, b in
+                    if rankPrecedes(a.rank, b.rank) { return true }
+                    if rankPrecedes(b.rank, a.rank) { return false }
+                    if a.key.positions != b.key.positions { return a.key.positions.lexicographicallyPrecedes(b.key.positions) }
+                    if a.key.day != b.key.day { return a.key.day < b.key.day }
+                    if a.key.mask != b.key.mask { return a.key.mask < b.key.mask }
+                    return a.key.previous < b.key.previous
+                }.prefix(beamWidth)
+                beam = []
+                for node in selected { beam.append(nodes.count); nodes.append(node) }
+            }
+            var best: Plan?
+            for final in beam {
+                var rows = [[Int]](repeating: [], count: days.count)
+                var starts = [Date](repeating: .distantPast, count: tasks.count), index = final
+                while nodes[index].parent >= 0 {
+                    let node = nodes[index]
+                    rows[node.key.day].append(node.task)
+                    starts[node.task] = Date(timeIntervalSinceReferenceDate: Double(node.start) * 60)
+                    index = node.parent
+                }
+                for d in days.indices { rows[d].reverse() }
+                let result = Plan(rows: rows, starts: starts, score: score(rows: rows, starts: starts))
+                if best == nil || better(result.score, than: best!.score) { best = result }
+            }
+            return best
+        }
+
         func run() -> Outcome {
             let baseline = tasks.map(\.start)
             var current = Plan(rows: initialRows, starts: baseline, score: score(rows: initialRows, starts: baseline))
@@ -246,6 +392,12 @@ enum SchedulePreferenceOptimizer {
             for rows in [interleaved(current.rows), paced, interleaved(paced)] {
                 if let trial = pack(rows), better(trial.score, than: current.score) { current = trial }
             }
+            if needsQueueReconstruction(current) {
+                for paceFirst in [false, true] {
+                    if let trial = queueBeam(paceFirst: paceFirst), better(trial.score, than: current.score) { current = trial }
+                }
+            }
+            if let trial = pack(interleaved(current.rows)), better(trial.score, than: current.score) { current = trial }
             var changed = true
             while changed && budget > 0 {
                 changed = false

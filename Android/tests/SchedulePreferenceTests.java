@@ -91,5 +91,38 @@ public final class SchedulePreferenceTests {
         }
         Files.write(Paths.get("Android/build/tests/schedule-preference-parity.json"),fixtures.toString().getBytes(StandardCharsets.UTF_8));
     }
-    public static void main(String[] args)throws Exception{behavior();parity();System.out.println("PASS "+checks+" preference checks and 24 cross-platform rule permutations");}
+    static JSONObject denseState()throws Exception{
+        JSONObject state=state(new int[0],21);state.getJSONObject("settings").put("availability",StudySettingsTests.windows(480,1200));
+        int[][] lengths={
+            {45,20,70,15,35,55,25,60,30,50,40,65,20,55,35,45,30,60,25,50},
+            new int[20],new int[30],new int[18]
+        };
+        for(int i=0;i<20;i++)lengths[1][i]=new int[]{150,165,135,180}[i%4];
+        for(int i=0;i<30;i++)lengths[2][i]=new int[]{45,65,35}[i%3];
+        for(int i=0;i<18;i++)lengths[3][i]=new int[]{75,95,55}[i%3];
+        for(int c=0;c<4;c++){
+            int amount=0;for(int size:lengths[c])amount+=size;
+            JSONObject course=PlannerTests.course("合成课程"+c,amount,TODAY,TODAY.plusDays(new int[]{7,17,20,20}[c]),60)
+                .put("id",Planner.stableID("dense-course-"+c)).put("type","不定时录播课程").put("priority",c==0?2:3).put("color","blue").put("notes","");
+            JSONArray lessons=new JSONArray();for(int i=0;i<lengths[c].length;i++)lessons.put(new JSONObject().put("id","unit"+i).put("name","合成课节").put("durationMinutes",lengths[c][i]));
+            course.put("manualLessons",lessons);state.getJSONArray("courses").put(course);
+        }
+        state.getJSONArray("fixedEvents").put(new JSONObject().put("id",Planner.stableID("dense-fixed-A")).put("title","合成固定事项甲")
+            .put("startMinute",540).put("endMinute",660).put("startDate",Planner.at(TODAY,0)).put("endDate",Planner.at(TODAY.plusDays(20),0)).put("weekdays",new JSONArray("[2,4,6]")));
+        state.getJSONArray("fixedEvents").put(new JSONObject().put("id",Planner.stableID("dense-fixed-B")).put("title","合成固定事项乙")
+            .put("startMinute",480).put("endMinute",1020).put("startDate",Planner.at(TODAY,0)).put("endDate",Planner.at(TODAY.plusDays(20),0)).put("weekdays",new JSONArray("[3]")));
+        return state;
+    }
+    static void denseParity()throws Exception{
+        JSONArray fixtures=new JSONArray();
+        for(boolean balanced:new boolean[]{false,true}){
+            JSONObject state=denseState();if(balanced)order(state,3,0,1,2);
+            JSONObject before=new JSONObject(state.toString());replan(state);intact(state);
+            int diverse=0;for(int d=0;d<7;d++)if(PlannerTests.owners(state,TODAY.plusDays(d)).size()>=3)diverse++;
+            if(!balanced)check(diverse>=5,"Dense queues still monopolize early days: "+diverse);
+            fixtures.put(new JSONObject().put("state",before).put("tasks",new JSONArray(state.getJSONArray("tasks").toString())));
+        }
+        Files.write(Paths.get("Android/build/tests/dense-preference-parity.json"),fixtures.toString().getBytes(StandardCharsets.UTF_8));
+    }
+    public static void main(String[] args)throws Exception{behavior();parity();denseParity();System.out.println("PASS "+checks+" preference checks, 24 rule permutations and 2 dense cross-platform fixtures");}
 }

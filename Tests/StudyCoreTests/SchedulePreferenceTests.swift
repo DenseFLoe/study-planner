@@ -122,6 +122,49 @@ final class SchedulePreferenceTests: XCTestCase {
         state.settings.availability = []
         XCTAssertTrue(plan(state).tasks.isEmpty)
     }
+    private func denseState() -> PlannerState {
+        var state = state([], days: 21)
+        let lengths = [
+            [45, 20, 70, 15, 35, 55, 25, 60, 30, 50, 40, 65, 20, 55, 35, 45, 30, 60, 25, 50],
+            Array(repeating: [150, 165, 135, 180], count: 5).flatMap { $0 },
+            Array(repeating: [45, 65, 35], count: 10).flatMap { $0 },
+            Array(repeating: [75, 95, 55], count: 6).flatMap { $0 }
+        ]
+        state.settings.availability = (1...7).map { .init(weekday: $0, startMinute: 480, endMinute: 1200) }
+        state.courses = lengths.enumerated().map { c, values in
+            var course = Course(name: "合成课程\(c)", totalMinutes: values.reduce(0, +), startDate: date(0), deadline: date([7, 17, 20, 20][c]))
+            course.id = stablePlannerID("dense-course-\(c)"); course.type = .lessonBasedRecorded
+            course.priority = c == 0 ? 2 : 3
+            course.manualLessons = values.enumerated().map { .init(id: "unit\($0.offset)", name: "合成课节", durationMinutes: $0.element) }
+            return course
+        }
+        state.fixedEvents = [
+            .init(title: "合成固定事项甲", startMinute: 540, endMinute: 660, startDate: date(0), endDate: date(20), weekdays: [2, 4, 6]),
+            .init(title: "合成固定事项乙", startMinute: 480, endMinute: 1020, startDate: date(0), endDate: date(20), weekdays: [3])
+        ]
+        return state
+    }
+    func testDenseVariableQueuesMixEarlyDaysWithoutLosingEarlierDeadline() {
+        let state = denseState(), result = plan(state)
+        let diverse = (0..<7).filter { d in Set(result.tasks.filter { calendar.isDate($0.start, inSameDayAs: date(d)) }.map(\.courseID)).count >= 3 }
+        XCTAssertGreaterThanOrEqual(diverse.count, 5)
+        assertWorkPreserved(result, state: state)
+        XCTAssertEqual(result.tasks, plan(state).tasks)
+    }
+    func testDenseQueueSearchMatchesAndroid() throws {
+        let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+        let fixture = root.appendingPathComponent("Android/build/tests/dense-preference-parity.json")
+        guard FileManager.default.fileExists(atPath: fixture.path) else { throw XCTSkip("Run ./Android/test.sh to generate synthetic dense preference fixtures") }
+        let rows = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: fixture)) as? [[String: Any]])
+        XCTAssertEqual(rows.count, 2)
+        for row in rows {
+            let state = try JSONDecoder().decode(PlannerState.self, from: JSONSerialization.data(withJSONObject: XCTUnwrap(row["state"])))
+            let expected = try JSONDecoder().decode([ScheduledTask].self, from: JSONSerialization.data(withJSONObject: XCTUnwrap(row["tasks"])))
+            let result = plan(state)
+            XCTAssertEqual(result.tasks, expected)
+            assertWorkPreserved(result, state: state)
+        }
+    }
     func testAndroidAndMacMatchAcrossEveryRulePermutation() throws {
         let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
         let fixture = root.appendingPathComponent("Android/build/tests/schedule-preference-parity.json")

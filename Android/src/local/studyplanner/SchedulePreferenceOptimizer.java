@@ -182,6 +182,114 @@ final class SchedulePreferenceOptimizer {
             }
             return result;
         }
+        static final class BeamKey {
+            final int[] positions;int day=-1,mask,previous=-1;
+            BeamKey(int count){positions=new int[count];}
+            BeamKey(BeamKey other){positions=other.positions.clone();day=other.day;mask=other.mask;previous=other.previous;}
+            @Override public int hashCode(){return 31*(31*(31*Arrays.hashCode(positions)+day)+mask)+previous;}
+            @Override public boolean equals(Object value){if(!(value instanceof BeamKey))return false;BeamKey b=(BeamKey)value;return day==b.day&&mask==b.mask&&previous==b.previous&&Arrays.equals(positions,b.positions);}
+        }
+        static final class BeamNode {
+            final BeamKey key;final int end,task,start,parent;final double coverage,earlyCoverage,repetitions;final double[] rank;
+            BeamNode(BeamKey key,int end,int task,int start,int parent,double coverage,double earlyCoverage,double repetitions,double[] rank){
+                this.key=key;this.end=end;this.task=task;this.start=start;this.parent=parent;this.coverage=coverage;this.earlyCoverage=earlyCoverage;this.repetitions=repetitions;this.rank=rank;
+            }
+        }
+        static final class QueueWindow {
+            final int start,end,day;
+            QueueWindow(Planner.Span span,int day){start=(int)Math.ceil(span.a/60);end=(int)Math.floor(span.b/60);this.day=day;}
+        }
+        boolean needsQueueReconstruction(Plan plan){
+            Set<Integer> durations=new HashSet<>();for(int size:sizes)durations.add(size);
+            if(courses.size()<2||tasks.size()<20||days.size()<7||durations.size()<3)return false;
+            int[] lastDay=new int[courses.size()];Arrays.fill(lastDay,-1);
+            for(int d=0;d<days.size();d++)for(int t:plan.rows.get(d))lastDay[owners[t]]=d;
+            for(int d=0;d<days.size();d++){
+                int available=0;for(int c=0;c<courses.size();c++)if(allowed[c][d]&&lastDay[c]>=d)available++;
+                Set<Integer> present=new HashSet<>();for(int t:plan.rows.get(d))present.add(owners[t]);
+                if(present.size()<Math.min(3,available))return true;
+            }
+            return false;
+        }
+        static boolean rankPrecedes(double[] a,double[] b){for(int i=0;i<a.length;i++)if(a[i]!=b[i])return a[i]<b[i];return false;}
+        /** Retain alternative complete queue prefixes; only the normal plan score may adopt a result. */
+        Plan queueBeam(boolean paceFirst){
+            if(courses.size()>6||tasks.size()>600||days.size()>366)return null;
+            List<List<Integer>> queues=new ArrayList<>();for(int c=0;c<courses.size();c++){List<Integer> queue=new ArrayList<>();for(int t=0;t<tasks.size();t++)if(owners[t]==c)queue.add(t);queues.add(queue);}
+            List<QueueWindow> windows=new ArrayList<>();for(int d=0;d<days.size();d++)for(Planner.Span span:days.get(d).free)windows.add(new QueueWindow(span,d));
+            if(windows.isEmpty()||windows.size()>1500)return null;
+            int beamWidth=Math.min(32,Math.max(4,60000/Math.max(1,tasks.size()*courses.size())));
+            int rest=Planner.BREAK_MINUTES;int[][] suffix=new int[courses.size()][],latest=new int[courses.size()][];
+            int[] totalCapacity=new int[courses.size()],lastDay=new int[courses.size()];Arrays.fill(lastDay,-1);Set<Integer> deadlines=new TreeSet<>();
+            for(int c=0;c<courses.size();c++){
+                suffix[c]=new int[queues.get(c).size()+1];latest[c]=new int[queues.get(c).size()+1];Arrays.fill(latest[c],Integer.MAX_VALUE/4);
+                int end=windows.get(windows.size()-1).end;
+                for(int p=queues.get(c).size()-1;p>=0;p--){
+                    int size=sizes[queues.get(c).get(p)];QueueWindow found=null;
+                    for(int w=windows.size()-1;w>=0;w--){QueueWindow span=windows.get(w);if(allowed[c][span.day]&&Math.min(end,span.end)-size>=span.start){found=span;break;}}
+                    if(found==null)return null;latest[c][p]=Math.min(end,found.end)-size;end=latest[c][p]-rest;suffix[c][p]=suffix[c][p+1]+size;
+                }
+                for(QueueWindow w:windows)if(allowed[c][w.day])totalCapacity[c]+=w.end-w.start;
+                for(int d=0;d<days.size();d++)if(allowed[c][d])lastDay[c]=d;
+                if(lastDay[c]>=0)deadlines.add(lastDay[c]);
+            }
+            class Guidance {
+                Double assessment(BeamKey key,int end){
+                    for(int c=0;c<courses.size();c++)if(key.positions[c]<queues.get(c).size()&&end+rest>latest[c][key.positions[c]])return null;
+                    for(int cutoff:deadlines){
+                        int required=0,blocks=0,capacity=0,regions=0;
+                        for(int c=0;c<courses.size();c++)if(lastDay[c]<=cutoff){required+=suffix[c][key.positions[c]];blocks+=queues.get(c).size()-key.positions[c];}
+                        for(QueueWindow w:windows)if(w.day<=cutoff&&w.end>end){capacity+=w.end-Math.max(end,w.start);regions++;}
+                        if(required+rest*Math.max(0,blocks-regions)>capacity)return null;
+                    }
+                    double pace=0;
+                    for(int c=0;c<courses.size();c++)if(suffix[c][0]>0){
+                        int used=0;for(QueueWindow w:windows)if(allowed[c][w.day]&&w.start<end)used+=Math.max(0,Math.min(end,w.end)-w.start);
+                        double expected=Math.min(1,(double)used/Math.max(1,totalCapacity[c])*Planner.dailyWeight(courses.get(c)));
+                        double completed=(double)(suffix[c][0]-suffix[c][key.positions[c]])/suffix[c][0];pace+=(completed-expected)*(completed-expected);
+                    }
+                    return pace;
+                }
+            }
+            Guidance guidance=new Guidance();List<BeamNode> nodes=new ArrayList<>();
+            nodes.add(new BeamNode(new BeamKey(courses.size()),windows.get(0).start-rest,-1,0,-1,0,0,0,new double[0]));
+            List<Integer> beam=new ArrayList<>();beam.add(0);int expansions=0;
+            for(int step=0;step<tasks.size();step++){
+                if(Thread.currentThread().isInterrupted())return null;
+                Map<BeamKey,BeamNode> candidates=new HashMap<>();
+                for(int parent:beam){BeamNode previous=nodes.get(parent);
+                    for(int c=0;c<courses.size();c++)if(previous.key.positions[c]<queues.get(c).size()){
+                        if(++expansions>60000)return null;int t=queues.get(c).get(previous.key.positions[c]),size=sizes[t];QueueWindow found=null;
+                        for(QueueWindow w:windows)if(allowed[c][w.day]&&Math.max(previous.end+rest,w.start)+size<=w.end){found=w;break;}
+                        if(found==null)continue;int start=Math.max(previous.end+rest,found.start),end=start+size;
+                        BeamKey key=new BeamKey(previous.key);key.positions[c]++;
+                        if(key.day!=found.day){key.day=found.day;key.mask=0;key.previous=-1;}
+                        int count=Math.min(3,Integer.bitCount(key.mask));double gain=(key.mask&(1<<c))==0&&count<3?count:0;
+                        double repetitions=previous.repetitions+(key.previous==c?1:0);key.mask|=1<<c;key.previous=c;
+                        Double pace=guidance.assessment(key,end);if(pace==null)continue;
+                        double coverage=previous.coverage+gain,earlyCoverage=previous.earlyCoverage+gain*(days.size()-found.day);
+                        double[] rank=paceFirst?new double[]{pace,-coverage,-earlyCoverage,repetitions,end}:new double[]{-coverage,-earlyCoverage,pace,repetitions,end};
+                        BeamNode old=candidates.get(key);if(old!=null&&!rankPrecedes(rank,old.rank))continue;
+                        candidates.put(key,new BeamNode(key,end,t,start,parent,coverage,earlyCoverage,repetitions,rank));
+                    }
+                }
+                if(candidates.isEmpty())return null;List<BeamNode> selected=new ArrayList<>(candidates.values());
+                selected.sort((a,b)->{
+                    if(rankPrecedes(a.rank,b.rank))return -1;if(rankPrecedes(b.rank,a.rank))return 1;
+                    for(int c=0;c<courses.size();c++)if(a.key.positions[c]!=b.key.positions[c])return Integer.compare(a.key.positions[c],b.key.positions[c]);
+                    int v=Integer.compare(a.key.day,b.key.day);if(v==0)v=Integer.compare(a.key.mask,b.key.mask);return v!=0?v:Integer.compare(a.key.previous,b.key.previous);
+                });
+                beam=new ArrayList<>();for(int i=0;i<Math.min(beamWidth,selected.size());i++){beam.add(nodes.size());nodes.add(selected.get(i));}
+            }
+            Plan best=null;
+            for(int last:beam){
+                List<List<Integer>> rows=new ArrayList<>();for(int d=0;d<days.size();d++)rows.add(new ArrayList<>());double[] starts=new double[tasks.size()];
+                int index=last;while(nodes.get(index).parent>=0){BeamNode node=nodes.get(index);rows.get(node.key.day).add(node.task);starts[node.task]=node.start*60.0;index=node.parent;}
+                for(List<Integer> row:rows)Collections.reverse(row);Plan result=new Plan(rows,starts,score(rows,starts));
+                if(best==null||better(result.score,best.score))best=result;
+            }
+            return best;
+        }
         Outcome run()throws Exception{
             double[] baseline=new double[tasks.size()];for(int t=0;t<tasks.size();t++)baseline[t]=tasks.get(t).optDouble("start");
             double[] baselineScore=score(initialRows,baseline);Plan current=new Plan(initialRows,baseline,baselineScore),compact=pack(initialRows);
@@ -190,6 +298,10 @@ final class SchedulePreferenceOptimizer {
             for(List<List<Integer>> rows:Arrays.asList(interleaved(current.rows),paced,interleaved(paced))){
                 Plan trial=pack(rows);if(trial!=null&&better(trial.score,current.score))current=trial;
             }
+            if(needsQueueReconstruction(current))for(boolean paceFirst:new boolean[]{false,true}){
+                Plan trial=queueBeam(paceFirst);if(trial!=null&&better(trial.score,current.score))current=trial;
+            }
+            Plan interleaved=pack(interleaved(current.rows));if(interleaved!=null&&better(interleaved.score,current.score))current=interleaved;
             boolean changed=true;
             while(changed&&budget>0){
                 changed=false;
