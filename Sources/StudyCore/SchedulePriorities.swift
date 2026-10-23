@@ -24,10 +24,10 @@ public enum ScheduleRule: String, CaseIterable, Identifiable, Sendable {
     }
     public var explanation: String {
         switch self {
-        case .diversity: "时间允许时，一天安排多个科目，并为后续日期保留混排机会。"
-        case .dailyWeight: "按照各课程已有的 1～3 倍加量设置，优先把学习量排到前面的日期。"
-        case .coursePriority: "优先安排课程编辑中设置为较高优先级的课程。"
-        case .balancedLoad: "尽量均衡各天的学习量，避免普通时间块集中在少数日期。按节课程仍保持整节和顺序。"
+        case .diversity: "时间允许时，一天尽量安排多个科目并交替学习，同时为后续日期保留混排机会。"
+        case .dailyWeight: "按各课程已有的 1～3 倍率提高前面日期的目标学习量；空间不足时允许延后到后续日期。"
+        case .coursePriority: "在其他更高优先级的规则相同时，让课程编辑中设置为较高优先级的课程更早安排。"
+        case .balancedLoad: "比较各天的总学习分钟数并尽量均衡；整节课也计入比较，且保持整节完整和顺序。"
         }
     }
 }

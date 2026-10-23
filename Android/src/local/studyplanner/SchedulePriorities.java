@@ -8,10 +8,10 @@ final class SchedulePriorities {
     static final String[] RULES={"diversity","dailyWeight","coursePriority","balancedLoad"};
     static final String[] TITLES={"多科混排、分散学习","每日加量","课程优先级","学习量均衡"};
     static final String[] DETAILS={
-        "时间允许时，一天安排多个科目，并为后续日期保留混排机会。",
-        "按照各课程已有的 1～3 倍加量设置，优先把学习量排到前面的日期。",
-        "优先安排课程编辑中设置为较高优先级的课程。",
-        "尽量均衡各天的学习量，避免普通时间块集中在少数日期。按节课程仍保持整节和顺序。"
+        "时间允许时，一天尽量安排多个科目并交替学习，同时为后续日期保留混排机会。",
+        "按各课程已有的 1～3 倍率提高前面日期的目标学习量；空间不足时允许延后到后续日期。",
+        "在其他更高优先级的规则相同时，让课程编辑中设置为较高优先级的课程更早安排。",
+        "比较各天的总学习分钟数并尽量均衡；整节课也计入比较，且保持整节完整和顺序。"
     };
     static final String[] LEVEL_NAMES={"1 级 · 首要偏好","2 级 · 次要偏好","3 级 · 更次要","4 级 · 最后考虑"};
     final int[] levels=new int[4];

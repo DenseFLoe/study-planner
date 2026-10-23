@@ -26,7 +26,9 @@ final class ScheduleExplanationTests: XCTestCase {
         XCTAssertTrue(lines[0].contains("不代表只有集中排课才能按期完成"))
         XCTAssertTrue(lines[1].contains("模拟课程0（9月14日）"))
         XCTAssertTrue(lines.contains { $0.contains("没有每日加量") })
-        XCTAssertTrue(lines.last!.contains("没有限制同一门连续几节"))
+        XCTAssertTrue(lines.last!.contains("同科连续安排"))
+        XCTAssertTrue(lines.last!.contains("不保证全局最优"))
+        XCTAssertTrue(lines.contains { $0.contains("当前偏好顺序：多科混排、分散学习 → 每日加量 → 课程优先级 → 学习量均衡") })
         var adjusted = result
         adjusted.adjustments.append("已联合调整浮动事项在原窗口内的位置与课程分配，保持截止日期和整节课顺序。")
         XCTAssertTrue(ScheduleExplanation.lines(state: state, result: adjusted).contains { $0.contains("后续调整：已联合调整") })

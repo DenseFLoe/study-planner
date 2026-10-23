@@ -17,12 +17,12 @@ final class ScheduleExplanation {
         List<String> lines=new ArrayList<>(),adjustments=new ArrayList<>();
         for(int i=0;i<ScheduleHealth.array(state,"androidAdjustments").length();i++)adjustments.add(state.getJSONArray("androidAdjustments").getString(i));
         if(adjustments.contains(DEADLINE_FALLBACK)){
-            lines.add("本次混排尝试没能保留原方案已排入的学习量，曾将整份课表退回截止日期优先的排法。该排法容易让较早截止的课程连续占满前面的日期，不代表只有集中排课才能按期完成。");
+            lines.add("初始混排尝试没能保留原方案已排入的学习量，曾将整份课表退回截止日期优先的排法，随后继续按权重尝试局部优化。仍有集中安排不代表只有集中排课才能按期完成。");
             List<String> other=new ArrayList<>(adjustments);other.removeIf(DEADLINE_FALLBACK::equals);
             if(!other.isEmpty())lines.add("后续调整："+String.join("\n",other));
         }
         else if(!adjustments.isEmpty())lines.add(String.join("\n",adjustments));
-        else lines.add("本次没有触发整份课表的截止日期回退，按已保存的权重尽量排课；日期、空档、整节课与课节顺序始终优先满足。");
+        else lines.add("本次没有触发初始混排的截止日期回退，按已保存的权重比较完整课表并尝试优化；日期、空档、整节课与课节顺序始终优先满足。");
         LocalDate earliest=courses.stream().map(c->Planner.day(c.optDouble("deadline"))).min(LocalDate::compareTo).get();
         List<String> names=new ArrayList<>(),boosts=new ArrayList<>();boolean triple=false;
         courses.sort(Comparator.comparing(c->c.optString("name")));
@@ -38,7 +38,9 @@ final class ScheduleExplanation {
             String suffix=!triple?"当前没有 3 倍课程。":new SchedulePriorities(state.getJSONObject("settings")).usesDefaultOrder()?"默认规则允许能排入的 3 倍课程优先集中学习。":"自定义顺序下不启用默认的 3 倍集中例外。";
             lines.add("每日加量："+String.join("、",boosts)+"，会倾向前面的日期。"+suffix);
         }
-        lines.add("当前混排主要看一天有几门课，没有限制同一门连续几节；默认整理当天顺序时，也只在相同课程优先级之间交替。整节课和 15 分钟休息会进一步限制可用空档。");
+        List<String> order=new ArrayList<>();for(int rule:new SchedulePriorities(state.getJSONObject("settings")).order)order.add(SchedulePriorities.TITLES[rule]);
+        lines.add("当前偏好顺序："+String.join(" → ",order)+"；同级沿用默认顺序。");
+        lines.add("混排同时比较每天的科目数量和同科连续安排；较低级偏好不能抵消更高级偏好的损失。优化保留每门课程已排入的学习量、整节课顺序和 15 分钟休息；搜索有预算上限，不保证全局最优。");
         return lines;
     }
 }

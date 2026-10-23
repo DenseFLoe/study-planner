@@ -746,6 +746,10 @@ public final class Planner {
                 }
             }
         }
+        SchedulePreferenceOptimizer.Outcome optimized=SchedulePreferenceOptimizer.optimize(packed,courses,original,priorities);
+        packed=optimized.tasks;
+        if(optimized.improved)adjustments.put("已在保留每门课程已排入学习量的前提下，按权重逐级优化跨日分配与当天顺序。");
+        for(JSONObject t:packed)t.put("status",day(t.optDouble("start")).equals(today)?"planned":"future");
         if(actualStart!=null&&!original.isEmpty()){
             double cursor=Double.NEGATIVE_INFINITY;
             for(JSONObject t:packed)if(day(t.getDouble("start")).equals(today)){

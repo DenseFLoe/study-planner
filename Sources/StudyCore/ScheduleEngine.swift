@@ -677,6 +677,15 @@ public struct ScheduleEngine: Sendable {
             }
         }
         tasks = packed.sorted { $0.start < $1.start }
+        let optimized = SchedulePreferenceOptimizer.optimize(
+            tasks: tasks, courses: courses,
+            days: originalDays.map { day in
+                .init(date: day.date, windows: day.free.map { .init(start: $0.start, end: $0.end) })
+            }, priorities: priorities, calendar: calendar)
+        tasks = optimized.tasks
+        if optimized.improved {
+            adjustments.append("已在保留每门课程已排入学习量的前提下，按权重逐级优化跨日分配与当天顺序。")
+        }
         // A recorded start should produce a usable timetable from the first free
         // window, even if daily balancing emptied earlier windows. Pull today's
         // tasks forward in their existing order; every move ends no later than
