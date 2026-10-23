@@ -241,6 +241,8 @@ struct SettingsView: View {
     @Bindable var store: PlannerStore
     @State private var settings = AppSettings()
     @State private var saved = false
+    /// Display-only: collapsing the availability editor neither saves nor reschedules.
+    @State private var availabilityExpanded = false
     @State private var syncHost = ""
     @State private var pairingRequest: PairingRequest?
     @AppStorage("dailyStudyLoadWarningMinutes") private var dailyLoadWarningMinutes = 480
@@ -284,26 +286,30 @@ struct SettingsView: View {
                     Button("恢复默认字号") { timelineTimeFontSize = 17 }
                     Text("调整后立即生效并自动保存。").font(.caption).foregroundStyle(.secondary)
                 }
-                Section("每日可学习时间") {
-                    Text("可以为每天添加多段时间。不启用的日期不会分配学习任务。").font(.callout).foregroundStyle(.secondary)
-                    ForEach([2,3,4,5,6,7,1], id: \.self) { day in
-                        VStack(alignment: .leading, spacing: 10) {
-                            HStack {
-                                Text(weekdayNames[day]!).fontWeight(.semibold)
-                                Spacer()
-                                if !settings.availability.contains(where: { $0.weekday == day }) { Text("休息日").foregroundStyle(.secondary) }
-                                Button("添加时段", systemImage: "plus") { settings.availability.append(.init(weekday: day, startMinute: 480, endMinute: 1380)); saved = false }
-                            }
-                            ForEach($settings.availability) { $window in
-                                if window.weekday == day {
-                                    HStack {
-                                        TimeField(title: "从", minute: $window.startMinute)
-                                        TimeField(title: "至", minute: $window.endMinute)
-                                        Button(role: .destructive) { settings.availability.removeAll { $0.id == window.id }; saved = false } label: { Image(systemName: "minus.circle") }.help("移除此时段")
+                Section {
+                    DisclosureGroup(isExpanded: $availabilityExpanded) {
+                        Text("可以为每天添加多段时间。不启用的日期不会分配学习任务。").font(.callout).foregroundStyle(.secondary)
+                        ForEach([2,3,4,5,6,7,1], id: \.self) { day in
+                            VStack(alignment: .leading, spacing: 10) {
+                                HStack {
+                                    Text(weekdayNames[day]!).fontWeight(.semibold)
+                                    Spacer()
+                                    if !settings.availability.contains(where: { $0.weekday == day }) { Text("休息日").foregroundStyle(.secondary) }
+                                    Button("添加时段", systemImage: "plus") { settings.availability.append(.init(weekday: day, startMinute: 480, endMinute: 1380)); saved = false }
+                                }
+                                ForEach($settings.availability) { $window in
+                                    if window.weekday == day {
+                                        HStack {
+                                            TimeField(title: "从", minute: $window.startMinute)
+                                            TimeField(title: "至", minute: $window.endMinute)
+                                            Button(role: .destructive) { settings.availability.removeAll { $0.id == window.id }; saved = false } label: { Image(systemName: "minus.circle") }.help("移除此时段")
+                                        }
                                     }
                                 }
-                            }
-                        }.padding(.vertical, 6)
+                            }.padding(.vertical, 6)
+                        }
+                    } label: {
+                        Text("每日可学习时间").fontWeight(.semibold)
                     }
                 }
                 Section("学习负担提醒") {
@@ -311,6 +317,8 @@ struct SettingsView: View {
                     Text("这是负担提醒线，不会减少可学习时间或改动截止日。调整后立即生效，仅保存在本机。").font(.caption).foregroundStyle(.secondary)
                 }
                 SchedulePrioritiesPanel(settings: $settings)
+                ScheduleExplanationPanel(state: store.state, result: store.result,
+                                         hasUnsavedChanges: settings != store.state.settings)
                 Section("默认规则") {
                     TextField("默认最小时间块（分钟）", value: $settings.minimumScheduleUnit, format: .number)
                     TimeField(title: "每日完成确认时间", minute: $settings.notificationMinute)

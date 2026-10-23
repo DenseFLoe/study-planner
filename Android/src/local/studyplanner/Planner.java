@@ -672,7 +672,7 @@ public final class Planner {
             Set<LocalDate> deadlines=new TreeSet<>();for(JSONObject c:courses)deadlines.add(day(c.optDouble("deadline")));
             for(LocalDate cutoff:deadlines){int before=0,after=0;for(JSONObject c:courses)if(!day(c.optDouble("deadline")).isAfter(cutoff)){before+=feasibleMissing.get(c.optString("id"));after+=missing.get(c.optString("id"));}
                 if(before==after)continue;if(before<after){tasks=feasibleTasks;missing=feasibleMissing;List<Span> occupied=new ArrayList<>();for(JSONObject t:tasks)occupied.add(buffered(t.optDouble("start"),end(t)));for(int i=0;i<days.size();i++)days.get(i).free=subtract(original.get(i).free,occupied);
-                    adjustments.put("为守住截止日期，已适当放宽每天的科目混排和学习倍率偏好。");}break;
+                    adjustments.put(ScheduleExplanation.DEADLINE_FALLBACK);}break;
             }
         }
         if(jointSupported&&missing.values().stream().anyMatch(n->n>0)){

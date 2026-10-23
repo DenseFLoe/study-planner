@@ -342,7 +342,33 @@ public class PlannerTests {
   check(s.getJSONArray("tasks").getJSONObject(0).getString("id").equals(first.getString("id")),"Yesterday's confirmed history disappeared");
   boolean rejected=false;try{Planner.recordActualStudyStart(s,1440,Planner.at(today,840));}catch(IllegalArgumentException e){rejected=true;}check(rejected,"24:00 must not be accepted as today's start");
  }
+ static void scheduleExplanationRegression()throws Exception{
+  LocalDate day=LocalDate.of(2026,9,14);double now=Planner.at(day,0);
+  JSONObject s=diversityState(1,new int[]{600,60,60},1);
+  s.getJSONArray("courses").getJSONObject(1).put("deadline",Planner.at(day.plusDays(1),0));
+  s.getJSONArray("courses").getJSONObject(2).put("deadline",Planner.at(day.plusDays(1),0));
+  Planner.replan(s,now);
+  List<String> reasons=ScheduleExplanation.lines(s);
+  check(reasons.get(0).contains("整份课表")&&reasons.get(0).contains("不代表只有集中排课才能按期完成"),"Explanation must identify actual fallback without claiming necessity");
+  check(reasons.get(1).contains("课程0（9月14日）"),"Explanation must use the saved earliest deadline");
+  check(String.join("",reasons).contains("没有每日加量"),"Explanation invented a boost");
+  s.getJSONArray("androidAdjustments").put("已联合调整浮动事项在原窗口内的位置与课程分配，保持截止日期和整节课顺序。");
+  check(String.join("",ScheduleExplanation.lines(s)).contains("后续调整：已联合调整"),"Explanation hid adjustments after fallback");
+  s=diversityState(1,new int[]{60,60,60},1.5);
+  JSONObject paused=clone(s.getJSONArray("courses").getJSONObject(0)).put("id",Planner.id()).put("name","暂停三倍").put("dailyStudyWeight",3).put("autoScheduleEnabled",false);
+  s.getJSONArray("courses").put(paused);Planner.replan(s,now);String before=s.toString();
+  reasons=ScheduleExplanation.lines(s);String text=String.join("",reasons);
+  check(reasons.get(0).contains("没有触发"),"Explanation invented a fallback");
+  check(text.contains("课程0 1.5 倍")&&text.contains("没有 3 倍课程")&&!text.contains("暂停三倍"),"Explanation must ignore inactive boosts");
+  check(before.equals(s.toString()),"Explanation mutated the schedule");
+  s.getJSONArray("courses").getJSONObject(0).put("dailyStudyWeight",3);
+  check(String.join("",ScheduleExplanation.lines(s)).contains("默认规则允许"),"Default triple exception missing");
+  s.getJSONObject("settings").put("schedulingRuleLevels",new JSONObject().put("coursePriority",1).put("diversity",4));
+  check(String.join("",ScheduleExplanation.lines(s)).contains("不启用默认的 3 倍集中例外"),"Custom rule order incorrectly claims a triple exception");
+  check(ScheduleExplanation.lines(empty()).equals(Collections.singletonList("当前没有需要自动排课的剩余课程。")),"Empty state invented scheduling causes");
+ }
  public static void main(String[] args)throws Exception{
+  scheduleExplanationRegression();
   actualStudyStartRegression();
   breakRegression();liveOrderRegression();confirmedWindowRegression();
   refreshedWebsiteProgressRegression();

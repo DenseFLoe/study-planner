@@ -461,7 +461,7 @@ public struct ScheduleEngine: Sendable {
                 if before < after {
                     tasks = feasibleTasks; missing = feasibleMissing
                     for i in days.indices { days[i].free = subtract(tasks.map { buffered(start: $0.start, end: $0.end) }, from: originalDays[i].free) }
-                    adjustments.append("为守住截止日期，已适当放宽每天的科目混排和学习倍率偏好。")
+                    adjustments.append(ScheduleExplanation.deadlineFallback)
                 }
                 break
             }
