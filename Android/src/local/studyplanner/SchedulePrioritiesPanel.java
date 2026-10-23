@@ -48,7 +48,7 @@ final class SchedulePrioritiesPanel {
         box.addView(app.button("恢复默认权重",()->{
             for(int i=0;i<spinners.length;i++)spinners[i].setSelection(i);
         }));
-        box.addView(app.text("点击保存设置并重排生效；时间紧张时偏好会让步。默认规则下，能排入的 3 倍课程可优先集中学习。手动调整的当天顺序在仍可排入时保留。",13,app.muted));
+        box.addView(app.text("点击保存设置并重排生效；时间紧张时偏好会让步。默认顺序下（包括同级仍按默认顺序时），3 倍加量先于混排比较；改变规则先后顺序后取消此例外。手动调整的当天顺序在仍可排入时保留。",13,app.muted));
     }
 
     /** The four selected levels (1..4), keyed exactly like the planner's stored settings. */

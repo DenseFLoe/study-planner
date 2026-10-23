@@ -33,7 +33,7 @@ struct SchedulePrioritiesPanel: View {
                     Text(rule.explanation).font(.caption).foregroundStyle(.secondary)
                 }.padding(.vertical, 4)
             }
-            Text("这些是尽量满足的偏好。截止日期或连续空档紧张时会让步；默认规则下，能排入的 3 倍加量课程可优先集中学习。手动调整的当天顺序在仍可排入时保留。")
+            Text("这些是尽量满足的偏好。截止日期或连续空档紧张时会让步；默认顺序下（包括同级仍按默认顺序时），3 倍加量先于混排比较；改变规则先后顺序后取消此例外。手动调整的当天顺序在仍可排入时保留。")
                 .font(.caption).foregroundStyle(.secondary)
             HStack {
                 Button("恢复默认权重") { settings.schedulePriorities = SchedulePriorities() }

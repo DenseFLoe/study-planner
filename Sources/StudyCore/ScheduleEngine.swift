@@ -100,7 +100,6 @@ public struct ScheduleEngine: Sendable {
         var hardDays: [Day] = []
         var eventWindows: [ScheduleFeasibilitySearch.Window] = []
         var floatingJobs: [ScheduleFeasibilitySearch.Floating] = []
-        var jointSearchSupported = true
         var adjustments: [String] = []
         func minute(_ date: Date) -> Int { Int(ceil(date.timeIntervalSinceReferenceDate / 60)) }
         var floatingRegions: [Span] = []
@@ -152,7 +151,6 @@ public struct ScheduleEngine: Sendable {
             eventWindows += subtract(exact + history, from: [.init(start: day, end: instant(day: day, minute: 1440))])
                 .map { .init(start: minute($0.start), end: Int(floor($0.end.timeIntervalSinceReferenceDate / 60))) }
             let floating = events.filter(\.isFloating)
-            if floating.count > 1 { jointSearchSupported = false }
             for event in floating {
                 floatingJobs.append(.init(key: day, start: minute(instant(day: day, minute: event.startMinute)),
                                           end: minute(instant(day: day, minute: event.endMinute)), minutes: event.occupiedMinutes))
@@ -468,7 +466,7 @@ public struct ScheduleEngine: Sendable {
         }
         // Rescue incomplete heuristic allocations by jointly placing whole lessons
         // and floating events. The bounded search only replaces a plan with a full witness.
-        if missing.values.contains(where: { $0 > 0 }), jointSearchSupported,
+        if missing.values.contains(where: { $0 > 0 }),
            let solution = ScheduleFeasibilitySearch.find(
             queues: ordered.map { course in
                 .init(courseID: course.id, start: minute(calendar.startOfDay(for: course.startDate)),
@@ -479,9 +477,9 @@ public struct ScheduleEngine: Sendable {
             eventWindows: eventWindows, floating: floatingJobs, floor: minute(nextMinute), initial: minute(today)) {
             tasks = solution.tasks
             for i in originalDays.indices {
-                let jobs = floatingJobs.filter { calendar.isDate($0.key, inSameDayAs: originalDays[i].date) }
-                let reserved: [Span] = jobs.compactMap { job in
-                    guard let start = solution.floatingStarts[job.key] else { return nil }
+                let jobs = floatingJobs.enumerated().filter { calendar.isDate($0.element.key, inSameDayAs: originalDays[i].date) }
+                let reserved: [Span] = jobs.compactMap { index, job in
+                    guard let start = solution.floatingStarts[index] else { return nil }
                     return .init(start: Date(timeIntervalSinceReferenceDate: Double(start) * 60),
                                  end: Date(timeIntervalSinceReferenceDate: Double(start + job.minutes) * 60))
                 }
@@ -489,6 +487,7 @@ public struct ScheduleEngine: Sendable {
                 days[i].free = subtract(tasks.map { buffered(start: $0.start, end: $0.end) }, from: originalDays[i].free)
             }
             missing = Dictionary(uniqueKeysWithValues: courses.map { ($0.id, 0) })
+            diagnostics.removeAll { $0.hasPrefix("浮动事项的连续时长") }
             adjustments.append("已联合调整浮动事项在原窗口内的位置与课程分配，保持截止日期和整节课顺序。")
         }
         // Rebuild the feasible allocation day by day. Unlike merely shuffling one interval,

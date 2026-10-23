@@ -596,7 +596,7 @@ public final class Planner {
         for(JSONObject t:list(s.getJSONArray("tasks"))){if(!pending(t)||(planningEnd(t)<=now&&!(actualStart!=null&&day(t.getDouble("start")).equals(today))))history.add(t);}
         List<Span> floatingRegions=new ArrayList<>();List<Day> hardDays=new ArrayList<>();
         List<ScheduleFeasibilitySearch.Window> eventWindows=new ArrayList<>();
-        List<ScheduleFeasibilitySearch.Floating> floatingJobs=new ArrayList<>();boolean jointSupported=true;
+        List<ScheduleFeasibilitySearch.Floating> floatingJobs=new ArrayList<>();
         JSONArray adjustments=new JSONArray();
         List<Day> days=new ArrayList<>();for(LocalDate d=today;!d.isAfter(horizon);d=d.plusDays(1)){
             List<Span> windows=new ArrayList<>(),blocks=new ArrayList<>();for(JSONObject a:list(s.getJSONObject("settings").getJSONArray("availability")))if(a.getInt("weekday")==weekday(d))windows.add(new Span(Math.max(scheduleStart,at(d,a.getInt("startMinute"))),at(d,a.getInt("endMinute"))));
@@ -611,8 +611,7 @@ public final class Planner {
             hardDays.add(new Day(d,subtract(windows,hardBlocks)));
             for(Span span:subtract(Collections.singletonList(new Span(at(d,0),at(d,1440))),hardBlocks))
                 eventWindows.add(new ScheduleFeasibilitySearch.Window(ScheduleFeasibilitySearch.minute(span.a),(int)Math.floor(span.b/60)));
-            int floatingCount=0;for(JSONObject e:events)if(floating(e)){floatingCount++;floatingJobs.add(new ScheduleFeasibilitySearch.Floating(d,e));}
-            if(floatingCount>1)jointSupported=false;
+            for(JSONObject e:events)if(floating(e))floatingJobs.add(new ScheduleFeasibilitySearch.Floating(d,e));
             for(Span span:subtract(windows,blocks))for(Span region:regions){Span clipped=new Span(Math.max(span.a,region.a),Math.min(span.b,region.b));if(clipped.minutes()>0)floatingRegions.add(clipped);}
             boolean[] study=new boolean[1440];
             for(JSONObject a:list(s.getJSONObject("settings").getJSONArray("availability")))if(a.optInt("weekday")==weekday(d))
@@ -675,11 +674,11 @@ public final class Planner {
                     adjustments.put(ScheduleExplanation.DEADLINE_FALLBACK);}break;
             }
         }
-        if(jointSupported&&missing.values().stream().anyMatch(n->n>0)){
+        if(missing.values().stream().anyMatch(n->n>0)){
             List<ScheduleFeasibilitySearch.Queue> queues=new ArrayList<>();for(JSONObject c:courses)queues.add(new ScheduleFeasibilitySearch.Queue(c,allWork.get(c.optString("id"))));
             ScheduleFeasibilitySearch.Solution solution=ScheduleFeasibilitySearch.find(queues,ScheduleFeasibilitySearch.windows(hardDays),eventWindows,floatingJobs,ScheduleFeasibilitySearch.minute(scheduleStart),ScheduleFeasibilitySearch.minute(at(today,0)));
             if(solution!=null){tasks=solution.tasks;List<Span> occupied=new ArrayList<>();for(JSONObject t:tasks)occupied.add(buffered(t.optDouble("start"),end(t)));
-                for(int i=0;i<days.size();i++){List<Span> reservations=new ArrayList<>();for(ScheduleFeasibilitySearch.Floating job:floatingJobs)if(job.date.equals(original.get(i).d)){Integer start=solution.floatingStarts.get(job.date);if(start!=null)reservations.add(new Span(start*60.0,(start+job.minutes)*60.0));}
+                for(int i=0;i<days.size();i++){List<Span> reservations=new ArrayList<>();for(int f=0;f<floatingJobs.size();f++){ScheduleFeasibilitySearch.Floating job=floatingJobs.get(f);if(job.date.equals(original.get(i).d)){Integer start=solution.floatingStarts.get(f);if(start!=null)reservations.add(new Span(start*60.0,(start+job.minutes)*60.0));}}
                     original.get(i).free=subtract(hardDays.get(i).free,reservations);days.get(i).free=subtract(original.get(i).free,occupied);}
                 for(JSONObject c:courses)missing.put(c.optString("id"),0);
                 adjustments.put("已联合调整浮动事项在原窗口内的位置与课程分配，保持截止日期和整节课顺序。");
