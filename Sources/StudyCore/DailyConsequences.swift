@@ -84,7 +84,7 @@ public struct DailyConsequenceAnalyzer: Sendable {
             var weekdays: [Int]; var excluded: [Date]; var floating: Int?
         }
         struct Window: Codable { var weekday: Int; var start: Int; var end: Int }
-        struct Config: Codable { var courses: [CourseConfig]; var events: [EventConfig]; var windows: [Window]; var unit: Int; var warning: Int }
+        struct Config: Codable { var courses: [CourseConfig]; var events: [EventConfig]; var windows: [Window]; var unit: Int; var warning: Int; var schedulingRuleLevels: [String: Int] }
         let courses = state.courses.sorted { $0.id.uuidString < $1.id.uuidString }.map { course in
             CourseConfig(id: course.id, type: course.type.rawValue, total: course.totalMinutes,
                 start: course.startDate, deadline: course.deadline, block: course.minimumBlockMinutes, priority: course.priority,
@@ -100,7 +100,8 @@ public struct DailyConsequenceAnalyzer: Sendable {
             if $0.startMinute != $1.startMinute { return $0.startMinute < $1.startMinute }
             return $0.endMinute < $1.endMinute
         }.map { Window(weekday: $0.weekday, start: $0.startMinute, end: $0.endMinute) }
-        let configuration = Config(courses: courses, events: events, windows: windows, unit: state.settings.minimumScheduleUnit, warning: warningMinutes)
+        let configuration = Config(courses: courses, events: events, windows: windows, unit: state.settings.minimumScheduleUnit, warning: warningMinutes,
+                                   schedulingRuleLevels: state.settings.schedulePriorities.levels)
         let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys]
         let encoded = (try? encoder.encode(configuration)) ?? Data()
         return stablePlannerID("daily-consequences|" + String(decoding: encoded, as: UTF8.self))

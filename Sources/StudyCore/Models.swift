@@ -211,6 +211,8 @@ public struct AppSettings: Codable, Equatable, Sendable {
     /// A dated override; it expires automatically on the next local day.
     public var actualStudyStart: Date? = nil
     public var dailyTaskOrders: [DailyTaskOrder]? = nil
+    /// Optional so older saved plans retain the existing scheduling order.
+    public var schedulingRuleLevels: [String: Int]? = nil
     public var availability: [DailyAvailability] = (1...7).map { .init(weekday: $0, startMinute: 8 * 60, endMinute: 23 * 60) }
     public init() {}
     public func actualStudyStart(on day: Date, calendar: Calendar = .current) -> Date? {

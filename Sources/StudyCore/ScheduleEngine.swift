@@ -83,6 +83,8 @@ public struct ScheduleEngine: Sendable {
         let scheduleStart = max(actualStart ?? now, lastConfirmation ?? today)
         let nextMinute = Date(timeIntervalSince1970: ceil(scheduleStart.timeIntervalSince1970 / 60) * 60)
         let courses = state.courses.filter { !$0.isArchived && $0.autoScheduleEnabled && state.remainingMinutes(for: $0) > 0 }
+        let priorities = state.settings.schedulePriorities
+        let defaultOrder = priorities.usesDefaultOrder
         var diagnostics: [String] = []
         let validEvents = state.fixedEvents.filter {
             let valid = $0.validDuration && $0.startMinute >= 0 && $0.endMinute <= 1440 && $0.endMinute > $0.startMinute && $0.endDate >= calendar.startOfDay(for: $0.startDate)
@@ -322,7 +324,7 @@ public struct ScheduleEngine: Sendable {
         // Daily diversity is a preference; it must not lose an earlier deadline.
         // Rebuild from ALL unfinished work, including blocks the deadline-first pass
         // could not book; otherwise a monopolizing course can hide the other courses.
-        if courses.count >= 3 {
+        if courses.count >= 3 && (defaultOrder || priorities.orderedRules.first == .diversity) {
             tasks = []
             days = originalDays
             var positions = Dictionary(uniqueKeysWithValues: courses.map { ($0.id, 0) })
@@ -365,7 +367,7 @@ public struct ScheduleEngine: Sendable {
                 let active = ordered.filter { eligible($0, days[index].date) && nextWork($0) != nil }
                 // The exception is local to a day actually containing a 3x course.
                 // A future, finished, paused or non-fitting 3x course grants no exemption.
-                let triple = active.first { $0.dailyWeight == 3 && placement($0, in: days[index].free) != nil }
+                let triple = defaultOrder ? active.first { $0.dailyWeight == 3 && placement($0, in: days[index].free) != nil } : nil
                 let initial: [ScheduledTask]
                 if let triple, let task = placement(triple, in: days[index].free) {
                     initial = [task]
@@ -387,7 +389,7 @@ public struct ScheduleEngine: Sendable {
                     return seed(participants, free: originalDays[future].free, count: 3) != nil
                 }
                 var reserves: [UUID: Int] = [:]
-                for course in active where course.dailyWeight < 3 {
+                for course in active where !defaultOrder || course.dailyWeight < 3 {
                     let remainingWork = allWork[course.id]!.dropFirst(positions[course.id]!)
                     guard let shortest = remainingWork.map(\.minutes).min() else { continue }
                     reserves[course.id] = futureDiverseIndices.filter { future in
@@ -408,6 +410,28 @@ public struct ScheduleEngine: Sendable {
                         return daily[course.id] == nil || allWork[course.id]!.count - positions[course.id]! > reserves[course.id, default: 0]
                     }
                     let selected = candidates.min { a, b in
+                        if !defaultOrder {
+                            let urgentA = calendar.startOfDay(for: a.deadline) == days[index].date
+                            let urgentB = calendar.startOfDay(for: b.deadline) == days[index].date
+                            if urgentA != urgentB { return urgentA }
+                            for rule in priorities.orderedRules {
+                                switch rule {
+                                case .diversity:
+                                    if (daily[a.id] == nil) != (daily[b.id] == nil) { return daily[a.id] == nil }
+                                case .dailyWeight:
+                                    if hasDailyBoost {
+                                        let loadA = Double(daily[a.id, default: 0]) / max(1, demands[a.id]!.averageMinutesPerDay * a.dailyWeight)
+                                        let loadB = Double(daily[b.id, default: 0]) / max(1, demands[b.id]!.averageMinutesPerDay * b.dailyWeight)
+                                        if loadA != loadB { return loadA < loadB }
+                                    }
+                                case .coursePriority:
+                                    if a.priority != b.priority { return a.priority > b.priority }
+                                case .balancedLoad:
+                                    if daily[a.id, default: 0] != daily[b.id, default: 0] { return daily[a.id, default: 0] < daily[b.id, default: 0] }
+                                }
+                            }
+                            return false
+                        }
                         if daily.count < 3 && triple == nil && (daily[a.id] == nil) != (daily[b.id] == nil) {
                             return daily[a.id] == nil
                         }
@@ -470,7 +494,8 @@ public struct ScheduleEngine: Sendable {
         // Rebuild the feasible allocation day by day. Unlike merely shuffling one interval,
         // this gives equal-priority courses a share of days that were filled by a single course.
         // Keep the original allocation unless every booked block fits in the new arrangement.
-        if courses.count < 3 && (hasDailyBoost || courses.count == 2) {
+        if (courses.count < 3 && (hasDailyBoost || courses.count == 2))
+            || (!defaultOrder && priorities.orderedRules.first != .diversity) {
             var queues: [UUID: [ScheduledTask]] = [:]
             var positions: [UUID: Int] = [:], remaining: [UUID: Int] = [:], booked: [UUID: Int] = [:]
             var futureCapacity: [UUID: [Int]] = [:]
@@ -499,10 +524,19 @@ public struct ScheduleEngine: Sendable {
                     var time = max(span.start, nextStart)
                     while time < span.end {
                         let available = Int(span.end.timeIntervalSince(time) / 60)
-                        let candidates = ordered.filter { course in
+                        var candidates = ordered.filter { course in
                             let position = positions[course.id]!
                             return eligible(course, day.date) && position < queues[course.id]!.count
                                 && queues[course.id]![position].durationMinutes <= available
+                        }
+                        if !defaultOrder && priorities.orderedRules.first == .balancedLoad {
+                            // An even daily pace may leave room today only when later
+                            // learnable days can still hold the booked whole blocks.
+                            candidates = candidates.filter { course in
+                                let target = max(1, demands[course.id]!.averageMinutesPerDay)
+                                return Double(daily[course.id, default: 0]) < target
+                                    || remaining[course.id]! > futureCapacity[course.id]![index + 1]
+                            }
                         }
                         let selected = candidates.min { a, b in
                             let urgentA = remaining[a.id]! > futureCapacity[a.id]![index + 1]
@@ -510,6 +544,31 @@ public struct ScheduleEngine: Sendable {
                             if urgentA != urgentB { return urgentA }
                             if urgentA && calendar.startOfDay(for: a.deadline) != calendar.startOfDay(for: b.deadline) {
                                 return a.deadline < b.deadline
+                            }
+                            if !defaultOrder {
+                                for rule in priorities.orderedRules {
+                                    switch rule {
+                                    case .diversity:
+                                        if (daily[a.id] == nil) != (daily[b.id] == nil) { return daily[a.id] == nil }
+                                    case .dailyWeight:
+                                        if hasDailyBoost {
+                                            let targetA = max(1, demands[a.id]!.averageMinutesPerDay * a.dailyWeight)
+                                            let targetB = max(1, demands[b.id]!.averageMinutesPerDay * b.dailyWeight)
+                                            let loadA = (Double(daily[a.id, default: 0]) + Double(queues[a.id]![positions[a.id]!].durationMinutes) / 2) / targetA
+                                            let loadB = (Double(daily[b.id, default: 0]) + Double(queues[b.id]![positions[b.id]!].durationMinutes) / 2) / targetB
+                                            if loadA != loadB { return loadA < loadB }
+                                        }
+                                    case .coursePriority:
+                                        if a.priority != b.priority { return a.priority > b.priority }
+                                    case .balancedLoad:
+                                        let loadA = daily[a.id, default: 0], loadB = daily[b.id, default: 0]
+                                        if loadA != loadB { return loadA < loadB }
+                                        let progressA = Double(booked[a.id]! - remaining[a.id]!) / Double(max(1, booked[a.id]!))
+                                        let progressB = Double(booked[b.id]! - remaining[b.id]!) / Double(max(1, booked[b.id]!))
+                                        if progressA != progressB { return progressA < progressB }
+                                    }
+                                }
+                                return false
                             }
                             // Even with only two courses, ordinary priority must not
                             // monopolize a day when the other course can also fit.
@@ -552,6 +611,8 @@ public struct ScheduleEngine: Sendable {
                     let occupied = tasks.map { buffered(start: $0.start, end: $0.end) }
                     days[index].free = subtract(occupied, from: originalDays[index].free)
                 }
+            } else if !defaultOrder {
+                adjustments.append("为保留截止日前已排入的整节课，自定义权重在空间不足处已让步。")
             }
         }
         let dateIndices = Dictionary(uniqueKeysWithValues: days.enumerated().map { ($0.element.date, $0.offset) })
@@ -564,7 +625,7 @@ public struct ScheduleEngine: Sendable {
         }
         // Every move strictly decreases that course's sum of squared daily loads, so this terminates.
         // Never take away a booked block to balance another course: feasibility is preserved.
-        var changed = courses.count < 3
+        var changed = courses.count < 3 && defaultOrder
         while changed {
             changed = false
             for t in tasks.indices {
@@ -606,9 +667,9 @@ public struct ScheduleEngine: Sendable {
                 var time = max(span.start, nextStart)
                 while !pool.isEmpty {
                     let priority = courses.first { $0.id == pool[0].courseID }!.priority
-                    let pick = pool.firstIndex { task in
+                    let pick = defaultOrder ? (pool.firstIndex { task in
                         task.courseID != previous && courses.first { $0.id == task.courseID }!.priority == priority
-                    } ?? 0
+                    } ?? 0) : 0
                     var item = pool.remove(at: pick)
                     item.start = time; time = item.end.addingTimeInterval(breakSeconds); nextStart = time; previous = item.courseID
                     packed.append(item)

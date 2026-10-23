@@ -466,9 +466,10 @@ public final class Planner {
      */
     static final class DiversityScheduler {
         final Map<String,List<Work>> allWork;final List<Day> days;final Map<String,Double> demand;final boolean boost;
+        final SchedulePriorities priorities;final boolean defaultOrder;
         final Map<String,Integer> positions=new HashMap<>();final Map<String,Double> lastEnds=new HashMap<>();
         final List<JSONObject> tasks=new ArrayList<>();
-        DiversityScheduler(Map<String,List<Work>> allWork,List<Day> days,Map<String,Double> demand,boolean boost){this.allWork=allWork;this.days=days;this.demand=demand;this.boost=boost;}
+        DiversityScheduler(Map<String,List<Work>> allWork,List<Day> days,Map<String,Double> demand,boolean boost,SchedulePriorities priorities){this.allWork=allWork;this.days=days;this.demand=demand;this.boost=boost;this.priorities=priorities;this.defaultOrder=priorities.usesDefaultOrder();}
         Work next(JSONObject course)throws Exception{List<Work> work=allWork.get(course.getString("id"));int position=positions.get(course.getString("id"));return position<work.size()?work.get(position):null;}
         JSONObject placement(JSONObject course,List<Span> free)throws Exception{
             Work work=next(course);if(work==null)return null;String id=course.getString("id");
@@ -498,6 +499,11 @@ public final class Planner {
         /** Lower value wins; the caller keeps the earliest equally ranked course. */
         int rank(JSONObject a,JSONObject b,Map<String,Integer> daily,LocalDate date,JSONObject triple)throws Exception{
             String ai=a.getString("id"),bi=b.getString("id");
+            if(!defaultOrder){
+                boolean urgentA=day(a.optDouble("deadline")).equals(date),urgentB=day(b.optDouble("deadline")).equals(date);
+                if(urgentA!=urgentB)return urgentA?-1:1;
+                return priorities.compare(a,b,daily,demand,boost,0,0,0,0);
+            }
             if(daily.size()<3&&triple==null&&daily.containsKey(ai)!=daily.containsKey(bi))return daily.containsKey(ai)?1:-1;
             boolean urgentA=day(a.optDouble("deadline")).equals(date),urgentB=day(b.optDouble("deadline")).equals(date);
             if(urgentA!=urgentB)return urgentA?-1:1;
@@ -517,7 +523,7 @@ public final class Planner {
                 List<JSONObject> active=new ArrayList<>();for(JSONObject course:ordered)if(eligible(course,date)&&next(course)!=null)active.add(course);
                 // The exception is local to a day actually containing a fitting 3x course. A future,
                 // finished, paused or non-fitting 3x course grants no exemption.
-                JSONObject triple=null;for(JSONObject course:active)if(dailyWeight(course)==3&&placement(course,days.get(index).free)!=null){triple=course;break;}
+                JSONObject triple=null;if(defaultOrder)for(JSONObject course:active)if(dailyWeight(course)==3&&placement(course,days.get(index).free)!=null){triple=course;break;}
                 List<JSONObject> initial;
                 if(triple!=null){initial=new ArrayList<>();initial.add(placement(triple,days.get(index).free));}
                 else{
@@ -540,7 +546,7 @@ public final class Planner {
                     if(seed(participants,original.get(future).free,3)!=null)futureDiverse.add(future);
                 }
                 Map<String,Integer> reserves=new HashMap<>();
-                for(JSONObject course:active)if(dailyWeight(course)<3){
+                for(JSONObject course:active)if(!defaultOrder||dailyWeight(course)<3){
                     String id=course.getString("id");List<Work> remaining=allWork.get(id).subList(positions.get(id),allWork.get(id).size());
                     if(remaining.isEmpty())continue;
                     int shortest=Integer.MAX_VALUE;for(Work work:remaining)shortest=Math.min(shortest,work.minutes);
@@ -574,6 +580,8 @@ public final class Planner {
     }
     public static List<String> replan(JSONObject s,double now)throws Exception{
         List<String> warnings=new ArrayList<>();LocalDate today=day(now),horizon=today;
+        final SchedulePriorities priorities=new SchedulePriorities(s.getJSONObject("settings"));
+        final boolean defaultOrder=priorities.usesDefaultOrder();
         Double actualStart=actualStudyStart(s,now);double scheduleStart=actualStart==null?now:actualStart;
         // Keep remaining work after today's saved review, even for zero-minute
         // confirmations. Persisted history also preserves this floor on reopen/sync.
@@ -654,10 +662,10 @@ public final class Planner {
         // Daily diversity remains a preference behind deadline feasibility. Rebuild
         // from ALL unfinished work, including blocks the deadline-first pass could not book;
         // otherwise a monopolizing course can hide the other courses.
-        if(courses.size()>=3){
+        if(courses.size()>=3&&(defaultOrder||priorities.order.get(0)==0)){
             tasks=new ArrayList<>();
             days=copyDays(original);
-            DiversityScheduler diversity=new DiversityScheduler(allWork,days,demand,hasDailyBoost);
+            DiversityScheduler diversity=new DiversityScheduler(allWork,days,demand,hasDailyBoost,priorities);
             diversity.schedule(courses,original);
             tasks=diversity.tasks;
             for(JSONObject c:courses){String id=c.getString("id");List<Work> work=allWork.get(id);int left=0;for(int i=diversity.positions.get(id);i<work.size();i++)left+=work.get(i).minutes;missing.put(id,left);}
@@ -679,7 +687,7 @@ public final class Planner {
             }
         }
         // Try a day-by-day rotation, retaining the feasible allocation if any booked block fails to fit.
-        if(courses.size()<3&&(hasDailyBoost||courses.size()==2)){
+        if((courses.size()<3&&(hasDailyBoost||courses.size()==2))||(!defaultOrder&&priorities.order.get(0)!=0)){
             Map<String,List<JSONObject>> queues=new HashMap<>();Map<String,Integer> positions=new HashMap<>(),left=new HashMap<>(),booked=new HashMap<>();Map<String,int[]> future=new HashMap<>();
             for(JSONObject c:courses){
                 String id=c.getString("id");Map<String,Integer> ranks=new HashMap<>();List<Work> lessons=lessonWork(s,c);for(int i=0;i<lessons.size();i++)ranks.put(lessons.get(i).lessonID,i);
@@ -694,9 +702,15 @@ public final class Planner {
                 for(Span span:d.free){double time=Math.max(span.a,nextStart);while(time<span.b){
                     List<JSONObject> candidates=new ArrayList<>();for(JSONObject c:courses){String id=c.getString("id");int pos=positions.get(id);if(eligible(c,d.d)&&pos<queues.get(id).size()&&queues.get(id).get(pos).getInt("durationMinutes")<=(int)((span.b-time)/60))candidates.add(c);}
                     final int index=di;final String prev=previous;
+                    if(!defaultOrder&&priorities.order.get(0)==3)candidates.removeIf(c->{String id=c.optString("id");return daily.getOrDefault(id,0)>=Math.max(1,demand.get(id))&&left.get(id)<=future.get(id)[index+1];});
                     candidates.sort((a,b)->{
                         String ai=a.optString("id"),bi=b.optString("id");boolean ua=left.get(ai)>future.get(ai)[index+1],ub=left.get(bi)>future.get(bi)[index+1];if(ua!=ub)return ua?-1:1;
                         int v=ua?day(a.optDouble("deadline")).compareTo(day(b.optDouble("deadline"))):0;if(v!=0)return v;
+                        if(!defaultOrder)return priorities.compare(a,b,daily,demand,hasDailyBoost,
+                            queues.get(ai).get(positions.get(ai)).optInt("durationMinutes")/2.0,
+                            queues.get(bi).get(positions.get(bi)).optInt("durationMinutes")/2.0,
+                            (double)(booked.get(ai)-left.get(ai))/Math.max(1,booked.get(ai)),
+                            (double)(booked.get(bi)-left.get(bi))/Math.max(1,booked.get(bi)));
                         // Even with only two courses, ordinary priority must not monopolize a
                         // day when the other course can also fit.
                         boolean tripleDay=false;for(JSONObject other:courses)if(dailyWeight(other)==3&&daily.containsKey(other.optString("id"))){tripleDay=true;break;}
@@ -717,16 +731,17 @@ public final class Planner {
                 }}
             }
             if(mixed.size()==tasks.size()){tasks=mixed;for(Day d:days){List<Span> occupied=new ArrayList<>();for(JSONObject t:tasks)occupied.add(buffered(t.getDouble("start"),end(t)));for(Day base:original)if(base.d.equals(d.d)){d.free=subtract(base.free,occupied);break;}}}
+            else if(!defaultOrder)adjustments.put("为保留截止日前已排入的整节课，自定义权重在空间不足处已让步。");
         }
         Map<LocalDate,Integer> indices=new HashMap<>();for(int i=0;i<days.size();i++)indices.put(days.get(i).d,i);int[] totals=new int[days.size()];Map<String,int[]> loads=new HashMap<>();for(JSONObject c:courses)loads.put(c.getString("id"),new int[days.size()]);for(JSONObject t:tasks){int i=indices.get(day(t.getDouble("start")));totals[i]+=t.getInt("durationMinutes");loads.get(t.getString("courseID"))[i]+=t.getInt("durationMinutes");}
-        boolean changed=courses.size()<3;while(changed){changed=false;for(JSONObject t:tasks){if(t.has("lessonID"))continue;String id=t.getString("courseID");JSONObject c=course(s,id);int src=indices.get(day(t.getDouble("start"))),size=t.getInt("durationMinutes"),target=-1;int[] load=loads.get(id);for(int i=0;i<days.size();i++)if(i!=src&&eligible(c,days.get(i).d)&&(!preferredDays.containsKey(id)||preferredDays.get(id).contains(days.get(i).d))&&load[src]-load[i]>size){boolean fits=false;for(Span f:days.get(i).free)if(f.minutes()>=size)fits=true;if(fits&&(target<0||load[i]<load[target]||(load[i]==load[target]&&totals[i]<totals[target])))target=i;}
+        boolean changed=courses.size()<3&&defaultOrder;while(changed){changed=false;for(JSONObject t:tasks){if(t.has("lessonID"))continue;String id=t.getString("courseID");JSONObject c=course(s,id);int src=indices.get(day(t.getDouble("start"))),size=t.getInt("durationMinutes"),target=-1;int[] load=loads.get(id);for(int i=0;i<days.size();i++)if(i!=src&&eligible(c,days.get(i).d)&&(!preferredDays.containsKey(id)||preferredDays.get(id).contains(days.get(i).d))&&load[src]-load[i]>size){boolean fits=false;for(Span f:days.get(i).free)if(f.minutes()>=size)fits=true;if(fits&&(target<0||load[i]<load[target]||(load[i]==load[target]&&totals[i]<totals[target])))target=i;}
             if(target>=0){Double start=take(days,target,size);t.put("start",start);List<Span> occupied=new ArrayList<>();for(JSONObject bookedTask:tasks)occupied.add(buffered(bookedTask.getDouble("start"),end(bookedTask)));for(int di=0;di<days.size();di++)days.get(di).free=subtract(original.get(di).free,occupied);totals[src]-=size;totals[target]+=size;load[src]-=size;load[target]+=size;changed=true;}
         }}
         List<JSONObject> packed=new ArrayList<>();double nextStart=Double.NEGATIVE_INFINITY;
         for(Day d:original){
             String previous="";
             for(Span span:d.free){List<JSONObject> pool=new ArrayList<>();for(JSONObject t:tasks)if(t.getDouble("start")>=span.a&&end(t)<=span.b)pool.add(t);pool.sort(Comparator.comparingDouble(t->t.optDouble("start")));double time=Math.max(span.a,nextStart);
-                while(!pool.isEmpty()){int pick=0;int priority=course(s,pool.get(0).getString("courseID")).optInt("priority");for(int i=0;i<pool.size();i++)if(!pool.get(i).getString("courseID").equals(previous)&&course(s,pool.get(i).getString("courseID")).optInt("priority")==priority){pick=i;break;}
+                while(!pool.isEmpty()){int pick=0;int priority=course(s,pool.get(0).getString("courseID")).optInt("priority");if(defaultOrder)for(int i=0;i<pool.size();i++)if(!pool.get(i).getString("courseID").equals(previous)&&course(s,pool.get(i).getString("courseID")).optInt("priority")==priority){pick=i;break;}
                     JSONObject t=pool.remove(pick);t.put("start",time).put("status",d.d.equals(today)?"planned":"future");time=end(t)+BREAK_SECONDS;nextStart=time;previous=t.getString("courseID");packed.add(t);
                 }
             }

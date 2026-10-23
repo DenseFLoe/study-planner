@@ -21,7 +21,7 @@ final class DailyConsequences {
             for(String key:new String[]{"weekdays","excludedDates"}){JSONArray raw=e.optJSONArray(key);List<Double> numbers=new ArrayList<>();if(raw!=null)for(int i=0;i<raw.length();i++)numbers.add(raw.getDouble(i));Collections.sort(numbers);config.put(key,new JSONArray(numbers));}fixed.put(config);}
         List<JSONObject> windows=Planner.list(state.getJSONObject("settings").getJSONArray("availability"));windows.sort(Comparator.comparingInt((JSONObject w)->w.optInt("weekday")).thenComparingInt(w->w.optInt("startMinute")).thenComparingInt(w->w.optInt("endMinute")));
         JSONArray availability=new JSONArray();for(JSONObject w:windows)availability.put(fields(w,"weekday","startMinute","endMinute"));
-        return Planner.stableID(canonical(new JSONObject().put("courses",configs).put("events",fixed).put("availability",availability).put("unit",state.getJSONObject("settings").getInt("minimumScheduleUnit")).put("warning",warning)));
+        return Planner.stableID(canonical(new JSONObject().put("courses",configs).put("events",fixed).put("availability",availability).put("unit",state.getJSONObject("settings").getInt("minimumScheduleUnit")).put("warning",warning).put("schedulingRuleLevels",new SchedulePriorities(state.getJSONObject("settings")).json())));
     }
     static JSONObject task(JSONObject state,String id){for(JSONObject task:Planner.list(state.optJSONArray("tasks")))if(task.optString("id").equals(id))return task;return null;}
     static LocalDate effectiveDay(JSONObject record,JSONObject state) {

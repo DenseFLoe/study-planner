@@ -310,6 +310,7 @@ struct SettingsView: View {
                     Stepper("一天超过 \(hours(dailyLoadWarningMinutes)) 时提醒", value: $dailyLoadWarningMinutes, in: 60...960, step: 30)
                     Text("这是负担提醒线，不会减少可学习时间或改动截止日。调整后立即生效，仅保存在本机。").font(.caption).foregroundStyle(.secondary)
                 }
+                SchedulePrioritiesPanel(settings: $settings)
                 Section("默认规则") {
                     TextField("默认最小时间块（分钟）", value: $settings.minimumScheduleUnit, format: .number)
                     TimeField(title: "每日完成确认时间", minute: $settings.notificationMinute)
