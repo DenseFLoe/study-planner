@@ -124,5 +124,58 @@ public final class SchedulePreferenceTests {
         }
         Files.write(Paths.get("Android/build/tests/dense-preference-parity.json"),fixtures.toString().getBytes(StandardCharsets.UTF_8));
     }
-    public static void main(String[] args)throws Exception{behavior();parity();denseParity();System.out.println("PASS "+checks+" preference checks, 24 rule permutations and 2 dense cross-platform fixtures");}
+    /** Synthetic whole-lesson queues for the joint-repair experiments. */
+    static JSONObject jointState(int[][] lengths,int days,int end)throws Exception{
+        JSONObject state=state(new int[0],days);state.getJSONObject("settings").put("availability",StudySettingsTests.windows(480,end));
+        for(int c=0;c<lengths.length;c++){
+            int amount=0;for(int size:lengths[c])amount+=size;
+            JSONObject course=PlannerTests.course("合成科目"+c,amount,TODAY,TODAY.plusDays(days-1),60)
+                .put("id",Planner.stableID("experiment-course-"+c)).put("type","不定时录播课程").put("color","blue").put("notes","");
+            JSONArray lessons=new JSONArray();for(int i=0;i<lengths[c].length;i++)lessons.put(new JSONObject().put("id","unit"+i).put("name","合成课节").put("durationMinutes",lengths[c][i]));
+            course.put("manualLessons",lessons);state.getJSONArray("courses").put(course);
+        }
+        return state;
+    }
+    /** Replan once more and require an identical task list. */
+    static JSONArray stable(JSONObject state,String label)throws Exception{
+        JSONArray snapshot=new JSONArray(state.getJSONArray("tasks").toString());replan(state);
+        check(snapshot.similar(state.getJSONArray("tasks")),label+" replan is not deterministic");return snapshot;
+    }
+    static void jointBehavior()throws Exception{
+        // tight-6: single moves and two-lesson swaps stalled at three mixed days; the
+        // joint repair must mix all four days with no same-subject neighbour.
+        JSONObject state=jointState(new int[][]{{75,75,60},{90,90,75},{30,60,30,30}},4,675);
+        replan(state);intact(state);int mixed=0;
+        for(int d=0;d<4;d++){
+            List<JSONObject> row=PlannerTests.dayTasks(state,TODAY.plusDays(d));
+            if(PlannerTests.owners(state,TODAY.plusDays(d)).size()>=2)mixed++;
+            for(int i=1;i<row.size();i++)check(!row.get(i).getString("courseID").equals(row.get(i-1).getString("courseID")),"tight6 keeps one subject adjacent on day "+d);
+        }
+        check(mixed==4,"tight6 left a single-subject day: "+mixed);stable(state,"tight6");
+        // tight-1: per-day coverage C(min(3,subjects),2) must reach 8 over four days.
+        state=jointState(new int[][]{{75,90,30,45},{45,60,75},{60,75,30}},4,675);
+        replan(state);intact(state);int coverage=0;
+        for(int d=0;d<4;d++){int count=Math.min(3,PlannerTests.owners(state,TODAY.plusDays(d)).size());coverage+=count*(count-1)/2;}
+        check(coverage==8,"tight1 coverage changed: "+coverage);stable(state,"tight1");
+        // triple: the default order must still keep a full 180-minute course-0 day.
+        state=jointState(new int[][]{{60,60,60},{60,60,60},{60,60}},3,750);
+        state.getJSONArray("courses").getJSONObject(0).put("dailyStudyWeight",3);
+        replan(state);intact(state);String boosted=state.getJSONArray("courses").getJSONObject(0).getString("id");int total=0;
+        for(JSONObject task:PlannerTests.dayTasks(state,TODAY))if(task.getString("courseID").equals(boosted))total+=task.getInt("durationMinutes");
+        check(total==180,"triple default boost lost the first-subject day: "+total);stable(state,"triple");
+    }
+    static JSONObject jointFixture(JSONObject state,String label)throws Exception{
+        JSONObject before=new JSONObject(state.toString());replan(state);intact(state);
+        return new JSONObject().put("state",before).put("tasks",stable(state,label));
+    }
+    static void jointParity()throws Exception{
+        List<int[]> orders=new ArrayList<>();permutations(orders,new int[]{0,1,2,3},0);JSONArray fixtures=new JSONArray();
+        int[][][] lengths={{{75,75,60},{90,90,75},{30,60,30,30}},{{75,90,30,45},{45,60,75},{60,75,30}}};
+        for(int[][] values:lengths)for(int[] rules:orders){JSONObject state=jointState(values,4,675);order(state,rules);fixtures.put(jointFixture(state,"joint rule order "+Arrays.toString(rules)));}
+        JSONObject triple=jointState(new int[][]{{60,60,60},{60,60,60},{60,60}},3,750);
+        triple.getJSONArray("courses").getJSONObject(0).put("dailyStudyWeight",3);fixtures.put(jointFixture(triple,"joint default triple"));
+        check(fixtures.length()==49,"Joint fixture count changed: "+fixtures.length());
+        Files.write(Paths.get("Android/build/tests/joint-preference-parity.json"),fixtures.toString().getBytes(StandardCharsets.UTF_8));
+    }
+    public static void main(String[] args)throws Exception{behavior();parity();denseParity();jointBehavior();jointParity();System.out.println("PASS "+checks+" preference checks, 24 rule permutations, 2 dense and 49 joint cross-platform fixtures");}
 }

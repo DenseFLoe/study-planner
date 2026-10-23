@@ -382,6 +382,148 @@ enum SchedulePreferenceOptimizer {
             return best
         }
 
+        /// Destroy/repair a short run of days. Ordered queues may move together;
+        /// tasks outside the run keep their exact starts. Every accepted leaf is
+        /// scored by the same whole-plan objective, with no preference relaxation.
+        func jointNeighborhoods(_ incumbent: Plan) -> Plan {
+            guard tasks.count <= 600, courses.count <= 6, days.count <= 366 else { return incumbent }
+            var best = incumbent
+            let large = tasks.count > 24 || days.count > 7
+            var remainingEvaluations = min(large ? 6_000 : 40_000, 6_000_000 / max(1, tasks.count + days.count * courses.count))
+            var remainingLeaves = min(large ? 300 : 2_000, 600_000 / max(1, tasks.count + days.count * courses.count))
+            for width in [4, 3, 2, 1] where width <= days.count {
+                for first in 0...(days.count - width) {
+                    if remainingEvaluations <= 0 || remainingLeaves <= 0 { return best }
+                    let last = first + width - 1
+                    let selected = Array(best.rows[first...last].joined())
+                    guard (3...12).contains(selected.count), Set(selected.map { owners[$0] }).count <= 4 else { continue }
+                    let queues = courses.indices.map { c in selected.filter { owners[$0] == c } }
+                    var positions = courses.map { _ in 0 }
+                    let before = best.rows.prefix(first).joined().last
+                    let after = best.rows.dropFirst(last + 1).joined().first
+                    let floor = before.map { best.starts[$0].addingTimeInterval(Double(tasks[$0].durationMinutes * 60) + rest) } ?? .distantPast
+                    let ceiling = after.map { best.starts[$0].addingTimeInterval(-rest) } ?? .distantFuture
+                    var rows = best.rows, starts = best.starts
+                    for d in first...last { rows[d] = [] }
+                    var suffix = [[Int]](), shortestSuffix = [[Int]](), latest = [[Date]]()
+                    var possible = true
+                    for c in courses.indices {
+                        var sums = [Int](repeating: 0, count: queues[c].count + 1)
+                        var shortest = [Int](repeating: Int.max, count: queues[c].count + 1)
+                        var limits = [Date](repeating: .distantFuture, count: queues[c].count + 1)
+                        var end = ceiling
+                        for p in queues[c].indices.reversed() {
+                            let size = Double(tasks[queues[c][p]].durationMinutes * 60)
+                            var found: Date?
+                            for d in (first...last).reversed() where allowed[c][d] {
+                                if let span = days[d].windows.last(where: { min(end, $0.end).addingTimeInterval(-size) >= max(floor, $0.start) }) {
+                                    found = min(end, span.end).addingTimeInterval(-size); break
+                                }
+                            }
+                            guard let found else { possible = false; break }
+                            limits[p] = found; end = found.addingTimeInterval(-rest)
+                            sums[p] = sums[p + 1] + tasks[queues[c][p]].durationMinutes
+                            shortest[p] = min(shortest[p + 1], tasks[queues[c][p]].durationMinutes)
+                        }
+                        suffix.append(sums); shortestSuffix.append(shortest); latest.append(limits)
+                    }
+                    guard possible else { continue }
+                    var localEvaluations = min(large ? 1_500 : 12_000, remainingEvaluations)
+
+                    // Relaxed optimistic bounds only prune; they never decide which
+                    // actual plan wins. Missing work may appear independently on
+                    // several days in this bound, so it overestimates opportunity.
+                    func lowerBound(_ ready: Date) -> [Double] {
+                        remainingEvaluations -= 1; localEvaluations -= 1
+                        var bound = score(rows: rows, starts: starts)
+                        var loads = courses.map { _ in [Double](repeating: 0, count: days.count) }
+                        for d in days.indices { for t in rows[d] { loads[owners[t]][d] += Double(tasks[t].durationMinutes) } }
+                        var coverage = 0.0, earlyCoverage = 0.0, boost = 0.0, triple = 0.0
+                        for d in days.indices {
+                            var present = 0
+                            for c in courses.indices {
+                                let left = suffix[c][positions[c]]
+                                let shortest = shortestSuffix[c][positions[c]]
+                                let canAdd = left > 0 && (first...last).contains(d) && allowed[c][d]
+                                    && days[d].windows.contains { max(ready, $0.start).addingTimeInterval(Double(shortest * 60)) <= min(ceiling, $0.end) }
+                                if loads[c][d] > 0 || canAdd { present += 1 }
+                                if courses[c].dailyWeight > 1 {
+                                    let low = loads[c][d], high = low + (canAdd ? Double(left) : 0)
+                                    let target = targets[c][d]
+                                    let difference = target < low ? low - target : max(0, target - high)
+                                    boost += difference * difference
+                                    if courses[c].dailyWeight == 3 { triple += difference * difference }
+                                }
+                            }
+                            let count = Double(min(3, present)), value = count * (count - 1) / 2
+                            coverage += value; earlyCoverage += value * Double(days.count - d)
+                        }
+                        var offset = 0
+                        if priorities.usesDefaultOrder { bound[0] = triple; offset = 1 }
+                        for rule in priorities.orderedRules {
+                            switch rule {
+                            case .diversity: bound[offset] = -coverage; bound[offset + 1] = -earlyCoverage; offset += 3
+                            case .dailyWeight: bound[offset] = boost; offset += 1
+                            case .coursePriority: offset += 1
+                            case .balancedLoad: offset += 2
+                            }
+                        }
+                        return bound
+                    }
+                    struct Choice { var course: Int; var day: Int; var start: Date; var bound: [Double] }
+                    func visit(_ ready: Date, _ placed: Int) {
+                        guard remainingEvaluations > 0, localEvaluations > 0, remainingLeaves > 0 else { return }
+                        if placed == selected.count {
+                            remainingLeaves -= 1
+                            let value = score(rows: rows, starts: starts)
+                            if better(value, than: best.score) { best = .init(rows: rows, starts: starts, score: value) }
+                            return
+                        }
+                        var required = 0, blocks = 0
+                        for c in courses.indices where positions[c] < queues[c].count {
+                            if ready > latest[c][positions[c]] { return }
+                            required += suffix[c][positions[c]]; blocks += queues[c].count - positions[c]
+                        }
+                        var capacity = 0.0, regions = 0
+                        for d in first...last { for span in days[d].windows {
+                            let size = min(ceiling, span.end).timeIntervalSince(max(ready, span.start)) / 60
+                            if size > 0 { capacity += size; regions += 1 }
+                        } }
+                        if Double(required + ScheduleEngine.breakMinutes * max(0, blocks - regions)) > capacity { return }
+                        if !better(lowerBound(ready), than: best.score) { return }
+                        var choices: [Choice] = []
+                        choiceGeneration: for c in courses.indices where positions[c] < queues[c].count {
+                            let t = queues[c][positions[c]], seconds = Double(tasks[t].durationMinutes * 60)
+                            for d in first...last where allowed[c][d] {
+                                if remainingEvaluations <= 0 || localEvaluations <= 0 { break choiceGeneration }
+                                guard let span = days[d].windows.first(where: { max(ready, $0.start).addingTimeInterval(seconds) <= min(ceiling, $0.end) }) else { continue }
+                                let start = max(ready, span.start), next = start.addingTimeInterval(seconds + rest)
+                                rows[d].append(t); starts[t] = start; positions[c] += 1
+                                choices.append(.init(course: c, day: d, start: start, bound: lowerBound(next)))
+                                positions[c] -= 1; rows[d].removeLast()
+                            }
+                        }
+                        choices.sort {
+                            if rankPrecedes($0.bound, $1.bound) { return true }
+                            if rankPrecedes($1.bound, $0.bound) { return false }
+                            if $0.day != $1.day { return $0.day < $1.day }
+                            return $0.course < $1.course
+                        }
+                        for choice in choices {
+                            if remainingEvaluations <= 0 || localEvaluations <= 0 || remainingLeaves <= 0 { break }
+                            if !better(choice.bound, than: best.score) { continue }
+                            let c = choice.course, t = queues[c][positions[c]]
+                            rows[choice.day].append(t); starts[t] = choice.start; positions[c] += 1
+                            visit(choice.start.addingTimeInterval(Double(tasks[t].durationMinutes * 60) + rest), placed + 1)
+                            positions[c] -= 1; rows[choice.day].removeLast()
+                        }
+                    }
+                    visit(floor, 0)
+                }
+            }
+            return best
+        }
+
         func run() -> Outcome {
             let baseline = tasks.map(\.start)
             var current = Plan(rows: initialRows, starts: baseline, score: score(rows: initialRows, starts: baseline))
@@ -446,6 +588,7 @@ enum SchedulePreferenceOptimizer {
                     }
                 }
             }
+            current = jointNeighborhoods(current)
             var output = tasks
             for i in output.indices { output[i].start = current.starts[i] }
             return .init(tasks: output.sorted { $0.start < $1.start },

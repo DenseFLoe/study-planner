@@ -122,6 +122,48 @@ final class SchedulePreferenceTests: XCTestCase {
         state.settings.availability = []
         XCTAssertTrue(plan(state).tasks.isEmpty)
     }
+    private func jointState(_ lengths: [[Int]], days: Int = 4, end: Int = 675) -> PlannerState {
+        var state = state([], days: days)
+        state.settings.availability = (1...7).map { .init(weekday: $0, startMinute: 480, endMinute: end) }
+        state.courses = lengths.enumerated().map { c, values in
+            var course = Course(name: "合成科目\(c)", totalMinutes: values.reduce(0, +), startDate: date(0), deadline: date(days - 1))
+            course.id = stablePlannerID("experiment-course-\(c)"); course.type = .lessonBasedRecorded
+            course.manualLessons = values.enumerated().map { .init(id: "unit\($0.offset)", name: "合成课节", durationMinutes: $0.element) }
+            return course
+        }
+        return state
+    }
+    func testJointRepairEscapesMultiLessonPlateau() {
+        // Experiment tight-6: every single relocation/two-lesson swap stalled at
+        // three mixed days. Moving the ordered C queue and later B lessons together
+        // permits all four days to mix without changing any work or scoring rule.
+        let state = jointState([[75, 75, 60], [90, 90, 75], [30, 60, 30, 30]])
+        let result = plan(state)
+        XCTAssertEqual((0..<4).filter { d in Set(result.tasks.filter { calendar.isDate($0.start, inSameDayAs: date(d)) }.map(\.courseID)).count >= 2 }.count, 4)
+        for d in 0..<4 {
+            let row = result.tasks.filter { calendar.isDate($0.start, inSameDayAs: date(d)) }
+            for (a, b) in zip(row, row.dropFirst()) { XCTAssertNotEqual(a.courseID, b.courseID) }
+        }
+        assertWorkPreserved(result, state: state)
+        XCTAssertEqual(result.tasks, plan(state).tasks)
+    }
+    func testJointRepairImprovesCoverageAcrossFullDays() {
+        let state = jointState([[75, 90, 30, 45], [45, 60, 75], [60, 75, 30]])
+        let result = plan(state)
+        let coverage = (0..<4).reduce(0) { value, d in
+            let count = min(3, Set(result.tasks.filter { calendar.isDate($0.start, inSameDayAs: date(d)) }.map(\.courseID)).count)
+            return value + count * (count - 1) / 2
+        }
+        XCTAssertEqual(coverage, 8)
+        assertWorkPreserved(result, state: state)
+    }
+    func testJointRepairRetainsDefaultTripleBoostException() {
+        var state = jointState([[60, 60, 60], [60, 60, 60], [60, 60]], days: 3, end: 750)
+        state.courses[0].dailyStudyWeight = 3
+        let result = plan(state)
+        XCTAssertEqual(result.tasks.filter { calendar.isDate($0.start, inSameDayAs: date(0)) && $0.courseID == state.courses[0].id }.reduce(0) { $0 + $1.durationMinutes }, 180)
+        assertWorkPreserved(result, state: state)
+    }
     private func denseState() -> PlannerState {
         var state = state([], days: 21)
         let lengths = [
@@ -162,6 +204,20 @@ final class SchedulePreferenceTests: XCTestCase {
             let expected = try JSONDecoder().decode([ScheduledTask].self, from: JSONSerialization.data(withJSONObject: XCTUnwrap(row["tasks"])))
             let result = plan(state)
             XCTAssertEqual(result.tasks, expected)
+            assertWorkPreserved(result, state: state)
+        }
+    }
+    func testJointRepairMatchesAndroidAcrossSavedRuleOrders() throws {
+        let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+        let fixture = root.appendingPathComponent("Android/build/tests/joint-preference-parity.json")
+        guard FileManager.default.fileExists(atPath: fixture.path) else { throw XCTSkip("Run ./Android/test.sh to generate synthetic joint-repair fixtures") }
+        let rows = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: fixture)) as? [[String: Any]])
+        XCTAssertEqual(rows.count, 49)
+        for row in rows {
+            let state = try JSONDecoder().decode(PlannerState.self, from: JSONSerialization.data(withJSONObject: XCTUnwrap(row["state"])))
+            let expected = try JSONDecoder().decode([ScheduledTask].self, from: JSONSerialization.data(withJSONObject: XCTUnwrap(row["tasks"])))
+            let result = plan(state)
+            XCTAssertEqual(result.tasks, expected, "Joint repair rule order: \(state.settings.schedulePriorities.orderedRules)")
             assertWorkPreserved(result, state: state)
         }
     }

@@ -290,6 +290,139 @@ final class SchedulePreferenceOptimizer {
             }
             return best;
         }
+        static final class JointBudget {
+            int evaluations,leaves;
+            final int perRegion;
+            JointBudget(int cost,boolean large){evaluations=Math.min(large?6000:40000,6000000/cost);leaves=Math.min(large?300:2000,600000/cost);perRegion=large?1500:12000;}
+        }
+        static final class JointChoice {
+            final int course,day;final double start;final double[] bound;
+            JointChoice(int course,int day,double start,double[] bound){this.course=course;this.day=day;this.start=start;this.bound=bound;}
+        }
+        /** Destroy/repair up to four days while retaining exact starts outside each neighborhood. */
+        Plan jointNeighborhoods(Plan incumbent){
+            if(tasks.size()>600||courses.size()>6||days.size()>366)return incumbent;
+            Plan best=incumbent;JointBudget limit=new JointBudget(Math.max(1,tasks.size()+days.size()*courses.size()),tasks.size()>24||days.size()>7);
+            for(int width:new int[]{4,3,2,1})if(width<=days.size())for(int first=0;first<=days.size()-width;first++){
+                if(limit.evaluations<=0||limit.leaves<=0||Thread.currentThread().isInterrupted())return best;
+                int last=first+width-1;List<Integer> selected=new ArrayList<>();Set<Integer> present=new HashSet<>();
+                for(int d=first;d<=last;d++)for(int t:best.rows.get(d)){selected.add(t);present.add(owners[t]);}
+                if(selected.size()<3||selected.size()>12||present.size()>4)continue;
+                JointRepair repair=new JointRepair(best,first,last,selected,limit);
+                if(repair.possible)repair.visit(repair.floor,0);
+                best=repair.best;
+            }
+            return best;
+        }
+        final class JointRepair {
+            final int first,last,count;final JointBudget limit;
+            final List<List<Integer>> queues=new ArrayList<>(),rows=new ArrayList<>();
+            final int[] positions=new int[courses.size()];
+            final int[][] suffix=new int[courses.size()][],shortestSuffix=new int[courses.size()][];
+            final double[][] latest=new double[courses.size()][];
+            final double floor,ceiling;final double[] starts;
+            int localEvaluations;boolean possible=true;Plan best;
+            JointRepair(Plan incumbent,int first,int last,List<Integer> selected,JointBudget limit){
+                this.first=first;this.last=last;this.limit=limit;count=selected.size();best=incumbent;
+                Integer before=null,after=null;
+                for(int d=0;d<first;d++)for(int t:incumbent.rows.get(d))before=t;
+                for(int d=last+1;d<days.size()&&after==null;d++)if(!incumbent.rows.get(d).isEmpty())after=incumbent.rows.get(d).get(0);
+                floor=before==null?Double.NEGATIVE_INFINITY:incumbent.starts[before]+sizes[before]*60.0+Planner.BREAK_SECONDS;
+                ceiling=after==null?Double.POSITIVE_INFINITY:incumbent.starts[after]-Planner.BREAK_SECONDS;
+                for(int d=0;d<days.size();d++)rows.add(d>=first&&d<=last?new ArrayList<>():new ArrayList<>(incumbent.rows.get(d)));
+                starts=incumbent.starts.clone();localEvaluations=Math.min(limit.perRegion,limit.evaluations);
+                for(int c=0;c<courses.size();c++){
+                    List<Integer> queue=new ArrayList<>();for(int t:selected)if(owners[t]==c)queue.add(t);queues.add(queue);
+                    suffix[c]=new int[queue.size()+1];shortestSuffix[c]=new int[queue.size()+1];Arrays.fill(shortestSuffix[c],Integer.MAX_VALUE);
+                    latest[c]=new double[queue.size()+1];Arrays.fill(latest[c],Double.POSITIVE_INFINITY);double end=ceiling;
+                    for(int p=queue.size()-1;p>=0;p--){
+                        double seconds=sizes[queue.get(p)]*60.0;Double found=null;
+                        outer:for(int d=last;d>=first;d--)if(allowed[c][d]){
+                            List<Planner.Span> spans=days.get(d).free;
+                            for(int k=spans.size()-1;k>=0;k--){Planner.Span span=spans.get(k);
+                                if(Math.min(end,span.b)-seconds>=Math.max(floor,span.a)){found=Math.min(end,span.b)-seconds;break outer;}
+                            }
+                        }
+                        if(found==null){possible=false;break;}
+                        latest[c][p]=found;end=found-Planner.BREAK_SECONDS;
+                        suffix[c][p]=suffix[c][p+1]+sizes[queue.get(p)];
+                        shortestSuffix[c][p]=Math.min(shortestSuffix[c][p+1],sizes[queue.get(p)]);
+                    }
+                }
+            }
+            // Bounds optimistically let remaining work occupy several days at once.
+            // They only prune; the unchanged whole-plan score accepts actual leaves.
+            double[] lowerBound(double ready){
+                limit.evaluations--;localEvaluations--;
+                double[] bound=score(rows,starts);double[][] loads=new double[courses.size()][days.size()];
+                for(int d=0;d<days.size();d++)for(int t:rows.get(d))loads[owners[t]][d]+=sizes[t];
+                double coverage=0,earlyCoverage=0,boost=0,triple=0;
+                for(int d=0;d<days.size();d++){
+                    int present=0;
+                    for(int c=0;c<courses.size();c++){
+                        int left=suffix[c][positions[c]],shortest=shortestSuffix[c][positions[c]];boolean canAdd=false;
+                        if(left>0&&d>=first&&d<=last&&allowed[c][d])for(Planner.Span span:days.get(d).free)
+                            if(Math.max(ready,span.a)+shortest*60.0<=Math.min(ceiling,span.b)){canAdd=true;break;}
+                        if(loads[c][d]>0||canAdd)present++;
+                        double weight=Planner.dailyWeight(courses.get(c));
+                        if(weight>1){double low=loads[c][d],high=low+(canAdd?left:0),target=targets[c][d];
+                            double difference=target<low?low-target:Math.max(0,target-high);
+                            boost+=difference*difference;if(weight==3)triple+=difference*difference;
+                        }
+                    }
+                    double count=Math.min(3,present),value=count*(count-1)/2;
+                    coverage+=value;earlyCoverage+=value*(days.size()-d);
+                }
+                int offset=0;if(priorities.usesDefaultOrder()){bound[0]=triple;offset=1;}
+                for(int rule:priorities.order)switch(rule){
+                    case 0:bound[offset]=-coverage;bound[offset+1]=-earlyCoverage;offset+=3;break;
+                    case 1:bound[offset]=boost;offset++;break;
+                    case 2:offset++;break;
+                    case 3:offset+=2;break;
+                }
+                return bound;
+            }
+            void visit(double ready,int placed){
+                if(limit.evaluations<=0||localEvaluations<=0||limit.leaves<=0||Thread.currentThread().isInterrupted())return;
+                if(placed==count){
+                    limit.leaves--;double[] value=score(rows,starts);
+                    if(better(value,best.score)){List<List<Integer>> copy=new ArrayList<>();for(List<Integer> row:rows)copy.add(new ArrayList<>(row));best=new Plan(copy,starts.clone(),value);}
+                    return;
+                }
+                int required=0,blocks=0;
+                for(int c=0;c<courses.size();c++)if(positions[c]<queues.get(c).size()){
+                    if(ready>latest[c][positions[c]])return;
+                    required+=suffix[c][positions[c]];blocks+=queues.get(c).size()-positions[c];
+                }
+                double capacity=0;int regions=0;
+                for(int d=first;d<=last;d++)for(Planner.Span span:days.get(d).free){
+                    double size=(Math.min(ceiling,span.b)-Math.max(ready,span.a))/60;
+                    if(size>0){capacity+=size;regions++;}
+                }
+                if(required+Planner.BREAK_MINUTES*Math.max(0,blocks-regions)>capacity||!better(lowerBound(ready),best.score))return;
+                List<JointChoice> choices=new ArrayList<>();
+                generation:for(int c=0;c<courses.size();c++)if(positions[c]<queues.get(c).size()){
+                    int t=queues.get(c).get(positions[c]);double seconds=sizes[t]*60.0;
+                    for(int d=first;d<=last;d++)if(allowed[c][d]){
+                        if(limit.evaluations<=0||localEvaluations<=0)break generation;
+                        Double start=null;for(Planner.Span span:days.get(d).free)if(Math.max(ready,span.a)+seconds<=Math.min(ceiling,span.b)){start=Math.max(ready,span.a);break;}
+                        if(start==null)continue;
+                        rows.get(d).add(t);starts[t]=start;positions[c]++;
+                        choices.add(new JointChoice(c,d,start,lowerBound(start+seconds+Planner.BREAK_SECONDS)));
+                        positions[c]--;rows.get(d).remove(rows.get(d).size()-1);
+                    }
+                }
+                choices.sort((a,b)->{if(rankPrecedes(a.bound,b.bound))return -1;if(rankPrecedes(b.bound,a.bound))return 1;
+                    return a.day!=b.day?Integer.compare(a.day,b.day):Integer.compare(a.course,b.course);});
+                for(JointChoice choice:choices){
+                    if(limit.evaluations<=0||localEvaluations<=0||limit.leaves<=0)break;
+                    if(!better(choice.bound,best.score))continue;
+                    int c=choice.course,t=queues.get(c).get(positions[c]);rows.get(choice.day).add(t);starts[t]=choice.start;positions[c]++;
+                    visit(choice.start+sizes[t]*60.0+Planner.BREAK_SECONDS,placed+1);
+                    positions[c]--;rows.get(choice.day).remove(rows.get(choice.day).size()-1);
+                }
+            }
+        }
         Outcome run()throws Exception{
             double[] baseline=new double[tasks.size()];for(int t=0;t<tasks.size();t++)baseline[t]=tasks.get(t).optDouble("start");
             double[] baselineScore=score(initialRows,baseline);Plan current=new Plan(initialRows,baseline,baselineScore),compact=pack(initialRows);
@@ -334,6 +467,7 @@ final class SchedulePreferenceOptimizer {
                     }
                 }
             }
+            current=jointNeighborhoods(current);
             List<JSONObject> output=new ArrayList<>();for(int t=0;t<tasks.size();t++)output.add(new JSONObject(tasks.get(t).toString()).put("start",current.starts[t]));
             output.sort(Comparator.comparingDouble(t->t.optDouble("start")));
             return new Outcome(output,better(current.score,baselineScore));
