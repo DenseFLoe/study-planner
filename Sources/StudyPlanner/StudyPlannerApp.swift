@@ -38,6 +38,15 @@ struct StudyPlannerApp: App {
 @main enum NetdiskProbeMain {
     static func main() async {
         let arguments = CommandLine.arguments
+        if let index = arguments.firstIndex(of: "--cloud-verify-archive"), arguments.indices.contains(index + 1) {
+            do {
+                let data = try Data(contentsOf: URL(fileURLWithPath: arguments[index + 1]))
+                let archive = try JSONDecoder().decode(CloudArchive.self, from: CloudCompression.gunzip(data)).validated()
+                var ledger = SyncLedger(); try ledger.merge(archive.records); let state = try ledger.materialize()
+                print("云同步完整包校验通过：\(state.courses.count) 门课程，\(state.completions.count) 条完成记录；未打开正式数据库")
+            } catch { print("云同步完整包校验失败"); exit(2) }
+            return
+        }
         if let index = arguments.firstIndex(of: "--netdisk-probe"), arguments.indices.contains(index + 1) {
             await probe(link: arguments[index + 1], passcode: nextArgument(after: index + 1, in: arguments))
             return

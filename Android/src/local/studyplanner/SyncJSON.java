@@ -8,13 +8,16 @@ import java.util.*;
 final class SyncJSON {
     interface RecordConsumer { void accept(JSONObject row)throws Exception; }
     static JSONObject readExchange(Reader input,RecordConsumer records)throws Exception {
+        return readEnvelope(input,"changes",Arrays.asList("protocol","cursor","automatic","date"),records);
+    }
+    static JSONObject readEnvelope(Reader input,String arrayField,List<String> fields,RecordConsumer records)throws Exception {
         Tokens in=new Tokens(input);JSONObject header=new JSONObject();Set<String> seen=new HashSet<>();
         in.expect('{');
         if(in.peek()!='}')while(true){
             String key=new JSONArray("["+in.value(256)+"]").getString(0);
             if(!seen.add(key))throw new IOException("重复同步字段");
             in.expect(':');
-            if(key.equals("changes")){
+            if(key.equals(arrayField)){
                 in.expect('[');
                 if(in.peek()!=']')while(true){
                     records.accept(new JSONObject(in.value(3*1024*1024)));
@@ -22,7 +25,7 @@ final class SyncJSON {
                 }
                 in.expect(']');
             }else{
-                if(!Arrays.asList("protocol","cursor","automatic","date").contains(key))throw new IOException("同步字段无效");
+                if(!fields.contains(key))throw new IOException("同步字段无效");
                 JSONArray scalar=new JSONArray("["+in.value(4096)+"]");
                 if(scalar.length()!=1)throw new IOException("同步字段无效");
                 header.put(key,scalar.get(0));
@@ -30,7 +33,7 @@ final class SyncJSON {
             if(in.peek()!=',')break;in.expect(',');
         }
         in.expect('}');
-        if(in.peek()!=-1||!seen.contains("changes"))throw new IOException("同步信封不完整");
+        if(in.peek()!=-1||!seen.contains(arrayField))throw new IOException("同步信封不完整");
         return header;
     }
     static void write(Writer out,Object value)throws Exception {

@@ -28,6 +28,7 @@ public struct SyncLedger: Codable, Sendable {
     public var lastAutoDate = ""
     public var lastSuccess: Double = 0
     public var lastAttempt: Double = 0
+    public var cloudProgress: CloudProgress? = nil
     public init() {}
     public static func day(_ date: Date) -> String {
         let f = DateFormatter(); f.calendar = Calendar(identifier: .gregorian)

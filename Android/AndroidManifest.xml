@@ -1,6 +1,8 @@
-<manifest xmlns:android="http://schemas.android.com/apk/res/android" package="local.studyplanner.android" android:versionCode="10" android:versionName="1.5.0">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android" package="local.studyplanner.android" android:versionCode="15" android:versionName="1.6.0">
     <uses-sdk android:minSdkVersion="26" android:targetSdkVersion="35" />
     <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
     <uses-permission android:name="android.permission.CAMERA" />
     <uses-feature android:name="android.hardware.camera" android:required="false" />
     <uses-feature android:name="android.hardware.camera.any" android:required="false" />
@@ -9,6 +11,7 @@
     <application android:label="学习日程" android:theme="@style/AppTheme" android:icon="@drawable/app_icon" android:allowBackup="false" android:supportsRtl="true">
         <activity android:name="local.studyplanner.CourseImportActivity" android:exported="false" android:process=":importer" android:windowSoftInputMode="adjustResize" />
         <service android:name="local.studyplanner.SyncWindowService" android:exported="false" android:foregroundServiceType="dataSync" />
+        <service android:name="local.studyplanner.CloudSyncJob" android:permission="android.permission.BIND_JOB_SERVICE" android:exported="false" />
         <activity android:name="local.studyplanner.QrScannerActivity" android:exported="false" android:screenOrientation="portrait" />
         <activity android:name="local.studyplanner.MainActivity" android:exported="true" android:windowSoftInputMode="adjustResize">
             <intent-filter><action android:name="android.intent.action.MAIN"/><category android:name="android.intent.category.LAUNCHER"/></intent-filter>

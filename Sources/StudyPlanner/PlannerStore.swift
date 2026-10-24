@@ -2,6 +2,7 @@ import SwiftUI
 import StudyCore
 import StudyPersistence
 import StudySync
+import Network
 
 @MainActor @Observable
 final class PlannerStore {
@@ -18,6 +19,13 @@ final class PlannerStore {
     var syncStatus = "尚未同步"
     var syncLedger = SyncLedger()
     var syncLog: [String] = []
+    var cloudStatus = "尚未配置云同步"
+    var cloudEndpoint = ""
+    var cloudEnabled = false
+    @ObservationIgnored private var cloudMonitor: NWPathMonitor?
+    @ObservationIgnored private var cloudDeferredTask: Task<Void, Never>?
+    private var cloudRequested = false
+    private var cloudLastAttempt = Date.distantPast
     private var pendingManualSyncs = 0
     private var repository: (any PlannerRepository)?
     private var lastDay = Calendar.current.startOfDay(for: Date())
@@ -25,6 +33,10 @@ final class PlannerStore {
     let demo: Bool
     init() {
         demo = CommandLine.arguments.contains("--demo") || Bundle.main.bundleIdentifier == "local.studyplanner.preview"
+        if !demo {
+            cloudEndpoint = (try? CloudVault.load())?.endpoint ?? ""
+            cloudEnabled = UserDefaults.standard.bool(forKey: CloudOutbox.enabledKey)
+        }
         do {
             let repo = try LocalRepository(inMemory: demo)
             repository = repo
@@ -187,6 +199,70 @@ final class PlannerStore {
         guard !demo, isReady, !syncBusy, syncLedger.permitsAutomatic(at: Date()), (try? PairingVault.load()) != nil else { return }
         startSync(automatic: true)
     }
+    func startCloudMonitoring() {
+        guard !demo, cloudMonitor == nil else { return }
+        let monitor = NWPathMonitor(); cloudMonitor = monitor
+        monitor.pathUpdateHandler = { [weak self] path in
+            if path.status == .satisfied { Task { @MainActor [weak self] in self?.requestCloudSync() } }
+        }
+        monitor.start(queue: DispatchQueue(label: "studyplanner-cloud-network"))
+    }
+    func pollCloudIfDue() {
+        guard Date().timeIntervalSince(cloudLastAttempt) >= 3600 else { return }
+        requestCloudSync()
+    }
+    func configureCloud(endpoint: String, token: String, enabled: Bool) {
+        guard !demo, !syncBusy, !orderSaveBusy else { return }
+        do {
+            if enabled {
+                let previous = try CloudVault.load()
+                let credentials = try CloudCredentials(endpoint: endpoint, token: token.isEmpty ? (previous?.token ?? "") : token)
+                try CloudVault.save(credentials); cloudEndpoint = credentials.endpoint
+            }
+            UserDefaults.standard.set(enabled, forKey: CloudOutbox.enabledKey); cloudEnabled = enabled
+            cloudStatus = enabled ? "配置已保存，准备同步" : "云同步已暂停，本地数据和待传文件已保留"
+            if enabled {
+                Task {
+                    do {
+                        try await CloudSyncClient.resetProgress()
+                        requestCloudSync(manual: true)
+                    } catch { cloudStatus = "配置已保存，重置同步状态失败，请重试" }
+                }
+            }
+        } catch { errorMessage = error.localizedDescription }
+    }
+    func requestCloudSync(manual: Bool = false) {
+        guard !demo, isReady, cloudEnabled else { return }
+        if orderSaveBusy { Task { if await waitForOrderSave() { requestCloudSync(manual: manual) } }; return }
+        if syncBusy { cloudRequested = true; return }
+        if !manual && Date().timeIntervalSince(cloudLastAttempt) < 2 {
+            if cloudDeferredTask == nil {
+                cloudDeferredTask = Task {
+                    try? await Task.sleep(for: .seconds(2)); cloudDeferredTask = nil
+                    if !Task.isCancelled { requestCloudSync(manual: true) }
+                }
+            }
+            return
+        }
+        cloudDeferredTask?.cancel(); cloudDeferredTask = nil
+        cloudRequested = false; cloudLastAttempt = Date(); syncBusy = true; cloudStatus = "正在上传完整课表并获取合并结果…"
+        Task {
+            do {
+                guard let credentials = try CloudVault.load() else { throw ClientError.message("请先配置云同步服务器。") }
+                let outcome = try await CloudSyncClient.run(credentials: credentials)
+                cloudStatus = "已同步 · 云端版本 \(outcome.ledger.cloudProgress?.revision ?? 0) · \(Date().formatted(date: .omitted, time: .shortened))"
+            } catch { cloudStatus = "云同步未完成，待传数据已保留：" + error.localizedDescription }
+            do {
+                let (loaded, ledger) = try await SyncDatabase.snapshot()
+                let calculated = await Task.detached { ScheduleEngine().generate(state: loaded, now: Date()) }.value
+                repository = try LocalRepository(); state = loaded; syncLedger = ledger; result = calculated
+                studyLoad = StudyLoadAnalyzer().assess(state: loaded, now: Date())
+            } catch { errorMessage = "无法读取本地日程：" + error.localizedDescription; isReady = false }
+            syncBusy = false
+            if pendingManualSyncs > 0 { pendingManualSyncs -= 1; startSync() }
+            else if cloudRequested { requestCloudSync(manual: true) }
+        }
+    }
     func startSync(automatic: Bool = false, host: String? = nil, pairingText: String? = nil) {
         guard !demo, isReady else { return }
         if orderSaveBusy {
@@ -217,6 +293,7 @@ final class PlannerStore {
             } catch { errorMessage = "无法重新读取同步后的本地数据：" + error.localizedDescription; isReady = false }
             syncBusy = false
             if pendingManualSyncs > 0 { pendingManualSyncs -= 1; startSync() }
+            else if cloudRequested { requestCloudSync(manual: true) }
         }
     }
     private func recordSyncLog(_ message: String) async {

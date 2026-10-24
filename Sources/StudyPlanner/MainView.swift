@@ -109,7 +109,9 @@ struct MainView: View {
             Text(store.errorMessage ?? "")
         }
         .onAppear {
+            store.startCloudMonitoring()
             store.triggerAutomaticSync()
+            store.requestCloudSync()
             if store.showDailyReview { sheet = .review }
         }
         .onChange(of: store.showDailyReview) { _, value in
@@ -119,6 +121,7 @@ struct MainView: View {
             if value == .active {
                 store.checkDay()
                 store.triggerAutomaticSync()
+                store.requestCloudSync()
             }
         }
         .task {
@@ -126,7 +129,11 @@ struct MainView: View {
                 try? await Task.sleep(for: .seconds(30))
                 guard !Task.isCancelled else { break }
                 store.checkDay()
+                store.pollCloudIfDue()
             }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .plannerDidCommit).receive(on: RunLoop.main)) { _ in
+            store.requestCloudSync()
         }
     }
 

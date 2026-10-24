@@ -23,3 +23,11 @@ Tests/SyncVerification/
 开源上传/
 .audit/
 .workbuddy/
+
+# Private cloud service runtime and credentials (examples remain tracked)
+Server/data/
+Server/server.env
+Server/.env
+Server/token
+Server/*.key
+Server/*.pem

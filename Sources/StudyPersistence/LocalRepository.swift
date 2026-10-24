@@ -28,6 +28,7 @@ public final class LocalRepository: PlannerRepository {
     private var context: ModelContext
     private let encoder: JSONEncoder
     private let migrationBackupURL: URL?
+    private let cloudOutboxURL: URL?
     private struct SettingsPayload: Codable {
         var version: Int
         var settings: AppSettings
@@ -36,14 +37,17 @@ public final class LocalRepository: PlannerRepository {
         let configuration: ModelConfiguration
         if let url {
             migrationBackupURL = nil
+            cloudOutboxURL = nil
             configuration = ModelConfiguration("StudyPlanner", url: url, cloudKitDatabase: .none)
         } else if inMemory {
             migrationBackupURL = nil
+            cloudOutboxURL = nil
             configuration = ModelConfiguration("StudyPlanner", isStoredInMemoryOnly: true, cloudKitDatabase: .none)
         } else {
             let directory = try FileManager.default.url(for: .applicationSupportDirectory, in: .userDomainMask, appropriateFor: nil, create: true).appendingPathComponent("StudyPlanner", isDirectory: true)
             try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
             migrationBackupURL = directory.appendingPathComponent("before-local-sync.json")
+            cloudOutboxURL = directory.appendingPathComponent("CloudOutbox", isDirectory: true)
             configuration = ModelConfiguration("StudyPlanner", url: directory.appendingPathComponent("StudyPlanner.store"), cloudKitDatabase: .none)
         }
         container = try ModelContainer(for: LocalRecord.self, configurations: configuration)
@@ -51,9 +55,10 @@ public final class LocalRepository: PlannerRepository {
         context.autosaveEnabled = false
         encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys]
     }
-    private init(container: ModelContainer, migrationBackupURL: URL?) {
+    private init(container: ModelContainer, migrationBackupURL: URL?, cloudOutboxURL: URL?) {
         self.container = container
         self.migrationBackupURL = migrationBackupURL
+        self.cloudOutboxURL = cloudOutboxURL
         context = ModelContext(container)
         context.autosaveEnabled = false
         encoder = JSONEncoder()
@@ -63,9 +68,10 @@ public final class LocalRepository: PlannerRepository {
     @MainActor public func saveForInteraction(_ state: PlannerState) async throws {
         let container = container
         let backup = migrationBackupURL
+        let outbox = cloudOutboxURL
         // A fresh context stays on the worker; UI models never cross threads.
         try await Task.detached(priority: .userInitiated) {
-            let worker = LocalRepository(container: container, migrationBackupURL: backup)
+            let worker = LocalRepository(container: container, migrationBackupURL: backup, cloudOutboxURL: outbox)
             try worker.save(state)
         }.value
         // Discard registered objects so the next UI transaction sees the new rows.
@@ -110,7 +116,8 @@ public final class LocalRepository: PlannerRepository {
         // The transactional overload captures the state once.
         try save(state, ledger: loadLedger())
     }
-    public func save(_ state: PlannerState, ledger: SyncLedger) throws {
+    public func save(_ state: PlannerState, ledger: SyncLedger, enqueueCloud: Bool = true) throws {
+        let previousSequence = try loadLedger().sequence
         var state = state
         state.removeArchivedCourses()
         var ledger = ledger
@@ -132,6 +139,14 @@ public final class LocalRepository: PlannerRepository {
         } catch {
             context.rollback()
             throw error
+        }
+        if enqueueCloud, ledger.sequence != previousSequence, let cloudOutboxURL,
+           UserDefaults.standard.bool(forKey: CloudOutbox.enabledKey) {
+            // A packaging failure must not undo a successful local save. Sync also rebuilds
+            // a full pending snapshot from the durable ledger on the next attempt.
+            do { try CloudOutbox.enqueue(ledger, directory: cloudOutboxURL) }
+            catch { NotificationCenter.default.post(name: .plannerDidCommit, object: nil); return }
+            NotificationCenter.default.post(name: .plannerDidCommit, object: nil)
         }
     }
 }
