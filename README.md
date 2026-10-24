@@ -6,6 +6,8 @@
 
 macOS 14 及以上（Apple Silicon）可使用 macOS 版本；Android 8.0 及以上可使用 Android 版本。
 
+快速了解特色与日常操作：[学习日程 · 快速说明书](学习日程-快速说明书.md)。
+
 ## 运行
 
 运行 `./Scripts/build-app.sh` 可生成开发构建 `dist/学习日程.app`。对外分享请运行 `./Scripts/release.sh`，脚本会生成 macOS DMG、Android APK、安装说明、SHA-256 校验和及可直接转发的 ZIP。首次打开为空白数据库，可以直接添加课程，或点击「载入示例，体验自动排程」。示例一旦通过正式应用的按钮载入，也会保存在本机。
