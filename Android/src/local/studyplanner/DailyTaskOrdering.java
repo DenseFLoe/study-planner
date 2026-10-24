@@ -19,7 +19,10 @@ public final class DailyTaskOrdering {
         Map<String,Integer> reserved=Planner.reserve(events,study);if(reserved==null)return null;
         for(JSONObject e:events){int start=reserved.getOrDefault(e.getString("id"),e.getInt("startMinute"));for(int m=start;m<start+Planner.occupied(e);m++)available[m]=false;}
         Set<String> moving=new HashSet<>();for(JSONObject t:ordered)moving.add(t.getString("id"));
-        List<JSONObject> obstacles=new ArrayList<>();for(JSONObject t:Planner.list(state.getJSONArray("tasks")))if(!moving.contains(t.getString("id"))&&Planner.day(t.getDouble("start")).equals(day)&&(Planner.pending(t)||t.optInt("completedMinutes")>0))obstacles.add(t);
+        // Include neighboring days when their buffered interval reaches this day.
+        double dayStart=Planner.at(day,0),dayEnd=Planner.at(day.plusDays(1),0);
+        List<JSONObject> obstacles=new ArrayList<>();for(JSONObject t:Planner.list(state.getJSONArray("tasks")))if(!moving.contains(t.getString("id"))&&(Planner.pending(t)||t.optInt("completedMinutes")>0)
+            &&Planner.retainedHistoryEnd(t)+Planner.BREAK_SECONDS>dayStart&&Planner.retainedHistoryStart(t)-Planner.BREAK_SECONDS<dayEnd)obstacles.add(t);
         List<JSONObject> placed=new ArrayList<>();double cursor=earliest;
         for(JSONObject source:ordered){boolean found=false;int first=Planner.day(cursor).equals(day)?(int)((cursor-Planner.at(day,0))/60):1440;
             for(int minute=first;minute<1440;minute++){
@@ -58,6 +61,10 @@ public final class DailyTaskOrdering {
             List<JSONObject> original=new ArrayList<>();for(int index:indices)original.add(result.get(index));original.sort(Comparator.comparingDouble(t->t.optDouble("start")));if(original.isEmpty())continue;
             List<String> keys=keys(original);Map<String,Integer> ranks=new HashMap<>();JSONArray preferred=order.getJSONArray("keys");for(int i=0;i<preferred.length();i++)ranks.putIfAbsent(preferred.getString(i),i);
             Map<String,Integer> taskRanks=new HashMap<>();for(int i=0;i<original.size();i++)taskRanks.put(original.get(i).getString("id"),ranks.getOrDefault(keys.get(i),preferred.length()+i));List<JSONObject> sorted=new ArrayList<>(original);sorted.sort(Comparator.comparingInt(t->taskRanks.get(t.optString("id"))));
+            // Generated neighboring days are not in persisted history yet.
+            List<JSONObject> obstacles=new ArrayList<>(history);Set<String> retainedIDs=new HashSet<>();for(JSONObject t:history)retainedIDs.add(t.getString("id"));
+            for(JSONObject t:result)if(!Planner.day(t.getDouble("start")).equals(day)&&!retainedIDs.contains(t.getString("id")))obstacles.add(t);
+            context.put("tasks",new JSONArray(obstacles));
             List<JSONObject> placed=place(context,sorted,original.get(0).getDouble("start"));if(placed!=null)for(int i=0;i<indices.size();i++)result.set(indices.get(i),placed.get(i));
         }
         result.sort(Comparator.comparingDouble(t->t.optDouble("start")));return result;

@@ -219,4 +219,48 @@ final class DailyTaskOrderingTests: XCTestCase {
         let decoded = try JSONDecoder().decode(AppSettings.self, from: data)
         XCTAssertNil(decoded.dailyTaskOrders)
     }
+
+    private func midnightFixture(nextMinute: Int = 0) -> PlannerState {
+        var state = PlannerState()
+        state.settings.availability = [.init(weekday: 2, startMinute: 1320, endMinute: 1370),
+                                       .init(weekday: 2, startMinute: 1380, endMinute: 1440),
+                                       .init(weekday: 3, startMinute: 0, endMinute: 60)]
+        state.courses = [50, 30, 30].enumerated().map {
+            Course(name: "跨日合成课\($0.offset)", totalMinutes: $0.element,
+                   startDate: date(), deadline: date(day: 6), minimumBlockMinutes: $0.element)
+        }
+        state.tasks = [ScheduledTask(courseID: state.courses[0].id, start: date(22), durationMinutes: 50),
+                       ScheduledTask(courseID: state.courses[1].id, start: date(23), durationMinutes: 30),
+                       ScheduledTask(courseID: state.courses[2].id, start: date(day: 6, minute: nextMinute), durationMinutes: 30)]
+        return state
+    }
+
+    func testSwapRejectsShorteningRestBeforeNextDayWithoutMutatingState() {
+        var state = midnightFixture()
+        let original = state
+        XCTAssertThrowsError(try state.swapDailyTasks(state.tasks[0].id, state.tasks[1].id, now: date(21), calendar: calendar)) {
+            XCTAssertEqual($0 as? DailyTaskOrderError, .noSpace)
+        }
+        XCTAssertEqual(state, original)
+    }
+
+    func testSwapAcceptsExactlyFifteenMinutesBeforeNextDay() throws {
+        var state = midnightFixture(nextMinute: 5)
+        let nextDay = state.tasks[2]
+        try state.swapDailyTasks(state.tasks[0].id, state.tasks[1].id, now: date(21), calendar: calendar)
+        XCTAssertEqual(state.tasks[1].end, date(23, minute: 50))
+        XCTAssertEqual(state.tasks[2], nextDay)
+        XCTAssertEqual(nextDay.start.timeIntervalSince(state.tasks[1].end), 900)
+    }
+
+    func testSavedOrderRespectsNextDaysGeneratedTasksEvenWithoutStoredDrafts() {
+        for storedDrafts in [false, true] {
+            var state = midnightFixture()
+            let generated = state.tasks
+            state.settings.dailyTaskOrders = [.init(day: date(), keys: Array(DailyTaskOrder.keys(for: Array(generated.prefix(2))).reversed()))]
+            if !storedDrafts { state.tasks = [] }
+            let result = state.applyingDailyTaskOrders(to: generated, calendar: calendar)
+            XCTAssertEqual(result, generated, "Unsafe saved order must leave the feasible generated schedule intact")
+        }
+    }
 }

@@ -70,8 +70,11 @@ extension PlannerState {
         }
         let moving = Set(ordered.map(\.id))
         let pause = TimeInterval(ScheduleEngine.breakMinutes * 60)
-        let obstacles = tasks.filter { !moving.contains($0.id) && calendar.isDate($0.start, inSameDayAs: day) && ($0.isUnconfirmed || $0.completedMinutes > 0) }
+        let dayEnd = engine.instant(day: day, minute: 1440)
+        // Adjacent days also reserve the rest interval across midnight.
+        let obstacles = tasks.filter { !moving.contains($0.id) && ($0.isUnconfirmed || $0.completedMinutes > 0) }
             .map(\.retainedHistoryInterval)
+            .filter { $0.end.addingTimeInterval(pause) > day && $0.start.addingTimeInterval(-pause) < dayEnd }
         var result: [ScheduledTask] = []
         var cursor = earliest
         for var task in ordered {
@@ -129,6 +132,12 @@ extension PlannerState {
             // Generated tasks replace unfinished drafts. Retained history still reserves time.
             var context = self
             context.tasks.removeAll { $0.isUnconfirmed && $0.planningEnd > earliest }
+            // Other generated days are not yet in saved state during replan.
+            // Keep their current positions when applying this day's preference.
+            let retainedIDs = Set(context.tasks.map(\.id))
+            context.tasks += result.filter {
+                !calendar.isDate($0.start, inSameDayAs: order.day) && !retainedIDs.contains($0.id)
+            }
             guard let placed = context.placeDailyTasks(ordered, earliest: earliest, calendar: calendar) else { continue }
             for (i, task) in zip(indices, placed) { result[i] = task }
         }
