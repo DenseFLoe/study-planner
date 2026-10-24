@@ -18,9 +18,12 @@ public final class CourseTools {
     }
     static int chinese(String text){String digits="零一二三四五六七八九";int total=0,pending=0;for(char c:text.toCharArray()){int n=digits.indexOf(c);if(c=='〇')n=0;if(c=='两')n=2;if(n>=0)pending=n;else{total+=Math.max(1,pending)*(c=='百'?100:10);pending=0;}}return total+pending;}
     static class SortKey {
+        // Start a numeric scan once per run; \G also permits adjacent metadata tags.
+        static final Pattern VIDEO_TAGS=Pattern.compile("(?<![0-9])(?:2160|1440|1080|720|480)[pi]|[248]k|[hx]26[45]|(?:(?<![0-9])|\\G)[0-9]++fps");
+        static final Pattern CHINESE_COUNTER=Pattern.compile("第?(?<![零〇一二三四五六七八九十百两])([零〇一二三四五六七八九十百两]++)([章节讲课集部分])");
         List<String> numbers=new ArrayList<>();String text;int part;
-        SortKey(String raw){String value=Normalizer.normalize(raw,Normalizer.Form.NFKC).toLowerCase(Locale.ROOT).replaceAll("\\.(mp4|mkv|mov|avi|flv|webm|m4v|ts|mp3|pdf)$","").replaceAll("(?<![0-9])(?:2160|1440|1080|720|480)[pi]|[248]k|[hx]26[45]|\\d+fps","");
-            Matcher chinese=Pattern.compile("第?([零〇一二三四五六七八九十百两]+)([章节讲课集部分])").matcher(value);StringBuffer converted=new StringBuffer();while(chinese.find())chinese.appendReplacement(converted,Matcher.quoteReplacement(chinese.group().replace(chinese.group(1),String.valueOf(chinese(chinese.group(1))))));chinese.appendTail(converted);value=converted.toString();
+        SortKey(String raw){String value=VIDEO_TAGS.matcher(Normalizer.normalize(raw,Normalizer.Form.NFKC).toLowerCase(Locale.ROOT).replaceAll("\\.(mp4|mkv|mov|avi|flv|webm|m4v|ts|mp3|pdf)$","")).replaceAll("");
+            Matcher chinese=CHINESE_COUNTER.matcher(value);StringBuffer converted=new StringBuffer();while(chinese.find())chinese.appendReplacement(converted,Matcher.quoteReplacement(chinese.group().replace(chinese.group(1),String.valueOf(chinese(chinese.group(1))))));chinese.appendTail(converted);value=converted.toString();
             for(int i=0;i<3;i++){Matcher marker=Pattern.compile("[（(【\\[]"+"上中下".charAt(i)+"[）)】\\]]|"+"上中下".charAt(i)+"[篇部集]$").matcher(value);if(marker.find()){part=i+1;value=marker.replaceFirst("");break;}}
             text=value.replaceAll("[0-9]+|[\\s._\\-—、()\\[\\]]","");int tail=0;Matcher counters=Pattern.compile("第\\s*([0-9]+)\\s*[章节讲课集]").matcher(value);while(counters.find()){numbers.add(clean(counters.group(1)));tail=counters.end();}Matcher other=Pattern.compile("[0-9]+").matcher(value.substring(tail));while(other.find())numbers.add(clean(other.group()));
         }
