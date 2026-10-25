@@ -16,19 +16,19 @@ final class CloudSettingsPanel {
     final TextView keyLabel;
     final CheckBox enabled,trusted;
     boolean reading=false;
-    static void render(MainActivity app){
+    static void render(MainActivity app,LinearLayout parent){
         // Network/resume refreshes rebuild the page. Retain unsaved fields and the imported key
         // in this Activity's memory, never in a Bundle or plaintext preferences.
         if(app.cloudPanel!=null){
             LinearLayout box=app.cloudPanel.box;
-            android.view.ViewGroup parent=(android.view.ViewGroup)box.getParent();if(parent!=null)parent.removeView(box);
-            app.body.addView(box);if(app.cloudLabel!=null)app.cloudLabel.setText(CloudSync.summary(app));return;
+            android.view.ViewGroup previous=(android.view.ViewGroup)box.getParent();if(previous!=null)previous.removeView(box);
+            parent.addView(box);if(app.cloudLabel!=null)app.cloudLabel.setText(CloudSync.summary(app));return;
         }
-        app.cloudPanel=new CloudSettingsPanel(app);
+        app.cloudPanel=new CloudSettingsPanel(app,parent);
     }
-    CloudSettingsPanel(MainActivity app){
+    CloudSettingsPanel(MainActivity app,LinearLayout parent){
         this.app=app;method=CloudSettings.method(app);
-        box=app.card(app.body);box.addView(app.title("云端同步"));
+        box=app.card(parent);box.addView(app.title("云端同步"));
         enabled=new CheckBox(app);enabled.setText("启用云同步");enabled.setChecked(CloudSettings.enabled(app));box.addView(enabled);
         LinearLayout choices=app.row();box.addView(choices);
         httpsCard=choice(choices,"HTTPS 直连","已有 HTTPS 地址","https");sshCard=choice(choices,"SSH 密钥","使用服务器登录密钥","ssh");

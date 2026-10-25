@@ -241,8 +241,7 @@ struct SettingsView: View {
     @Bindable var store: PlannerStore
     @State private var settings = AppSettings()
     @State private var saved = false
-    /// Display-only: collapsing the availability editor neither saves nor reschedules.
-    @State private var availabilityExpanded = false
+    @State private var selectedCategory: SettingsCategory?
     @State private var syncHost = ""
     @State private var pairingRequest: PairingRequest?
     @AppStorage("dailyStudyLoadWarningMinutes") private var dailyLoadWarningMinutes = 480
@@ -258,124 +257,183 @@ struct SettingsView: View {
     }
     var body: some View {
         VStack(spacing: 0) {
-            Form {
-                Section("显示设置") {
-                    VStack(alignment: .leading, spacing: 6) {
-                        HStack {
-                            Text("主页时间字号")
-                            Spacer()
-                            Text("\(Int(displayTimelineTimeFontSize.rounded())) 号").monospacedDigit().foregroundStyle(.secondary)
-                        }
-                        Slider(value: $timelineTimeFontSize, in: 14...24, step: 1)
-                            .accessibilityLabel("主页时间字号")
-                            .accessibilityValue("\(Int(displayTimelineTimeFontSize.rounded())) 号")
+            if let selectedCategory {
+                HStack(spacing: 12) {
+                    Button { self.selectedCategory = nil } label: {
+                        Label("全部设置", systemImage: "chevron.left")
                     }
-                    HStack(alignment: .firstTextBaseline, spacing: 16) {
-                        VStack(alignment: .trailing, spacing: 3) {
-                            Text("09:00")
-                                .font(.system(size: displayTimelineTimeFontSize, weight: .semibold, design: .rounded))
-                                .monospacedDigit()
-                            Text("10:30")
-                                .font(.system(size: displayTimelineTimeFontSize - 2, weight: .medium, design: .rounded))
-                                .monospacedDigit()
-                                .foregroundStyle(.secondary)
-                        }
-                        .fixedSize(horizontal: true, vertical: false)
-                        Text("预览：主页时间轴的开始时间与结束时间").font(.caption).foregroundStyle(.secondary)
-                    }
-                    Button("恢复默认字号") { timelineTimeFontSize = 17 }
-                    Text("调整后立即生效并自动保存。").font(.caption).foregroundStyle(.secondary)
+                    Text(selectedCategory.rawValue).font(.title3.bold())
+                    Spacer()
+                }.padding(.horizontal, 24).padding(.vertical, 14)
+                Divider()
+            }
+            ZStack(alignment: .topLeading) {
+                categoryGrid
+                    .opacity(selectedCategory == nil ? 1 : 0)
+                    .allowsHitTesting(selectedCategory == nil)
+                    .disabled(selectedCategory != nil)
+                    .accessibilityHidden(selectedCategory != nil)
+                // Keep the forms mounted so navigating between cards retains drafts,
+                // including the cloud form's in-memory credential fields.
+                ForEach(SettingsCategory.allCases) { category in
+                    Form { categoryContent(category) }
+                        .formStyle(.grouped)
+                        .opacity(selectedCategory == category ? 1 : 0)
+                        .allowsHitTesting(selectedCategory == category)
+                        .disabled(selectedCategory != category)
+                        .accessibilityHidden(selectedCategory != category)
                 }
-                Section {
-                    DisclosureGroup(isExpanded: $availabilityExpanded) {
-                        Text("可以为每天添加多段时间。不启用的日期不会分配学习任务。").font(.callout).foregroundStyle(.secondary)
-                        ForEach([2,3,4,5,6,7,1], id: \.self) { day in
-                            VStack(alignment: .leading, spacing: 10) {
-                                HStack {
-                                    Text(weekdayNames[day]!).fontWeight(.semibold)
-                                    Spacer()
-                                    if !settings.availability.contains(where: { $0.weekday == day }) { Text("休息日").foregroundStyle(.secondary) }
-                                    Button("添加时段", systemImage: "plus") { settings.availability.append(.init(weekday: day, startMinute: 480, endMinute: 1380)); saved = false }
-                                }
-                                ForEach($settings.availability) { $window in
-                                    if window.weekday == day {
-                                        HStack {
-                                            TimeField(title: "从", minute: $window.startMinute)
-                                            TimeField(title: "至", minute: $window.endMinute)
-                                            Button(role: .destructive) { settings.availability.removeAll { $0.id == window.id }; saved = false } label: { Image(systemName: "minus.circle") }.help("移除此时段")
-                                        }
-                                    }
-                                }
-                            }.padding(.vertical, 6)
-                        }
-                    } label: {
-                        Text("每日可学习时间").fontWeight(.semibold)
-                    }
-                }
-                Section("学习负担提醒") {
-                    Stepper("一天超过 \(hours(dailyLoadWarningMinutes)) 时提醒", value: $dailyLoadWarningMinutes, in: 60...960, step: 30)
-                    Text("这是负担提醒线，不会减少可学习时间或改动截止日。调整后立即生效，仅保存在本机。").font(.caption).foregroundStyle(.secondary)
-                }
-                SchedulePrioritiesPanel(settings: $settings)
-                ScheduleExplanationPanel(state: store.state, result: store.result,
-                                         hasUnsavedChanges: settings != store.state.settings)
-                Section("默认规则") {
-                    TextField("默认最小时间块（分钟）", value: $settings.minimumScheduleUnit, format: .number)
-                    TimeField(title: "每日完成确认时间", minute: $settings.notificationMinute)
-                    Text("软件打开时，在此时间之后提示确认当天已结束的任务；下次启动也会补查未确认的历史任务。").font(.caption).foregroundStyle(.secondary)
-                }
-                Section("热点局域网同步") {
-                    Text(store.syncStatus).textSelection(.enabled)
-                    Text("今日自动同步：" + (store.syncLedger.lastAutoDate == SyncLedger.day(Date()) ? "已完成" : "尚未完成"))
-                    if store.syncLedger.lastSuccess > 0 {
-                        Text("最后同步：" + Date(timeIntervalSince1970: store.syncLedger.lastSuccess).formatted())
-                    }
-                    Text("首次配对：Mac 生成二维码，Android 扫码后开启两分钟接收窗口；以后只需两端点击立即同步。自动同步在启动或回到前台时检查。").font(.caption).foregroundStyle(.secondary)
-                    TextField("手机热点 IP", text: $syncHost)
-                    Button("读取当前网关") { Task { syncHost = await SyncClient.gateway() ?? "" } }
-                    if let pairingRequest {
-                        PairingQRCodeView(payload: pairingRequest.payload)
-                        Text("在 Android 的热点同步设置中点击“扫描 Mac 配对二维码”。二维码不包含日程内容，将在 (pairingRequest.expiresAt.formatted(date: .omitted, time: .shortened)) 失效。")
-                            .font(.caption).foregroundStyle(.secondary)
-                    }
-                    HStack {
-                        Button(pairingRequest == nil ? "生成配对二维码" : "重新生成二维码") {
-                            do { pairingRequest = try SyncClient.makePairingRequest() }
-                            catch { store.errorMessage = error.localizedDescription }
-                            if syncHost.isEmpty { Task { syncHost = await SyncClient.gateway() ?? "" } }
-                        }
-                        if let pairingRequest {
-                            Button("扫码后配对并同步") { store.startSync(host: syncHost, pairingText: pairingRequest.payload) }
-                                .disabled(store.syncBusy || syncHost.isEmpty)
-                        }
-                        Button(store.syncBusy ? "立即同步（排队）" : "立即同步") { store.startSync() }
-                    }
-                    DisclosureGroup("本次运行同步日志") {
-                        Text(store.syncLog.joined(separator: "\n")).font(.caption.monospaced()).textSelection(.enabled)
-                    }
-                }
-                Section("云端同步") {
-                    CloudConnectionSettings(store: store)
-                }
-                Section("数据保存") {
-                    Label("所有数据使用 SwiftData 保存在本机", systemImage: "internaldrive")
-                    Text("使用独立日历，不连接系统 Calendar。可使用热点同步，或自行配置私人云同步服务器。").font(.caption).foregroundStyle(.secondary)
-                }
-            }.formStyle(.grouped)
-            HStack {
-                if !valid { Text("请检查各时段的起止时间和最小时间块。").foregroundStyle(.orange) }
-                if saved { Label("已保存，未来计划已更新", systemImage: "checkmark.circle.fill").foregroundStyle(.teal) }
-                Spacer()
-                Button("恢复已保存设置") { settings = store.state.settings; saved = false }
-                Button("保存并重新排程") { saved = store.change { $0.updateStudySettings(settings, now: Date()) } }.buttonStyle(.borderedProminent).disabled(!valid)
-            }.padding(20)
+            }.frame(maxWidth: .infinity, maxHeight: .infinity)
+            if selectedCategory?.editsSchedule == true || settings != store.state.settings || saved {
+                HStack {
+                    if !valid { Text("请检查各时段的起止时间和最小时间块。").foregroundStyle(.orange) }
+                    if saved { Label("已保存，未来计划已更新", systemImage: "checkmark.circle.fill").foregroundStyle(.teal) }
+                    Spacer()
+                    Button("恢复已保存设置") { settings = store.state.settings; saved = false }
+                    Button("保存并重新排程") { saved = store.change { $0.updateStudySettings(settings, now: Date()) } }.buttonStyle(.borderedProminent).disabled(!valid)
+                }.padding(20)
+            }
         }.onAppear {
             settings = store.state.settings; syncHost = (try? PairingVault.load())?.host ?? ""
         }
         .onChange(of: settings) { _, _ in saved = false }
         .onChange(of: store.syncLedger.lastSuccess) { _, _ in pairingRequest = nil }
     }
+    private var categoryGrid: some View {
+        ScrollView {
+            LazyVGrid(columns: [GridItem(.adaptive(minimum: 140, maximum: 180), spacing: 12)], alignment: .leading, spacing: 12) {
+                ForEach(SettingsCategory.allCases) { category in
+                    Button { selectedCategory = category } label: {
+                        VStack(spacing: 12) {
+                            Image(systemName: category.icon)
+                                .font(.system(size: 27, weight: .medium)).foregroundStyle(Color.accentColor)
+                            Text(category.rawValue).font(.headline).multilineTextAlignment(.center)
+                        }
+                        .padding(14).frame(maxWidth: .infinity, maxHeight: .infinity)
+                        .aspectRatio(1, contentMode: .fit)
+                        .background(.background, in: RoundedRectangle(cornerRadius: 16))
+                        .overlay(RoundedRectangle(cornerRadius: 16).stroke(Color.secondary.opacity(0.16)))
+                        .contentShape(RoundedRectangle(cornerRadius: 16))
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel(category.rawValue + "，点击进入")
+                }
+            }.padding(24)
+        }
+    }
+    @ViewBuilder private func categoryContent(_ category: SettingsCategory) -> some View {
+        switch category {
+        case .display:
+            Section("显示设置") {
+                VStack(alignment: .leading, spacing: 6) {
+                    HStack {
+                        Text("主页时间字号")
+                        Spacer()
+                        Text("\(Int(displayTimelineTimeFontSize.rounded())) 号").monospacedDigit().foregroundStyle(.secondary)
+                    }
+                    Slider(value: $timelineTimeFontSize, in: 14...24, step: 1)
+                        .accessibilityLabel("主页时间字号")
+                        .accessibilityValue("\(Int(displayTimelineTimeFontSize.rounded())) 号")
+                }
+                HStack(alignment: .firstTextBaseline, spacing: 16) {
+                    VStack(alignment: .trailing, spacing: 3) {
+                        Text("09:00")
+                            .font(.system(size: displayTimelineTimeFontSize, weight: .semibold, design: .rounded))
+                            .monospacedDigit()
+                        Text("10:30")
+                            .font(.system(size: displayTimelineTimeFontSize - 2, weight: .medium, design: .rounded))
+                            .monospacedDigit()
+                            .foregroundStyle(.secondary)
+                    }
+                    .fixedSize(horizontal: true, vertical: false)
+                    Text("预览：主页时间轴的开始时间与结束时间").font(.caption).foregroundStyle(.secondary)
+                }
+                Button("恢复默认字号") { timelineTimeFontSize = 17 }
+                Text("调整后立即生效并自动保存。").font(.caption).foregroundStyle(.secondary)
+            }
+        case .availability:
+            Section("每日可学习时间") {
+                Text("可以为每天添加多段时间。不启用的日期不会分配学习任务。").font(.callout).foregroundStyle(.secondary)
+                ForEach([2,3,4,5,6,7,1], id: \.self) { day in
+                    VStack(alignment: .leading, spacing: 10) {
+                        HStack {
+                            Text(weekdayNames[day]!).fontWeight(.semibold)
+                            Spacer()
+                            if !settings.availability.contains(where: { $0.weekday == day }) { Text("休息日").foregroundStyle(.secondary) }
+                            Button("添加时段", systemImage: "plus") { settings.availability.append(.init(weekday: day, startMinute: 480, endMinute: 1380)); saved = false }
+                        }
+                        ForEach($settings.availability) { $window in
+                            if window.weekday == day {
+                                HStack {
+                                    TimeField(title: "从", minute: $window.startMinute)
+                                    TimeField(title: "至", minute: $window.endMinute)
+                                    Button(role: .destructive) { settings.availability.removeAll { $0.id == window.id }; saved = false } label: { Image(systemName: "minus.circle") }.help("移除此时段")
+                                }
+                            }
+                        }
+                    }.padding(.vertical, 6)
+                }
+            }
+        case .load:
+            Section("学习负担提醒") {
+                Stepper("一天超过 \(hours(dailyLoadWarningMinutes)) 时提醒", value: $dailyLoadWarningMinutes, in: 60...960, step: 30)
+                Text("这是负担提醒线，不会减少可学习时间或改动截止日。调整后立即生效，仅保存在本机。").font(.caption).foregroundStyle(.secondary)
+            }
+        case .priorities:
+            SchedulePrioritiesPanel(settings: $settings)
+        case .explanation:
+            ScheduleExplanationPanel(state: store.state, result: store.result,
+                                     hasUnsavedChanges: settings != store.state.settings)
+        case .defaults:
+            Section("默认规则") {
+                TextField("默认最小时间块（分钟）", value: $settings.minimumScheduleUnit, format: .number)
+                TimeField(title: "每日完成确认时间", minute: $settings.notificationMinute)
+                Text("软件打开时，在此时间之后提示确认当天已结束的任务；下次启动也会补查未确认的历史任务。").font(.caption).foregroundStyle(.secondary)
+            }
+        case .localSync:
+            Section("热点局域网同步") {
+                Text(store.syncStatus).textSelection(.enabled)
+                Text("今日自动同步：" + (store.syncLedger.lastAutoDate == SyncLedger.day(Date()) ? "已完成" : "尚未完成"))
+                if store.syncLedger.lastSuccess > 0 {
+                    Text("最后同步：" + Date(timeIntervalSince1970: store.syncLedger.lastSuccess).formatted())
+                }
+                Text("首次配对：Mac 生成二维码，Android 扫码后开启两分钟接收窗口；以后只需两端点击立即同步。自动同步在启动或回到前台时检查。").font(.caption).foregroundStyle(.secondary)
+                TextField("手机热点 IP", text: $syncHost)
+                Button("读取当前网关") { Task { syncHost = await SyncClient.gateway() ?? "" } }
+                if let pairingRequest {
+                    PairingQRCodeView(payload: pairingRequest.payload)
+                    Text("在 Android 的热点同步设置中点击“扫描 Mac 配对二维码”。二维码不包含日程内容，将在 (pairingRequest.expiresAt.formatted(date: .omitted, time: .shortened)) 失效。")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+                HStack {
+                    Button(pairingRequest == nil ? "生成配对二维码" : "重新生成二维码") {
+                        do { pairingRequest = try SyncClient.makePairingRequest() }
+                        catch { store.errorMessage = error.localizedDescription }
+                        if syncHost.isEmpty { Task { syncHost = await SyncClient.gateway() ?? "" } }
+                    }
+                    if let pairingRequest {
+                        Button("扫码后配对并同步") { store.startSync(host: syncHost, pairingText: pairingRequest.payload) }
+                            .disabled(store.syncBusy || syncHost.isEmpty)
+                    }
+                    Button(store.syncBusy ? "立即同步（排队）" : "立即同步") { store.startSync() }
+                }
+                DisclosureGroup("本次运行同步日志") {
+                    Text(store.syncLog.joined(separator: "\n")).font(.caption.monospaced()).textSelection(.enabled)
+                }
+            }
+        case .cloudSync:
+            Section("云端同步") {
+                CloudConnectionSettings(store: store)
+            }
+        case .data:
+            Section("数据保存") {
+                Label("所有数据使用 SwiftData 保存在本机", systemImage: "internaldrive")
+                Text("使用独立日历，不连接系统 Calendar。可使用热点同步，或自行配置私人云同步服务器。").font(.caption).foregroundStyle(.secondary)
+            }
+        }
+    }
 }
+
 struct CompletionEditor: View {
     @Bindable var store: PlannerStore
     let task: ScheduledTask
