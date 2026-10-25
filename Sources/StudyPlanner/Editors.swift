@@ -244,9 +244,6 @@ struct SettingsView: View {
     /// Display-only: collapsing the availability editor neither saves nor reschedules.
     @State private var availabilityExpanded = false
     @State private var syncHost = ""
-    @State private var cloudAddress = ""
-    @State private var cloudToken = ""
-    @State private var cloudEnabled = false
     @State private var pairingRequest: PairingRequest?
     @AppStorage("dailyStudyLoadWarningMinutes") private var dailyLoadWarningMinutes = 480
     @AppStorage("timelineTimeFontSize") private var timelineTimeFontSize = 17.0
@@ -358,19 +355,7 @@ struct SettingsView: View {
                     }
                 }
                 Section("云端同步") {
-                    Toggle("启用云同步", isOn: $cloudEnabled)
-                    TextField("HTTPS 服务器地址（支持公网 IP）", text: $cloudAddress)
-                    SecureField("服务访问码（留空沿用已保存的访问码）", text: $cloudToken)
-                    Text(store.cloudStatus).textSelection(.enabled)
-                    Text("两端上传完整压缩课表，服务器按每条记录的操作时间合并，保留最近十个版本。修改后、打开或恢复联网时同步；运行期间每小时检查。服务器未准备好时保持关闭。").font(.caption).foregroundStyle(.secondary)
-                    HStack {
-                        Button("保存云同步配置") {
-                            store.configureCloud(endpoint: cloudAddress, token: cloudToken, enabled: cloudEnabled)
-                            cloudToken = ""
-                        }
-                        Button("立即云同步") { store.requestCloudSync(manual: true) }
-                            .disabled(!store.cloudEnabled)
-                    }.disabled(store.syncBusy || store.orderSaveBusy)
+                    CloudConnectionSettings(store: store)
                 }
                 Section("数据保存") {
                     Label("所有数据使用 SwiftData 保存在本机", systemImage: "internaldrive")
@@ -386,7 +371,6 @@ struct SettingsView: View {
             }.padding(20)
         }.onAppear {
             settings = store.state.settings; syncHost = (try? PairingVault.load())?.host ?? ""
-            cloudAddress = store.cloudEndpoint; cloudEnabled = store.cloudEnabled
         }
         .onChange(of: settings) { _, _ in saved = false }
         .onChange(of: store.syncLedger.lastSuccess) { _, _ in pairingRequest = nil }

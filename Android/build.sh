@@ -12,10 +12,11 @@ mkdir -p build/classes build/dex signing
 sed -E "s/android:versionCode=\"[0-9]+\"/android:versionCode=\"$STUDYPLANNER_BUILD\"/; s/android:versionName=\"[^\"]+\"/android:versionName=\"$STUDYPLANNER_VERSION\"/" AndroidManifest.xml > build/AndroidManifest.xml
 "$PWD/tools/sdk35/android-15/aapt2" compile --dir res -o build/resources.zip
 "$PWD/tools/sdk35/android-15/aapt2" link -o build/base.apk -I "$PLATFORM" --manifest build/AndroidManifest.xml -A assets build/resources.zip
-"$JDK/bin/javac" --release 8 -encoding UTF-8 -classpath "$PLATFORM:$PWD/lib/zxing-core-3.5.3.jar:$PWD/lib/androidx-webkit-1.12.1.jar" -d build/classes src/local/studyplanner/*.java
-"$JDK/bin/java" -cp "$BT/lib/d8.jar" com.android.tools.r8.D8 --min-api 26 --lib "$PLATFORM" --output build/dex build/classes/local/studyplanner/*.class "$PWD/lib/zxing-core-3.5.3.jar" "$PWD/lib/androidx-webkit-1.12.1.jar"
+python3 ../Scripts/verify-ssh-dependencies.py
+"$JDK/bin/javac" --release 8 -encoding UTF-8 -classpath "$PLATFORM:$PWD/lib/*" -d build/classes src/local/studyplanner/*.java
+"$JDK/bin/java" -cp "$BT/lib/d8.jar" com.android.tools.r8.D8 --min-api 26 --lib "$PLATFORM" --output build/dex build/classes/local/studyplanner/*.class "$PWD/lib/zxing-core-3.5.3.jar" "$PWD/lib/androidx-webkit-1.12.1.jar" "$PWD/lib/jsch-2.28.8.jar" "$PWD/lib/bcprov-jdk18on-1.86.jar"
 cp build/base.apk build/unsigned.apk
-(cd build/dex && zip -q ../unsigned.apk classes.dex)
+(cd build/dex && zip -q ../unsigned.apk classes*.dex)
 "$BT/zipalign" -f 4 build/unsigned.apk build/aligned.apk
 if [ -z "${STUDYPLANNER_KEYSTORE_PASSWORD:-}" ]; then
   STUDYPLANNER_KEYSTORE_PASSWORD="$(security find-generic-password -s local.studyplanner.android.signing -a release -w 2>/dev/null || true)"

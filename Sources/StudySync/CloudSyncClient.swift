@@ -5,6 +5,8 @@ import StudyCore
 public struct CloudCredentials: Codable, Sendable {
     public var endpoint: String
     public var token: String
+    public var ssh: CloudSSHConfiguration?
+    public var method: CloudConnectionMethod { ssh == nil ? .https : .ssh }
     public init(endpoint: String, token: String) throws {
         let text = endpoint.trimmingCharacters(in: .whitespacesAndNewlines)
         guard let url = URLComponents(string: text), url.scheme == "https", url.host?.isEmpty == false,
@@ -16,13 +18,30 @@ public struct CloudCredentials: Codable, Sendable {
         self.endpoint = text.hasSuffix("/") ? String(text.dropLast()) : text
         self.token = token
     }
+    public init(ssh: CloudSSHConfiguration, token: String) throws {
+        guard token.count >= 32, token.count <= 512, !token.contains(where: { $0.isWhitespace || $0.isNewline }) else {
+            throw ClientError.message("服务访问码须为 32 至 512 位且不含空白；它与 SSH 私钥不同。")
+        }
+        self.ssh = ssh; self.endpoint = ssh.identity; self.token = token
+    }
+    func validated() throws -> CloudCredentials {
+        if let ssh {
+            return try CloudCredentials(ssh: CloudSSHConfiguration(host: ssh.host, port: ssh.port, username: ssh.username,
+                fingerprint: ssh.fingerprint, privateKey: ssh.privateKey, passphrase: ssh.passphrase), token: token)
+        }
+        return try CloudCredentials(endpoint: endpoint, token: token)
+    }
 }
 
 public enum CloudVault {
-    private static var query: [String: Any] { [kSecClass as String: kSecClassGenericPassword,
-        kSecAttrService as String: "local.studyplanner.cloud", kSecAttrAccount as String: "server"] }
-    public static func load() throws -> CloudCredentials? {
-        var q = query; q[kSecReturnData as String] = true; q[kSecMatchLimit as String] = kSecMatchLimitOne
+    public static var selectedMethod: CloudConnectionMethod {
+        get { CloudConnectionMethod(rawValue: UserDefaults.standard.string(forKey: "studyPlannerCloudMethod") ?? "") ?? .https }
+        set { UserDefaults.standard.set(newValue.rawValue, forKey: "studyPlannerCloudMethod") }
+    }
+    private static func query(_ method: CloudConnectionMethod) -> [String: Any] { [kSecClass as String: kSecClassGenericPassword,
+        kSecAttrService as String: "local.studyplanner.cloud", kSecAttrAccount as String: method == .https ? "server" : "ssh-server"] }
+    public static func load(method: CloudConnectionMethod = .https) throws -> CloudCredentials? {
+        var q = query(method); q[kSecReturnData as String] = true; q[kSecMatchLimit as String] = kSecMatchLimitOne
         var result: CFTypeRef?; let status = SecItemCopyMatching(q as CFDictionary, &result)
         if status == errSecItemNotFound { return nil }
         guard status == errSecSuccess, let data = result as? Data else { throw ClientError.message("无法读取云同步钥匙串。") }
@@ -30,8 +49,9 @@ public enum CloudVault {
     }
     public static func save(_ credentials: CloudCredentials) throws {
         let data = try JSONEncoder().encode(credentials)
-        var item = query; item[kSecValueData as String] = data; item[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
-        let status = SecItemUpdate(query as CFDictionary, [kSecValueData as String: data] as CFDictionary)
+        let q = query(credentials.method)
+        var item = q; item[kSecValueData as String] = data; item[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
+        let status = SecItemUpdate(q as CFDictionary, [kSecValueData as String: data] as CFDictionary)
         guard status == errSecSuccess || (status == errSecItemNotFound && SecItemAdd(item as CFDictionary, nil) == errSecSuccess) else {
             throw ClientError.message("无法保存云同步访问码。")
         }
@@ -55,18 +75,20 @@ protocol CloudSyncTransport: Sendable {
 private final class CloudHTTP: NSObject, CloudSyncTransport, URLSessionTaskDelegate, @unchecked Sendable {
     let credentials: CloudCredentials
     private var session: URLSession!
-    init(_ credentials: CloudCredentials) {
-        self.credentials = credentials; super.init()
+    let endpoint: String
+    init(_ credentials: CloudCredentials, tunnel: CloudSSHTunnel? = nil) {
+        self.credentials = credentials; endpoint = tunnel?.endpoint ?? credentials.endpoint; super.init()
         let configuration = URLSessionConfiguration.ephemeral
         configuration.timeoutIntervalForRequest = 30; configuration.timeoutIntervalForResource = 180
         configuration.httpShouldSetCookies = false; configuration.urlCache = nil
+        if tunnel != nil { configuration.connectionProxyDictionary = [:] }
         session = URLSession(configuration: configuration, delegate: self, delegateQueue: nil)
     }
     func close() { session.invalidateAndCancel() }
     func urlSession(_ session: URLSession, task: URLSessionTask, willPerformHTTPRedirection response: HTTPURLResponse,
                     newRequest request: URLRequest, completionHandler: @escaping @Sendable (URLRequest?) -> Void) { completionHandler(nil) }
     private func request(_ path: String, method: String = "GET") -> URLRequest {
-        var request = URLRequest(url: URL(string: credentials.endpoint + "/cloud/" + path)!)
+        var request = URLRequest(url: URL(string: endpoint + "/cloud/" + path)!)
         request.httpMethod = method; request.setValue("Bearer " + credentials.token, forHTTPHeaderField: "Authorization")
         request.setValue("no-store", forHTTPHeaderField: "Cache-Control")
         return request
@@ -103,8 +125,11 @@ public enum CloudSyncClient {
         try await SyncDatabase.update(enqueueCloud: false) { _, ledger in ledger.cloudProgress = nil }
     }
     public static func run(credentials: CloudCredentials) async throws -> SyncOutcome {
-        let validated = try CloudCredentials(endpoint: credentials.endpoint, token: credentials.token)
-        let transport = CloudHTTP(validated); defer { transport.close() }
+        let validated = try credentials.validated()
+        let tunnel: CloudSSHTunnel?
+        if let ssh = validated.ssh { tunnel = try await CloudSSHTunnel.open(ssh) } else { tunnel = nil }
+        defer { tunnel?.close() }
+        let transport = CloudHTTP(validated, tunnel: tunnel); defer { transport.close() }
         return try await run(endpoint: validated.endpoint, outbox: CloudOutbox.directory(), transport: transport)
     }
     static func run(endpoint: String, databaseURL: URL? = nil, outbox: URL, transport: any CloudSyncTransport) async throws -> SyncOutcome {

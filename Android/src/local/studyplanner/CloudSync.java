@@ -11,7 +11,6 @@ import java.nio.charset.StandardCharsets;
 import java.util.*;
 import java.util.concurrent.*;
 import java.util.function.Consumer;
-import javax.net.ssl.HttpsURLConnection;
 
 /** Independent cloud sync; hotspot pairing, tokens and cursors are never reused. */
 final class CloudSync {
@@ -52,7 +51,7 @@ final class CloudSync {
         network.execute(()->{
             boolean success=false;
             try{sync();success=true;failures=0;synchronized(this){if(retry!=null){retry.cancel(false);retry=null;}}}catch(Exception e){
-                status(e instanceof IllegalStateException?e.getMessage():"云同步未完成，待传数据已保留。请检查网络、HTTPS 证书及服务访问码。");
+                status(e instanceof IllegalStateException?e.getMessage():"云同步未完成，待传数据已保留。请检查网络、所选连接方式及服务访问码。");
                 synchronized(this){if(retry!=null)retry.cancel(false);long delay=Math.min(1800,30L<<Math.min(failures++,6));retry=network.schedule(()->request(null),delay,TimeUnit.SECONDS);}
             }
             List<Consumer<Boolean>> done;boolean repeat;
@@ -66,10 +65,15 @@ final class CloudSync {
     }
     void sync()throws Exception{
         if(!database.initialized())return;
-        String endpoint=CloudSettings.validateEndpoint(CloudSettings.endpoint(context)),token=CloudSettings.token(context);
+        boolean ssh="ssh".equals(CloudSettings.method(context));
+        CloudSSHConfig config=ssh?CloudSettings.ssh(context):null;
+        String identityEndpoint=ssh?config.identity():CloudSettings.validateEndpoint(CloudSettings.endpoint(context));
+        String token=CloudSettings.token(context);CloudSettings.validateToken(token);
         if(token.isEmpty())throw new IOException("尚未配置访问码");
+        try(CloudSSHTunnel tunnel=ssh?CloudSSHTunnel.open(config):null){
+        String endpoint=tunnel==null?identityEndpoint:tunnel.endpoint;
         SyncLedger initial=database.ledger();long sequence=initial.sequence();JSONObject progress=initial.value.optJSONObject("cloudProgress");
-        if(progress!=null&&!endpoint.equals(progress.optString("endpoint")))progress=null;
+        if(progress!=null&&!identityEndpoint.equals(progress.optString("endpoint")))progress=null;
         JSONObject remote=json(endpoint,token,"status",null);checkStatus(remote);String identity=remote.getString("serverID");
         if(progress!=null&&(!identity.equals(progress.optString("serverID"))||remote.getLong("revision")<progress.optLong("revision")))throw new IllegalStateException("云端身份或版本变化，待传数据已保留。请核对服务器后重新保存云同步配置。");
         if(progress==null||progress.optLong("uploadedSequence",-1)!=sequence)enqueue(context,initial);
@@ -79,7 +83,7 @@ final class CloudSync {
             if(!identity.equals(reply.getString("serverID"))||reply.getLong("revision")<remote.getLong("revision"))throw new IOException("云端身份或版本变化");remote=reply;}
         CloudSnapshot archive=null;
         if(queued.length>0||progress==null||progress.optLong("revision")!=remote.getLong("revision")){
-            HttpsURLConnection connection=connection(endpoint,token,"latest");
+            HttpURLConnection connection=connection(endpoint,token,"latest");
             try{if(connection.getResponseCode()!=200)throw new IOException("云端下载失败");try(InputStream in=connection.getInputStream()){archive=CloudSnapshot.read(in);}}
             finally{connection.disconnect();}
             if(!identity.equals(archive.header.getString("serverID"))||archive.header.getLong("revision")<remote.getLong("revision"))throw new IOException("云端版本无效");
@@ -90,20 +94,23 @@ final class CloudSync {
             SyncLedger current=database.ledger();dirty=current.sequence()!=sequence;
             if(archive!=null)current.merge(archive.ledger.changes(0));
             JSONObject state=current.materialize();current.capture(state);
-            current.value.put("cloudProgress",new JSONObject().put("endpoint",endpoint).put("serverID",identity).put("revision",remote.getLong("revision"))
+            current.value.put("cloudProgress",new JSONObject().put("endpoint",identityEndpoint).put("serverID",identity).put("revision",remote.getLong("revision"))
                 .put("uploadedSequence",dirty?-1:current.sequence()).put("lastSuccess",System.currentTimeMillis()/1000.0));
             database.commit(current,false);
         }
         for(File file:queued)if(!file.delete()&&file.exists())throw new IOException("无法清理已上传文件");
         status("已同步 · 云端版本 "+remote.getLong("revision")+" · "+java.time.LocalTime.now(Planner.ZONE).withSecond(0).withNano(0));
         if(dirty){synchronized(this){again=true;}}
+        }
     }
-    static HttpsURLConnection connection(String endpoint,String token,String path)throws Exception{
-        HttpsURLConnection c=(HttpsURLConnection)new URL(endpoint+"/cloud/"+path).openConnection();
+    static HttpURLConnection connection(String endpoint,String token,String path)throws Exception{
+        URL target=new URL(endpoint+"/cloud/"+path);
+        if(!"https".equals(target.getProtocol())&&!("http".equals(target.getProtocol())&&"127.0.0.1".equals(target.getHost())&&target.getPort()>0))throw new IOException("只允许 HTTPS 或内部 SSH 转发");
+        HttpURLConnection c=(HttpURLConnection)("http".equals(target.getProtocol())?target.openConnection(java.net.Proxy.NO_PROXY):target.openConnection());
         c.setConnectTimeout(15000);c.setReadTimeout(30000);c.setInstanceFollowRedirects(false);c.setUseCaches(false);c.setRequestProperty("Authorization","Bearer "+token);return c;
     }
     static JSONObject json(String endpoint,String token,String path,File upload)throws Exception{
-        HttpsURLConnection c=connection(endpoint,token,path);
+        HttpURLConnection c=connection(endpoint,token,path);
         try{
             if(upload!=null){if(upload.length()>CloudSnapshot.MAX_GZIP)throw new IOException("完整压缩数据包超过32MB");c.setRequestMethod("POST");c.setDoOutput(true);c.setFixedLengthStreamingMode(upload.length());c.setRequestProperty("Content-Type","application/gzip");
                 try(InputStream in=new FileInputStream(upload);OutputStream out=c.getOutputStream()){byte[] b=new byte[8192];for(int n;(n=in.read(b))!=-1;)out.write(b,0,n);}}

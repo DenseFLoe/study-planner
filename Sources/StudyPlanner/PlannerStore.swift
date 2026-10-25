@@ -34,7 +34,7 @@ final class PlannerStore {
     init() {
         demo = CommandLine.arguments.contains("--demo") || Bundle.main.bundleIdentifier == "local.studyplanner.preview"
         if !demo {
-            cloudEndpoint = (try? CloudVault.load())?.endpoint ?? ""
+            cloudEndpoint = (try? CloudVault.load(method: CloudVault.selectedMethod))?.endpoint ?? ""
             cloudEnabled = UserDefaults.standard.bool(forKey: CloudOutbox.enabledKey)
         }
         do {
@@ -211,14 +211,15 @@ final class PlannerStore {
         guard Date().timeIntervalSince(cloudLastAttempt) >= 3600 else { return }
         requestCloudSync()
     }
-    func configureCloud(endpoint: String, token: String, enabled: Bool) {
-        guard !demo, !syncBusy, !orderSaveBusy else { return }
+    @discardableResult
+    func configureCloud(credentials: CloudCredentials?, method: CloudConnectionMethod, enabled: Bool) -> Bool {
+        guard !demo, !syncBusy, !orderSaveBusy else { return false }
         do {
             if enabled {
-                let previous = try CloudVault.load()
-                let credentials = try CloudCredentials(endpoint: endpoint, token: token.isEmpty ? (previous?.token ?? "") : token)
+                guard let credentials, credentials.method == method else { throw ClientError.message("请先填写所选方式的云同步配置。") }
                 try CloudVault.save(credentials); cloudEndpoint = credentials.endpoint
             }
+            CloudVault.selectedMethod = method
             UserDefaults.standard.set(enabled, forKey: CloudOutbox.enabledKey); cloudEnabled = enabled
             cloudStatus = enabled ? "配置已保存，准备同步" : "云同步已暂停，本地数据和待传文件已保留"
             if enabled {
@@ -229,7 +230,8 @@ final class PlannerStore {
                     } catch { cloudStatus = "配置已保存，重置同步状态失败，请重试" }
                 }
             }
-        } catch { errorMessage = error.localizedDescription }
+            return true
+        } catch { errorMessage = error.localizedDescription; return false }
     }
     func requestCloudSync(manual: Bool = false) {
         guard !demo, isReady, cloudEnabled else { return }
@@ -248,7 +250,7 @@ final class PlannerStore {
         cloudRequested = false; cloudLastAttempt = Date(); syncBusy = true; cloudStatus = "正在上传完整课表并获取合并结果…"
         Task {
             do {
-                guard let credentials = try CloudVault.load() else { throw ClientError.message("请先配置云同步服务器。") }
+                guard let credentials = try CloudVault.load(method: CloudVault.selectedMethod) else { throw ClientError.message("请先配置云同步服务器。") }
                 let outcome = try await CloudSyncClient.run(credentials: credentials)
                 cloudStatus = "已同步 · 云端版本 \(outcome.ledger.cloudProgress?.revision ?? 0) · \(Date().formatted(date: .omitted, time: .shortened))"
             } catch { cloudStatus = "云同步未完成，待传数据已保留：" + error.localizedDescription }
