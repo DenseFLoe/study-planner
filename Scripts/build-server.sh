@@ -25,8 +25,8 @@ done
 "$JDK/bin/javac" --release 11 -encoding UTF-8 -cp "$json_source" -d "$classes" "${sources[@]}" Server/src/local/studyplanner/CloudSyncServer.java
 "$JDK/bin/jar" --create --file "$stage/lib/study-planner-server.jar" -C "$classes" .
 cp "$json_source" "$stage/lib/json.jar"
-cp Server/{README.md,install.sh,start.sh,backup.sh,server.env.example,study-planner-sync.service,JSON-java-LICENSE.txt} "$stage/"
+cp Server/{README.md,install.sh,start.sh,backup.sh,install-user.sh,start-user.sh,backup-user.sh,server.env.example,study-planner-sync.service,JSON-java-LICENSE.txt} "$stage/"
 chmod +x "$stage/"*.sh
 printf '%s (%s)\n' "$STUDYPLANNER_VERSION" "$STUDYPLANNER_BUILD" > "$stage/VERSION"
-COPYFILE_DISABLE=1 tar -czf "$PWD/dist/学习日程-云同步服务端.tar.gz" -C "$stage" .
+COPYFILE_DISABLE=1 tar --no-xattrs -czf "$PWD/dist/学习日程-云同步服务端.tar.gz" -C "$stage" .
 echo "服务端部署包已生成：$PWD/dist/学习日程-云同步服务端.tar.gz"

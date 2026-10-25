@@ -18,7 +18,7 @@ Mac 与 Android 每次保存实际变化后，把全部可同步记录（课程�
 
 ## 后续服务器安装
 
-目标为使用 systemd 的 Linux。先在服务器安装 Java 11+ 与 openssl，解压部署包，再在解压目录显式运行 `sudo ./install.sh`。脚本创建专用无登录用户，安装程序与服务文件。首次在服务器本地生成访问码文件，升级保留访问码、配置和数据；安装不会自动启动。升级会暂停旧服务，检查后手动重新启动。
+目标为使用 systemd 的 Linux。先在服务器安装 Java 11+ 与 openssl，解压部署包，再在解压目录显式运行 `sudo ./install.sh`。脚本创建专用无登录用户，安装程序与服务文件。首次在服务器本地生成访问码文件，升级保留访问码、配置和数据；安装不会自动启动。升级会暂停旧服务，检查后手动重新启动。这一节是系统级安装，适合独占服务器；合租服务器或没有 sudo 权限时改用下一节的普通用户安装，两种方式选其一。
 
 - 程序：`/opt/study-planner-sync`
 - 配置：`/etc/study-planner-sync/server.env`
@@ -30,6 +30,31 @@ Mac 与 Android 每次保存实际变化后，把全部可同步记录（课程�
 检查配置与反代后执行 `sudo systemctl enable --now study-planner-sync`。两端的“学习设置 → 云端同步”填写同一个 HTTPS 地址（可为公网 IP）和服务访问码，再启用并保存。Mac 留空访问码可沿用钥匙串保存的值；Android 访问码以 Keystore AES-GCM 加密后保存。访问码与 SSH 管理密钥无关。本版一个服务实例对应一个私人同步空间，两端共用访问码；轮换服务器访问码后两端都要更新，不提供多用户或逐设备撤销。
 
 服务器身份改变或版本倒退时，App 保留本地数据并停止应用该结果；核对服务器后重新保存配置才重新绑定。不要随意删除 `server-id`，也不要通过换旧版本文件名伪装新版本。
+
+## 合租服务器：普通用户安装
+
+服务端包也提供普通用户安装，供合租或共享服务器使用：不需要 root，不创建系统用户，也不写 `/opt`、`/etc` 或 `/var/lib`。在解压后的服务端包目录中显式运行：
+
+```bash
+./install-user.sh /绝对路径/到/java
+```
+
+参数是 Java 可执行文件的绝对路径。服务器需已有 Linux Java 11+；也可以自行解压一份 JRE，把其中 `java` 的绝对路径传给脚本。不需要 `sudo`。
+
+安装后各路径都位于当前用户主目录：
+
+- 程序、`config/server.env`、`config/token` 与 `data/` 均在 `~/projects/study-planner-sync/`。访问码只保存在 `config/token`，仅在服务器本地安全读取并填写 App；不要复制到聊天、Git、脚本参数或日志。
+- 用户级服务文件为 `~/.config/systemd/user/study-planner-sync.service`，默认只监听 `127.0.0.1:18090` 的 HTTP。
+
+安装不会自动启动。检查 `config/server.env` 与 HTTPS 反向代理后，显式执行 `systemctl --user enable --now study-planner-sync`。之后用 `systemctl --user status study-planner-sync` 查看、`systemctl --user restart study-planner-sync` 重启、`systemctl --user stop study-planner-sync` 停止；若服务器主人已为该账号开启 linger，退出 SSH 后服务继续运行。
+
+该安装将 Java 堆限制为 `128MiB`（`-Xmx128m`），并用 systemd `MemoryMax=300M` 限制整个进程。实际大数据负载仍需验证，不保证包格式支持的最大数据量能在 300M 内处理；数据量较大时先与服务器主人确认资源与限制。
+
+`127.0.0.1:18090` 仅是本地 HTTP 监听，不要直接公开。公网访问需要 HTTPS 反向代理，端口和安全组需要服务器主人协调；两端 App 仍只接受可信 HTTPS 根地址，不接受跳转，也不跳过证书校验。
+
+备份：`~/projects/study-planner-sync/backup-user.sh ~/projects/study-planner-backups`。备份只包含 `data`，不包含 `token`，仍需安全复制到服务器之外。
+
+升级：重跑新版服务端包内的 `install-user.sh`。升级保留访问码、配置、`server-id` 与快照，但会停服；完成后检查状态，再手动启动。
 
 ## 接口与版本找回
 
