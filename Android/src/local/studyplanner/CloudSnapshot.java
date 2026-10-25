@@ -17,22 +17,30 @@ public final class CloudSnapshot {
             .put("device",ledger.value.getString("device")).put("createdAt",System.currentTimeMillis());
     }
     public static CloudSnapshot read(InputStream input)throws Exception{
-        SyncLedger ledger=new SyncLedger();Set<String> keys=new HashSet<>();
-        JSONObject header;
+        SyncLedger ledger=new SyncLedger();
+        JSONObject header=readRecords(input,ledger::mergeRecord);
+        ledger.materialize();
+        return new CloudSnapshot(ledger,header);
+    }
+    /** Merge only into a disposable candidate; callers must discard it if any validation fails. */
+    public static void mergeInto(InputStream input,SyncLedger candidate)throws Exception{
+        readRecords(input,candidate::mergeRecord);
+    }
+    private static JSONObject readRecords(InputStream input,SyncJSON.RecordConsumer consumer)throws Exception{
+        Set<String> keys=new HashSet<>();boolean[] settings={false};JSONObject header;
         try(Reader reader=new BufferedReader(new InputStreamReader(new LimitedInput(new GZIPInputStream(new LimitedInput(input,MAX_GZIP)),MAX_RAW),
                 StandardCharsets.UTF_8.newDecoder().onMalformedInput(CodingErrorAction.REPORT).onUnmappableCharacter(CodingErrorAction.REPORT)))){
             header=SyncJSON.readEnvelope(reader,"records",Arrays.asList("format","archiveID","device","createdAt","serverID","revision"),row->{
                 if(keys.size()>=200000||!keys.add(SyncLedger.key(row)))throw new IOException("重复或过多的同步记录");
                 if(row.has("modifiedAt")&&!(row.get("modifiedAt") instanceof Number))throw new IOException("修改时间无效");
-                ledger.mergeRecord(row);
+                if("settings".equals(row.getString("kind"))&&"settings".equals(row.getString("id"))&&!row.getBoolean("deleted"))settings[0]=true;
+                consumer.accept(row);
             });
         }
         if(header.getInt("format")!=1||!validID(header.getString("archiveID"))||header.getString("device").isEmpty()||header.getString("device").length()>64||header.getLong("createdAt")<0)
             throw new IOException("云端数据包格式无效");
-        JSONObject settings=ledger.records().optJSONObject("settings/settings");
-        if(settings==null||settings.getBoolean("deleted"))throw new IOException("完整数据包缺少设置");
-        ledger.materialize();
-        return new CloudSnapshot(ledger,header);
+        if(!settings[0])throw new IOException("完整数据包缺少设置");
+        return header;
     }
     public static void write(OutputStream output,SyncLedger ledger,JSONObject header)throws Exception{
         JSONObject envelope=SyncLedger.shallowCopy(header).put("records",ledger.changes(0));

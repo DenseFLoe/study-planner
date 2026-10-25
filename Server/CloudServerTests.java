@@ -36,25 +36,25 @@ public final class CloudServerTests {
             Future<?> a=clients.submit(()->{try{request(running,token,"/cloud/snapshot",packed(mac),200);}catch(Exception e){throw new RuntimeException(e);}});
             Future<?> b=clients.submit(()->{try{request(running,token,"/cloud/snapshot",packed(phone),200);}catch(Exception e){throw new RuntimeException(e);}});
             a.get();b.get();clients.shutdown();
-            JSONObject merged=server.ledger.materialize();check(merged.getJSONArray("courses").length()==2,"offline addition lost");check(merged.getJSONArray("completions").length()==1,"offline confirmation lost");
+            JSONObject merged=server.loadLedger().materialize();check(merged.getJSONArray("courses").length()==2,"offline addition lost");check(merged.getJSONArray("completions").length()==1,"offline confirmation lost");
             long before=server.revision;request(server,token,"/cloud/snapshot",Arrays.copyOf(packed(mac),12),400);check(server.revision==before,"truncated upload committed");
             JSONObject corruptHeader=CloudSnapshot.header(base);ByteArrayOutputStream duplicate=new ByteArrayOutputStream();
             SyncLedger invalid=copy(base);invalid.records().remove("settings/settings");CloudSnapshot.write(duplicate,invalid,corruptHeader);
             request(server,token,"/cloud/snapshot",duplicate.toByteArray(),400);check(server.revision==before,"invalid full snapshot committed");
-            SyncLedger newest=copy(server.ledger);JSONObject state=newest.materialize();Planner.removeCourse(state,added.getString("id"));newest.capture(state);server.accept(snapshot(newest));
-            server.accept(snapshot(mac));check(server.ledger.materialize().getJSONArray("courses").length()==1,"stale full snapshot revived deleted course");
-            newest=copy(server.ledger);state=newest.materialize();state.getJSONArray("courses").getJSONObject(0).put("notes","disk-failure-check");newest.capture(state);
+            SyncLedger newest=copy(server.loadLedger());JSONObject state=newest.materialize();Planner.removeCourse(state,added.getString("id"));newest.capture(state);server.accept(snapshot(newest));
+            server.accept(snapshot(mac));check(server.loadLedger().materialize().getJSONArray("courses").length()==1,"stale full snapshot revived deleted course");
+            newest=copy(server.loadLedger());state=newest.materialize();state.getJSONArray("courses").getJSONObject(0).put("notes","disk-failure-check");newest.capture(state);
             long stable=server.revision;Path obstruction=directory.resolve(CloudSyncServer.name(stable+1));Files.createDirectory(obstruction);
             try{server.accept(snapshot(newest));throw new AssertionError("disk failure accepted");}catch(IOException expected){}
             check(server.revision==stable,"failed persistence changed live revision");Files.delete(obstruction);
-            for(int i=0;i<15;i++){newest=copy(server.ledger);state=newest.materialize();state.getJSONArray("courses").getJSONObject(0).put("notes","revision "+i);newest.capture(state,System.currentTimeMillis()+i+1);server.accept(snapshot(newest));}
+            for(int i=0;i<15;i++){newest=copy(server.loadLedger());state=newest.materialize();state.getJSONArray("courses").getJSONObject(0).put("notes","revision "+i);newest.capture(state,System.currentTimeMillis()+i+1);server.accept(snapshot(newest));}
             check(server.archives().size()==10,"history must contain latest plus nine old versions");
             JSONObject history=new JSONObject(new String(request(server,token,"/cloud/history",null,200),java.nio.charset.StandardCharsets.UTF_8));check(history.getJSONArray("versions").length()==10,"history listing differs");
             CloudSnapshot wire=CloudSnapshot.read(new ByteArrayInputStream(request(server,token,"/cloud/latest",null,200)));check(wire.header.getLong("revision")==server.revision,"download revision differs");
             request(server,token,"/cloud/history/"+history.getJSONArray("versions").getJSONObject(0).getLong("revision"),null,200);
             long last=server.revision;String identity=server.serverID;server.close();server=new CloudSyncServer(directory,"127.0.0.1",0,token);server.start();
             check(server.revision==last&&server.serverID.equals(identity),"restart lost identity or revision");check(server.archives().size()==10,"restart changed history");
-            check(server.ledger.materialize().getJSONArray("completions").length()==1,"restart lost confirmation");
+            check(server.loadLedger().materialize().getJSONArray("completions").length()==1,"restart lost confirmation");
             String fixture=System.getenv("STUDY_CLOUD_FIXTURE_DIR");if(fixture!=null){Path output=Path.of(fixture);Files.createDirectories(output);Files.copy(server.latest,output.resolve("java-latest.json.gz"),StandardCopyOption.REPLACE_EXISTING);}
             System.out.println("PASS "+checks+" cloud server checks: offline merge, concurrent uploads, retries, tombstones, malformed input, disk failure, ten-version retention, restart, HTTP authentication");
         }finally{server.close();try(java.util.stream.Stream<Path> files=Files.walk(directory)){files.sorted(Comparator.reverseOrder()).forEach(p->{try{Files.delete(p);}catch(IOException ignored){}});}}
