@@ -438,7 +438,7 @@ struct MainView: View {
                 .keyboardShortcut("f", modifiers: .command)
                 summaryBand
                 if dayEvents.contains(where: \.isFloating) {
-                    Label("浮动事项已预留 " + hours(dayEvents.filter(\.isFloating).reduce(0) { $0 + $1.occupiedMinutes }) + "；虚线学习卡片在标注时段内完成，先后可调整。", systemImage: "arrow.left.arrow.right")
+                    Label("浮动事项已预留 " + hours(dayEvents.filter(\.isFloating).reduce(0) { $0 + $1.occupiedMinutes }) + "；虚线学习卡片显示按当前顺序预估的起止时间，调整顺序后更新。", systemImage: "arrow.left.arrow.right")
                         .font(.caption).foregroundStyle(.secondary)
                 }
                 PlannerSectionTitle(
@@ -686,7 +686,7 @@ struct MainView: View {
 
     private var timelineItems: [TimelineItem] {
         (dayTasks.filter(\.isUnconfirmed).map {
-            TimelineItem(id: $0.id, start: $0.planningStart, end: $0.planningEnd, task: $0)
+            TimelineItem(id: $0.id, start: $0.start, end: $0.end, task: $0)
         } + dayEvents.map {
             TimelineItem(
                 id: $0.id,
@@ -989,6 +989,11 @@ private struct TimelineRow: View {
     var body: some View {
         HStack(alignment: .top, spacing: 14) {
             VStack(alignment: .trailing, spacing: 3) {
+                if item.task?.isFloating == true {
+                    Text("预估")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                }
                 Text(item.start.formatted(date: .omitted, time: .shortened))
                     .font(.system(size: effectiveTimeFontSize, weight: .semibold, design: .rounded))
                     .monospacedDigit()
@@ -1039,9 +1044,14 @@ private struct TimelineRow: View {
                                 .font(.system(size: 18, weight: .semibold))
                                 .fixedSize(horizontal: false, vertical: true)
                         }
-                        Text([hours(task.durationMinutes), task.isFloating ? "时段内完成 · 顺序可调" : (task.end < Date() ? "待确认" : "可调度学习")].joined(separator: " · "))
+                        Text([hours(task.durationMinutes), task.isFloating ? "按当前顺序预估 · 顺序可调" : (task.end < Date() ? "待确认" : "可调度学习")].joined(separator: " · "))
                             .font(.caption)
                             .foregroundStyle(.secondary)
+                            .help(
+                                task.isFloating
+                                    ? "完成窗口：" + task.planningStart.formatted(date: .omitted, time: .shortened) + "–" + task.planningEnd.formatted(date: .omitted, time: .shortened) + "；预估起止时间随卡片顺序更新"
+                                    : "在可调度时段内学习，拖动卡片可调整先后"
+                            )
                     } else {
                         Text(item.event?.isFloating == true ? "时段内浮动 · 固定占用 " + hours(item.event!.occupiedMinutes) : "固定事项 · 不参与自动移动")
                             .font(.caption)
