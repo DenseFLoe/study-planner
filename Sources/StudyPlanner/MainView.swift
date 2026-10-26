@@ -418,7 +418,7 @@ struct MainView: View {
     private var agenda: some View {
         let items = timelineItems
         return ScrollView {
-            LazyVStack(alignment: .leading, spacing: 26) {
+            VStack(alignment: .leading, spacing: 26) {
                 ActualStudyStartEntry(store: store) {
                     selectedDay = Calendar.current.startOfDay(for: Date())
                     month = selectedDay
@@ -462,7 +462,7 @@ struct MainView: View {
                     if dayTasks.contains(where: { !$0.isUnconfirmed }) {
                         PlannerSectionTitle(title: "完成记录", detail: "不再占用时间")
                             .padding(.top, 2)
-                        LazyVStack(spacing: 10) {
+                        VStack(spacing: 10) {
                             ForEach(dayTasks.filter { !$0.isUnconfirmed }) { task in
                                 CompletedTaskRow(
                                     task: task,
@@ -596,7 +596,7 @@ struct MainView: View {
             .padding(.bottom, 24)
         }
         .scrollIndicators(.hidden)
-        .background(PlannerTheme.opaqueSurface)
+        .background(.ultraThinMaterial)
         .environment(\.plannerScrollingContent, true)
     }
 
@@ -617,18 +617,16 @@ struct MainView: View {
                     .font(.callout).foregroundStyle(.secondary)
 
                 ForEach(store.courses) { course in
-                    let lessons = store.state.lessonWorkItems(for: course)
                     CourseListRow(
                         course: course,
-                        completed: lessons.isEmpty ? store.state.completedMinutes(for: course)
-                            : max(0, course.totalMinutes - lessons.reduce(0) { $0 + $1.remainingMinutes }),
+                        completed: store.state.completedMinutes(for: course),
                         minimumBlock: course.minimumBlockMinutes == 0
                             ? store.state.settings.minimumScheduleUnit
                             : course.minimumBlockMinutes,
                         dailyMinutes: store.result.demands[course.id]?.averageMinutesPerDay,
                         setDailyWeight: { store.setDailyWeight($0, for: course.id) },
                         edit: { sheet = .course(course) },
-                        reorder: lessons.count > 1
+                        reorder: store.state.lessonWorkItems(for: course).count > 1
                             ? { sheet = .lessonOrder(course) } : nil
                     )
                 }
@@ -651,7 +649,7 @@ struct MainView: View {
 
     private var fixedList: some View {
         ScrollView {
-            LazyVStack(alignment: .leading, spacing: 16) {
+            VStack(alignment: .leading, spacing: 16) {
                 HStack {
                     PlannerSectionTitle(title: "周期课表与固定事项", detail: "\(store.state.fixedEvents.count) 项")
                     Button("添加固定事项", systemImage: "plus") { newFixed() }
@@ -684,7 +682,6 @@ struct MainView: View {
             .padding(PlannerTheme.pagePadding)
         }
         .scrollIndicators(.hidden)
-        .environment(\.plannerScrollingContent, true)
     }
 
     private var timelineItems: [TimelineItem] {
@@ -847,7 +844,7 @@ private struct DailyTaskTimeline: View {
     }
 
     var body: some View {
-        LazyVStack(spacing: 0) {
+        VStack(spacing: 0) {
             ForEach(Array(items.enumerated()), id: \.element.id) { index, item in
                 TimelineRow(
                     item: item, course: item.task.flatMap { store.course($0.courseID) },
