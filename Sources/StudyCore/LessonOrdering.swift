@@ -10,8 +10,15 @@ public enum LessonOrdering {
     }
     /// Build independent keys before comparing: pair-dependent heuristics can break sort transitivity.
     public static func intelligent(_ items: [LessonWorkItem]) -> [LessonWorkItem] {
+        var cache: [String: SortKey] = [:]
+        func key(_ value: String) -> SortKey {
+            if let existing = cache[value] { return existing }
+            let result = SortKey(value)
+            cache[value] = result
+            return result
+        }
         let keyed = items.map { item in
-            (item: item, keys: [item.subject, item.stage, item.chapter, item.name].map(SortKey.init))
+            (item: item, keys: [item.subject, item.stage, item.chapter, item.name].map(key))
         }
         return keyed.sorted { lhs, rhs in
             for (a, b) in zip(lhs.keys, rhs.keys) {
@@ -23,42 +30,52 @@ public enum LessonOrdering {
     }
 
     private struct SortKey {
+        // These immutable expressions are shared across courses and projections.
+        // Recompiling them for every field made a merged course expensive to display.
+        private static let extensionPattern = try! NSRegularExpression(pattern: #"\.(mp4|mkv|mov|avi|flv|webm|m4v|ts|mp3|pdf)$"#)
+        private static let videoPattern = try! NSRegularExpression(pattern: #"(?<![0-9])(?:2160|1440|1080|720|480)[pi]|[248]k|[hx]26[45]|\d+fps"#)
+        private static let chinesePattern = try! NSRegularExpression(pattern: #"第?([零〇一二三四五六七八九十百两]+)([章节讲课集部分])"#)
+        private static let partPatterns = ["上", "中", "下"].map {
+            try! NSRegularExpression(pattern: "[（(【\\[]" + $0 + "[）)】\\]]|" + $0 + "[篇部集]$")
+        }
+        private static let countersPattern = try! NSRegularExpression(pattern: #"第\s*([0-9]+)\s*[章节讲课集]"#)
+        private static let digitsPattern = try! NSRegularExpression(pattern: #"[0-9]+"#)
+        private static let textPattern = try! NSRegularExpression(pattern: #"[0-9]+|[\s._\-—、()\[\]]"#)
+
+        private static func stripping(_ pattern: NSRegularExpression, from value: String) -> String {
+            pattern.stringByReplacingMatches(in: value, range: NSRange(value.startIndex..., in: value), withTemplate: "")
+        }
         let numbers: [String]
         let text: String
         let part: Int
 
         init(_ raw: String) {
             var value = raw.precomposedStringWithCompatibilityMapping.lowercased()
-            value = value.replacingOccurrences(of: #"\.(mp4|mkv|mov|avi|flv|webm|m4v|ts|mp3|pdf)$"#,
-                                               with: "", options: .regularExpression)
-            value = value.replacingOccurrences(of: #"(?<![0-9])(?:2160|1440|1080|720|480)[pi]|[248]k|[hx]26[45]|\d+fps"#,
-                                               with: "", options: .regularExpression)
+            value = Self.stripping(Self.extensionPattern, from: value)
+            value = Self.stripping(Self.videoPattern, from: value)
             // Chinese counters become numeric counters without interpreting numerals in topic words
             // such as “一元函数” or “二次型” as lesson numbers.
-            let pattern = #"第?([零〇一二三四五六七八九十百两]+)([章节讲课集部分])"#
-            if let regex = try? NSRegularExpression(pattern: pattern) {
-                let matches = regex.matches(in: value, range: NSRange(value.startIndex..., in: value))
+            do {
+                let matches = Self.chinesePattern.matches(in: value, range: NSRange(value.startIndex..., in: value))
                 for match in matches.reversed() {
                     guard let range = Range(match.range(at: 1), in: value) else { continue }
                     value.replaceSubrange(range, with: String(Self.chineseNumber(String(value[range]))))
                 }
             }
             var part = 0
-            for (marker, rank) in [("上", 1), ("中", 2), ("下", 3)] {
-                let pattern = "[（(【\\[]" + marker + "[）)】\\]]|" + marker + "[篇部集]$"
-                if let range = value.range(of: pattern, options: .regularExpression) {
-                    part = rank; value.removeSubrange(range); break
+            for (index, pattern) in Self.partPatterns.enumerated() {
+                if let match = pattern.firstMatch(in: value, range: NSRange(value.startIndex..., in: value)),
+                   let range = Range(match.range, in: value) {
+                    part = index + 1; value.removeSubrange(range); break
                 }
             }
             self.part = part
             self.text = Self.withoutNumbers(value)
-            let counters = try! NSRegularExpression(pattern: #"第\s*([0-9]+)\s*[章节讲课集]"#)
-            let explicit = counters.matches(in: value, range: NSRange(value.startIndex..., in: value))
-            let regex = try! NSRegularExpression(pattern: #"[0-9]+"#)
+            let explicit = Self.countersPattern.matches(in: value, range: NSRange(value.startIndex..., in: value))
             var ranges = explicit.map { $0.range(at: 1) }
             let tailStart = explicit.last.map { NSMaxRange($0.range) } ?? 0
             let tail = NSRange(location: tailStart, length: (value as NSString).length - tailStart)
-            ranges += regex.matches(in: value, range: tail).map(\.range)
+            ranges += Self.digitsPattern.matches(in: value, range: tail).map(\.range)
             self.numbers = ranges.compactMap {
                 guard let range = Range($0, in: value) else { return nil }
                 let digits = value[range].drop(while: { $0 == "0" })
@@ -82,7 +99,7 @@ public enum LessonOrdering {
         }
 
         private static func withoutNumbers(_ text: String) -> String {
-            text.replacingOccurrences(of: #"[0-9]+|[\s._\-—、()\[\]]"#, with: "", options: .regularExpression)
+            stripping(textPattern, from: text)
         }
 
         private static func chineseNumber(_ text: String) -> Int {
