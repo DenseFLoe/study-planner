@@ -12,7 +12,8 @@ struct SupervisedApplication: Codable, Equatable, Sendable {
         if bundleID == "com.apple.QuickTimePlayerX" { return .quickTime }
         if ["com.apple.Music", "com.apple.TV", "com.spotify.client"].contains(bundleID) { return .playerState }
         guard let bundle = Bundle(url: URL(fileURLWithPath: path)),
-              let definition = bundle.object(forInfoDictionaryKey: "NSScriptingDefinition") as? String,
+              let definition = (bundle.object(forInfoDictionaryKey: "OSAScriptingDefinition") as? String)
+                ?? (bundle.object(forInfoDictionaryKey: "NSScriptingDefinition") as? String),
               let url = bundle.url(forResource: definition, withExtension: nil),
               let source = try? String(contentsOf: url, encoding: .utf8), source.contains("CrSuExJa") else { return nil }
         return .chromium
