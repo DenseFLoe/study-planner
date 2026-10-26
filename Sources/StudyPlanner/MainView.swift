@@ -848,6 +848,7 @@ private struct DailyTaskTimeline: View {
             ForEach(Array(items.enumerated()), id: \.element.id) { index, item in
                 TimelineRow(
                     item: item, course: item.task.flatMap { store.course($0.courseID) },
+                    isSupervising: item.task.map { store.playbackSupervisor.isSupervising($0) } ?? false,
                     isLast: index == items.count - 1,
                     confirm: { task in
                         if Calendar.current.startOfDay(for: task.start) < Calendar.current.startOfDay(for: Date()) {
@@ -958,6 +959,7 @@ private struct DailyTaskTimeline: View {
 private struct TimelineRow: View {
     var item: TimelineItem
     var course: Course?
+    var isSupervising: Bool
     var isLast: Bool
     var confirm: (ScheduledTask) -> Void
     var editTask: (ScheduledTask) -> Void
@@ -1039,6 +1041,11 @@ private struct TimelineRow: View {
                     Text(item.task == nil ? (item.event?.title ?? "固定事项") : (course?.name ?? "已删除课程"))
                         .font(.system(size: 15, weight: .semibold))
                     if let task = item.task {
+                        if isSupervising {
+                            Label("正在监督中…", systemImage: "eye.fill")
+                                .font(.caption.weight(.semibold))
+                                .foregroundStyle(.green)
+                        }
                         if let lessonName = task.lessonName, !lessonName.isEmpty {
                             Text(lessonName)
                                 .font(.system(size: 18, weight: .semibold))

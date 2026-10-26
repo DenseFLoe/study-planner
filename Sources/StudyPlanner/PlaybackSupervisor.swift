@@ -24,6 +24,10 @@ import UserNotifications
     private(set) var storageMessage: String?
     private(set) var permissionMessage = "首次绑定时申请通知及检测权限。"
     private(set) var authorizing = false
+    /// The tasks the last tick actually supervised. Empty while supervision is
+    /// stopped, suspended or authorizing, so the daily timeline never shows a
+    /// stale "supervising" label.
+    private(set) var activeTaskIDs: Set<UUID> = []
     @ObservationIgnored private weak var store: PlannerStore?
     @ObservationIgnored private var monitor: Task<Void, Never>?
     @ObservationIgnored private var sessions: [UUID: Session] = [:]
@@ -50,6 +54,16 @@ import UserNotifications
     var hasBindings: Bool { !configuration.applications.isEmpty }
     func application(for courseID: UUID) -> SupervisedApplication? { configuration.applications[courseID.uuidString] }
 
+    /// Whether this task's course is being supervised right now. Confirming the
+    /// task, rebinding its course or moving its time range makes it false without
+    /// waiting for the next tick.
+    func isSupervising(_ task: ScheduledTask, now: Date = Date()) -> Bool {
+        guard activeTaskIDs.contains(task.id), monitor != nil, !suspended, !authorizing else { return false }
+        guard task.isUnconfirmed, task.start <= now, now < task.end else { return false }
+        guard application(for: task.courseID) != nil else { return false }
+        return store?.course(task.courseID)?.isArchived == false
+    }
+
     @discardableResult
     func setApplication(_ application: SupervisedApplication?, for courseID: UUID) -> Bool {
         if self.application(for: courseID) == application { return true }
@@ -67,6 +81,8 @@ import UserNotifications
         next.applications[courseID.uuidString] = application
         guard save(next) else { return false }
         revision = UUID()
+        // Drop this course's supervision labels before the session that owns them.
+        activeTaskIDs.subtract(sessions[courseID]?.taskIDs ?? [])
         sessions.removeValue(forKey: courseID)
         statuses.removeValue(forKey: courseID)
         if persistent { UNUserNotificationCenter.current().removeDeliveredNotifications(withIdentifiers: [identifier(courseID)]) }
@@ -90,6 +106,7 @@ import UserNotifications
     func authorize(_ application: SupervisedApplication) async {
         guard persistent, !authorizing else { return }
         authorizing = true
+        activeTaskIDs = []
         revision = UUID()
         defer { authorizing = false; sessions = [:] }
         do {
@@ -153,18 +170,19 @@ import UserNotifications
 
     func stop() {
         monitor?.cancel(); monitor = nil
+        activeTaskIDs = []
         endActivity()
         for observer in observers { NSWorkspace.shared.notificationCenter.removeObserver(observer) }
         observers = []
     }
 
     private func suspend() {
-        suspended = true; sessions = [:]; revision = UUID()
+        suspended = true; sessions = [:]; activeTaskIDs = []; revision = UUID()
         endActivity()
         summary = "屏幕休眠或会话未激活，监督已暂停"
     }
     private func resume() {
-        suspended = false; sessions = [:]; revision = UUID(); lastTick = .distantPast
+        suspended = false; sessions = [:]; activeTaskIDs = []; revision = UUID(); lastTick = .distantPast
         summary = hasBindings ? "等待计划学习时段" : "未绑定监督软件"
     }
 
@@ -181,12 +199,16 @@ import UserNotifications
             next.applications = next.applications.filter { liveCourses.contains($0.key) }
             _ = save(next)
         }
-        guard hasBindings else { endActivity(); summary = "未绑定监督软件"; return }
+        guard hasBindings else {
+            endActivity(); activeTaskIDs = []; summary = "未绑定监督软件"; return
+        }
         // Concrete projected slots avoid supervising every course throughout a shared floating window.
         let active = store.state.tasks.filter {
             $0.isUnconfirmed && $0.start <= now && now < $0.end && application(for: $0.courseID) != nil
                 && store.course($0.courseID)?.isArchived == false
         }
+        let activeIDs = Set(active.map(\.id))
+        if activeTaskIDs != activeIDs { activeTaskIDs = activeIDs }
         let groups = Dictionary(grouping: active, by: \.courseID)
         sessions = sessions.filter { groups[$0.key] != nil }
         statuses = statuses.filter { groups[$0.key] != nil }
