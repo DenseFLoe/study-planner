@@ -8,6 +8,7 @@ struct CourseEditor: View {
     @Environment(\.dismiss) private var dismiss
     @State private var deletePrompt = false
     @State private var message = ""
+    @State private var supervisedApplication: SupervisedApplication?
     private var existing: Bool { store.course(course.id) != nil }
     private var logged: Int { store.state.completions.filter { $0.courseID == course.id }.reduce(0) { $0 + $1.minutes } }
     private var isManualLessonCourse: Bool { course.type == .lessonBasedRecorded && course.webCourse == nil && course.mergedSources == nil }
@@ -52,6 +53,9 @@ struct CourseEditor: View {
                     Picker("课程类型", selection: $course.type) { ForEach(CourseType.allCases, id: \.self) { Text($0.rawValue).tag($0) } }.disabled(course.mergedSources != nil)
                     ColorPickerRow(selection: $course.color)
                     TextField("备注", text: $course.notes, axis: .vertical).lineLimit(2...3)
+                }
+                Section("学习监督 · 对应软件") {
+                    CourseSupervisionPicker(selection: $supervisedApplication)
                 }
                 if isManualLessonCourse {
                     Section("逐节录入") {
@@ -138,10 +142,20 @@ struct CourseEditor: View {
                 Button("取消") { dismiss() }.keyboardShortcut(.cancelAction)
                 Button("保存并重新排程") {
                     course.name = course.name.trimmingCharacters(in: .whitespacesAndNewlines)
-                    if store.saveCourse(course) { dismiss() } else { message = store.errorMessage ?? "保存失败" }
+                    if store.saveCourse(course) {
+                        let supervisor = store.playbackSupervisor
+                        let previous = supervisor.application(for: course.id)
+                        if supervisor.setApplication(supervisedApplication, for: course.id) {
+                            dismiss()
+                            if let app = supervisedApplication, app != previous {
+                                Task { await supervisor.authorize(app) }
+                            }
+                        } else { message = supervisor.storageMessage ?? "软件绑定保存失败" }
+                    } else { message = store.errorMessage ?? "保存失败" }
                 }.buttonStyle(.borderedProminent).keyboardShortcut(.defaultAction).disabled(validation != nil)
             }.padding(20)
         }.frame(width: 570, height: 740)
+        .onAppear { supervisedApplication = store.playbackSupervisor.application(for: course.id) }
         .onChange(of: course.type) { _, newType in
             if newType == .lessonBasedRecorded && course.webCourse == nil && course.manualLessons == nil {
                 setManualLessons([])
@@ -150,7 +164,10 @@ struct CourseEditor: View {
 
         .confirmationDialog("删除这门课程？所有安排和完成记录都会删除。", isPresented: $deletePrompt) {
             Button("删除课程", role: .destructive) {
-                if store.deleteCourse(course) { dismiss() } else { message = store.errorMessage ?? "删除失败" }
+                if store.deleteCourse(course) {
+                    _ = store.playbackSupervisor.setApplication(nil, for: course.id)
+                    dismiss()
+                } else { message = store.errorMessage ?? "删除失败" }
             }
         }
     }
@@ -379,6 +396,8 @@ struct SettingsView: View {
                 Stepper("一天超过 \(hours(dailyLoadWarningMinutes)) 时提醒", value: $dailyLoadWarningMinutes, in: 60...960, step: 30)
                 Text("这是负担提醒线，不会减少可学习时间或改动截止日。调整后立即生效，仅保存在本机。").font(.caption).foregroundStyle(.secondary)
             }
+        case .supervision:
+            PlaybackSupervisionSettings(store: store)
         case .priorities:
             SchedulePrioritiesPanel(settings: $settings)
         case .explanation:

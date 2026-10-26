@@ -31,8 +31,10 @@ final class PlannerStore {
     private var lastDay = Calendar.current.startOfDay(for: Date())
     private var reviewPrompted = false
     let demo: Bool
+    let playbackSupervisor: PlaybackSupervisor
     init() {
         demo = CommandLine.arguments.contains("--demo") || Bundle.main.bundleIdentifier == "local.studyplanner.preview"
+        playbackSupervisor = PlaybackSupervisor(persistent: !demo)
         if !demo {
             cloudEndpoint = (try? CloudVault.load(method: CloudVault.selectedMethod))?.endpoint ?? ""
             cloudEnabled = UserDefaults.standard.bool(forKey: CloudOutbox.enabledKey)
@@ -54,6 +56,7 @@ final class PlannerStore {
         self.result = result
         self.studyLoad = studyLoad
         self.demo = true
+        self.playbackSupervisor = PlaybackSupervisor(persistent: false)
         self.isReady = true
     }
     var courses: [Course] { state.courses.filter { !$0.isArchived }.sorted { $0.deadline < $1.deadline } }

@@ -30,6 +30,8 @@ cat > "$app/Contents/Info.plist" <<PLIST
 <key>LSMinimumSystemVersion</key><string>14.0</string>
 <key>NSHighResolutionCapable</key><true/>
 <key>NSLocalNetworkUsageDescription</key><string>连接 Android 手机热点，在两台设备间同步学习日程。</string>
+<key>NSAppleEventsUsageDescription</key><string>在后台读取所选观看软件的播放状态，用于学习监督提醒；不会切换窗口或控制播放。</string>
+<key>NSAudioCaptureUsageDescription</key><string>短暂分析所选软件的音量以判断播放活动，不保存或上传音频。</string>
 <key>NSPrincipalClass</key><string>NSApplication</string>
 <key>CFBundleDevelopmentRegion</key><string>zh_CN</string>
 <key>CFBundleLocalizations</key><array><string>zh_CN</string></array>

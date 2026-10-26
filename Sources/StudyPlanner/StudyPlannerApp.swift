@@ -1,27 +1,40 @@
 import SwiftUI
 import AppKit
 import StudyCore
+import UserNotifications
 
-@MainActor final class AppDelegate: NSObject, NSApplicationDelegate {
+@MainActor final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.regular)
         NSApp.activate(ignoringOtherApps: true)
+        UNUserNotificationCenter.current().delegate = self
     }
-    weak var store: PlannerStore?
+    // Keep the store and its monitor alive after the last window closes.
+    var store: PlannerStore?
+    func connect(_ store: PlannerStore) {
+        self.store = store
+        store.playbackSupervisor.start(store: store)
+    }
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         guard let store, store.orderSaveBusy else { return .terminateNow }
         Task { sender.reply(toApplicationShouldTerminate: await store.waitForOrderSave()) }
         return .terminateLater
     }
-    func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { true }
+    func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
+        store?.playbackSupervisor.hasBindings != true
+    }
+    func applicationWillTerminate(_ notification: Notification) { store?.playbackSupervisor.stop() }
+    nonisolated func userNotificationCenter(_ center: UNUserNotificationCenter,
+        willPresent notification: UNNotification) async -> UNNotificationPresentationOptions { [.banner, .list] }
 }
 struct StudyPlannerApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var delegate
     @State private var store = PlannerStore()
+    @Environment(\.openWindow) private var openWindow
     var body: some Scene {
-        WindowGroup("学习日程") {
+        WindowGroup("学习日程", id: "main") {
             MainView(store: store).frame(minWidth: 1060, minHeight: 700).tint(.blue)
-                .onAppear { delegate.store = store }
+                .onAppear { delegate.connect(store) }
         }.defaultSize(width: 1280, height: 820)
         .commands {
             CommandGroup(replacing: .newItem) {}
@@ -29,6 +42,16 @@ struct StudyPlannerApp: App {
                 Button("重新计算未来计划") { store.replan() }.keyboardShortcut("r")
                 Button("确认学习完成情况") { store.showDailyReview = true }.keyboardShortcut("d", modifiers: [.command, .shift])
             }
+        }
+        MenuBarExtra("学习监督", systemImage: "play.rectangle.on.rectangle") {
+            Text(store.playbackSupervisor.summary)
+            Button("打开学习日程") {
+                openWindow(id: "main")
+                NSApp.activate(ignoringOtherApps: true)
+            }
+            Divider()
+            Text("绑定课程后，关闭窗口仍在后台监督")
+            Button("退出学习日程") { NSApp.terminate(nil) }.keyboardShortcut("q")
         }
     }
 }
