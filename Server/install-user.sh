@@ -42,6 +42,8 @@ chmod 0600 "$project/config/server.env" "$project/config/token"
 cat > "$HOME/.config/systemd/user/study-planner-sync.service" <<'EOF'
 [Unit]
 Description=Study Planner private cloud synchronization (user)
+StartLimitIntervalSec=300
+StartLimitBurst=3
 
 [Service]
 Type=simple
@@ -49,13 +51,15 @@ WorkingDirectory=%h/projects/study-planner-sync
 EnvironmentFile=%h/projects/study-planner-sync/config/server.env
 ExecStart=%h/projects/study-planner-sync/start-user.sh
 Restart=on-failure
-RestartSec=10
+RestartSec=30
 UMask=0077
 NoNewPrivileges=true
 MemoryAccounting=yes
-MemoryHigh=250M
-MemoryMax=300M
+MemoryHigh=160M
+MemoryMax=192M
 MemorySwapMax=0
+TasksMax=32
+CPUQuota=50%
 
 [Install]
 WantedBy=default.target

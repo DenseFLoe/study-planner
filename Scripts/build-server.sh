@@ -22,7 +22,7 @@ sources=()
 for name in Planner SchedulePreferenceOptimizer SchedulePriorities ScheduleExplanation DailyTaskOrdering CourseTools StudyLoad ScheduleFeasibilitySearch ScheduleHealth WebCourseImport SyncLedger SyncJSON SyncExchange CloudSnapshot; do
   sources+=("Android/src/local/studyplanner/$name.java")
 done
-"$JDK/bin/javac" --release 11 -encoding UTF-8 -cp "$json_source" -d "$classes" "${sources[@]}" Server/src/local/studyplanner/CloudSyncServer.java
+"$JDK/bin/javac" --release 11 -encoding UTF-8 -cp "$json_source" -d "$classes" "${sources[@]}" Server/src/local/studyplanner/*.java
 "$JDK/bin/jar" --create --file "$stage/lib/study-planner-server.jar" -C "$classes" .
 cp "$json_source" "$stage/lib/json.jar"
 cp Server/{README.md,install.sh,start.sh,backup.sh,install-user.sh,start-user.sh,backup-user.sh,server.env.example,study-planner-sync.service,JSON-java-LICENSE.txt} "$stage/"

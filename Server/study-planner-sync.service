@@ -1,6 +1,8 @@
 [Unit]
 Description=Study Planner private cloud synchronization
 After=network.target
+StartLimitIntervalSec=300
+StartLimitBurst=3
 
 [Service]
 Type=simple
@@ -10,13 +12,19 @@ WorkingDirectory=/opt/study-planner-sync
 EnvironmentFile=/etc/study-planner-sync/server.env
 ExecStart=/opt/study-planner-sync/start.sh
 Restart=on-failure
-RestartSec=10
+RestartSec=30
 UMask=0077
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
 ProtectHome=true
 ReadWritePaths=/var/lib/study-planner-sync
+MemoryAccounting=yes
+MemoryHigh=160M
+MemoryMax=192M
+MemorySwapMax=0
+TasksMax=32
+CPUQuota=50%
 
 [Install]
 WantedBy=multi-user.target

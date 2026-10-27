@@ -9,9 +9,9 @@ import java.util.*;
 import java.util.concurrent.TimeUnit;
 import java.util.zip.GZIPOutputStream;
 
-/** Synthetic large ledgers only. The HTTP server runs in a separate 128 MiB heap. */
+/** Synthetic large ledgers only. The HTTP server runs in a separate 64 MiB heap. */
 public final class CloudServerMemoryTests {
-    static final int OLD_TASKS=40000,NEW_TASKS=44000;
+    static final int OLD_TASKS=120000,NEW_TASKS=160000;
     static final String TOKEN="MEMORY_TEST_ACCESS_CODE_PLACEHOLDER_32_CHARACTERS";
     static void check(boolean value,String message){if(!value)throw new AssertionError(message);}
     static void fixture(Path file,JSONArray base,String courseID,String identity,int count,boolean old)throws Exception{
@@ -43,12 +43,14 @@ public final class CloudServerMemoryTests {
         }finally{connection.disconnect();}
     }
     static void verifyLatest(Path directory,long revision)throws Exception{
-        try(InputStream in=Files.newInputStream(directory.resolve(CloudSyncServer.name(revision)))){
-            CloudSnapshot saved=CloudSnapshot.read(in);
-            check(saved.ledger.records().length()>=NEW_TASKS,"large tombstone ledger lost records");
+        try(DiskSnapshot saved=new DiskSnapshot(directory)){
+            saved.read(directory.resolve(CloudSyncServer.name(revision)));int count=0;
+            try(DiskSnapshot.RowReader row=new DiskSnapshot.RowReader(saved.rows)){while(row.row!=null){count++;row.advance();}}
+            check(count>=NEW_TASKS,"large tombstone ledger lost records");
             check(saved.header.getLong("revision")==revision,"saved revision mismatch");
         }
     }
+
     static void worker(Path root)throws Exception{
         Path data=root.resolve("data"),incoming=root.resolve("incoming.json.gz");
         CloudSyncServer server=new CloudSyncServer(data,"127.0.0.1",0,TOKEN);server.start();
@@ -61,8 +63,8 @@ public final class CloudServerMemoryTests {
             verifyLatest(data,revision);
             String identity=server.serverID;server.close();server=new CloudSyncServer(data,"127.0.0.1",0,TOKEN);server.start();
             check(server.revision==revision&&server.serverID.equals(identity),"restart lost latest snapshot");
-            try(java.util.stream.Stream<Path> paths=Files.list(data)){check(paths.noneMatch(p->p.getFileName().toString().startsWith(".upload-")),"staged upload not cleaned");}
-            System.out.println("PASS 128 MiB cloud heap: 40k old + 44k incoming tombstones, retry, malformed upload, persistence and restart");
+            try(java.util.stream.Stream<Path> paths=Files.list(data)){check(paths.noneMatch(p->p.getFileName().toString().startsWith(".upload-")||p.getFileName().toString().startsWith(".merge-")),"staged upload not cleaned");}
+            System.out.println("PASS 64 MiB cloud heap: 120k old + 160k incoming tombstones, retry, malformed upload, persistence and restart");
         }finally{server.close();}
     }
     public static void main(String[] args)throws Exception{
@@ -77,11 +79,11 @@ public final class CloudServerMemoryTests {
             String classpath=System.getProperty("java.class.path");
             String baseline=System.getenv("STUDY_CLOUD_MEMORY_BASELINE");
             if(baseline!=null)classpath=baseline+File.pathSeparator+classpath;
-            Process child=new ProcessBuilder(Path.of(System.getProperty("java.home"),"bin/java").toString(),"-Xms16m","-Xmx128m","-XX:+UseSerialGC",
+            Process child=new ProcessBuilder(Path.of(System.getProperty("java.home"),"bin/java").toString(),"-Xms16m","-Xmx64m","-XX:+UseSerialGC",
                 "-XX:ActiveProcessorCount=2","-XX:MaxMetaspaceSize=64m","-XX:ReservedCodeCacheSize=32m","-XX:MaxDirectMemorySize=16m","-Xss512k",
                 "-cp",classpath,CloudServerMemoryTests.class.getName(),"worker",root.toString()).inheritIO().start();
-            if(!child.waitFor(180,TimeUnit.SECONDS)){child.destroyForcibly();throw new AssertionError("memory regression exceeded time limit");}
-            check(child.exitValue()==0,"128 MiB memory regression failed");
+            if(!child.waitFor(600,TimeUnit.SECONDS)){child.destroyForcibly();throw new AssertionError("memory regression exceeded time limit");}
+            check(child.exitValue()==0,"64 MiB memory regression failed");
         }finally{try(java.util.stream.Stream<Path> paths=Files.walk(root)){paths.sorted(Comparator.reverseOrder()).forEach(p->{try{Files.deleteIfExists(p);}catch(IOException ignored){}});}}
     }
 }

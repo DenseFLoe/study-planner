@@ -17,13 +17,18 @@ public final class CloudSyncServer implements AutoCloseable {
     final HttpServer server;final ExecutorService workers;
     final FileChannel lockChannel;final FileLock lock;
     long revision;Path latest;
+    final java.util.concurrent.locks.ReentrantLock uploadLock=new java.util.concurrent.locks.ReentrantLock();
     public CloudSyncServer(Path directory,String bind,int port,String token)throws Exception{
         if(token.length()<32||token.length()>512||token.matches(".*[\\r\\n].*"))throw new IOException("访问码必须为32至512个字符");
         this.directory=directory;Files.createDirectories(directory);tokenHash=hash(token);
         lockChannel=FileChannel.open(directory.resolve("server.lock"),StandardOpenOption.CREATE,StandardOpenOption.WRITE);
         lock=lockChannel.tryLock();if(lock==null)throw new IOException("已有服务使用此数据目录");
+        try {
         try(java.util.stream.Stream<Path> paths=Files.list(directory)){
             for(Path pending:(Iterable<Path>)paths.filter(p->(p.getFileName().toString().startsWith(".pending-")||p.getFileName().toString().startsWith(".upload-"))&&p.getFileName().toString().endsWith(".tmp"))::iterator)Files.delete(pending);
+        }
+        try(java.util.stream.Stream<Path> paths=Files.list(directory)){
+            for(Path pending:(Iterable<Path>)paths.filter(p->p.getFileName().toString().startsWith(".merge-"))::iterator)DiskSnapshot.remove(pending);
         }
         Path identity=directory.resolve("server-id");
         if(!Files.exists(identity))atomic(identity,UUID.randomUUID().toString().toUpperCase(Locale.ROOT).getBytes(StandardCharsets.UTF_8));
@@ -31,15 +36,21 @@ public final class CloudSyncServer implements AutoCloseable {
         if(!CloudSnapshot.validID(serverID))throw new IOException("服务器身份文件损坏，已停止启动");
         List<Path> files=archives();
         if(!files.isEmpty()){
-            latest=files.get(files.size()-1);CloudSnapshot saved;
-            try(InputStream in=Files.newInputStream(latest)){saved=CloudSnapshot.read(in);}
-            if(!serverID.equals(saved.header.getString("serverID")))throw new IOException("服务器身份不匹配");
-            revision=saved.header.getLong("revision");if(!latest.getFileName().toString().equals(name(revision)))throw new IOException("版本编号无效");
+            latest=files.get(files.size()-1);
+            try(DiskSnapshot saved=new DiskSnapshot(directory)){
+                saved.read(latest);saved.planningState(serverID);
+                if(!serverID.equals(saved.header.getString("serverID")))throw new IOException("服务器身份不匹配");
+                revision=saved.header.getLong("revision");if(!latest.getFileName().toString().equals(name(revision)))throw new IOException("版本编号无效");
+            }
         }
         prune();
         server=HttpServer.create(new InetSocketAddress(bind,port),16);
-        workers=new ThreadPoolExecutor(2,4,30,TimeUnit.SECONDS,new ArrayBlockingQueue<Runnable>(16),new ThreadPoolExecutor.CallerRunsPolicy());
+        workers=new ThreadPoolExecutor(2,2,30,TimeUnit.SECONDS,new ArrayBlockingQueue<Runnable>(4),new ThreadPoolExecutor.CallerRunsPolicy());
         server.setExecutor(workers);server.createContext("/",this::handle);
+        }catch(Exception|Error error){
+            try{lock.release();lockChannel.close();}catch(IOException cleanup){error.addSuppressed(cleanup);}
+            throw error;
+        }
     }
     public void start(){server.start();}
     public int port(){return server.getAddress().getPort();}
@@ -58,7 +69,7 @@ public final class CloudSyncServer implements AutoCloseable {
         }finally{Files.deleteIfExists(temporary);}
     }
     synchronized JSONObject status()throws Exception{prune();return new JSONObject().put("format",1).put("serverID",serverID).put("revision",revision).put("retained",archives().size());}
-    /** Disk is authoritative; no complete ledger is retained between requests. */
+    /** Test inspection helper. Production requests and startup use DiskSnapshot exclusively. */
     synchronized SyncLedger loadLedger()throws Exception{
         SyncLedger ledger;
         if(latest==null)ledger=new SyncLedger();
@@ -82,30 +93,29 @@ public final class CloudSyncServer implements AutoCloseable {
             return acceptStaged(staged);
         }finally{Files.deleteIfExists(staged);}
     }
-    private static void validateStaged(Path staged)throws Exception{
-        // The validated incoming ledger becomes collectible before the old snapshot is loaded.
-        try(InputStream in=Files.newInputStream(staged)){CloudSnapshot.read(in);}
-    }
     private JSONObject acceptStaged(Path staged)throws Exception{
-        validateStaged(staged);
-        SyncLedger candidate=loadLedger();long previous=candidate.sequence();
-        JSONObject old=latest==null?null:candidate.materialize();
-        try(InputStream in=Files.newInputStream(staged)){CloudSnapshot.mergeInto(in,candidate);}
-        if(latest!=null&&candidate.sequence()==previous)return status();
-        JSONObject state=candidate.materialize();double now=Planner.now();
-        if((old!=null&&SyncExchange.needsReplan(old,state,now))||SyncExchange.invalidPending(state,now))Planner.replan(state,now);
-        Planner.validate(state);candidate.capture(state);
-        long next=revision+1;JSONObject header=CloudSnapshot.header(candidate).put("serverID",serverID).put("revision",next)
-            .put("archiveID",Planner.stableID("server|"+serverID+"|"+next));
-        Path temporary=Files.createTempFile(directory,".pending-",".tmp"),destination=directory.resolve(name(next));
-        try{
-            try(OutputStream out=Files.newOutputStream(temporary)){CloudSnapshot.write(out,candidate,header);}
-            try(FileChannel channel=FileChannel.open(temporary,StandardOpenOption.WRITE)){channel.force(true);}
-            Files.move(temporary,destination,StandardCopyOption.ATOMIC_MOVE);
-        }finally{Files.deleteIfExists(temporary);}
-        revision=next;latest=destination;
-        // The new version is durable before old history is removed. A failed prune is retried on the next request/start.
-        prune();return status();
+        try(DiskSnapshot incoming=new DiskSnapshot(directory);DiskSnapshot old=new DiskSnapshot(directory)){
+            incoming.read(staged);
+            incoming.planningState(serverID); // Validate even losing/duplicate uploads before acknowledging.
+            JSONObject before=null;
+            if(latest!=null){
+                old.read(latest);incoming.combine(old);
+                if(!incoming.changed)return status();
+                before=old.planningState(serverID);
+            }
+            incoming.normalize(serverID,before);
+            long next=revision+1;JSONObject header=new JSONObject().put("format",1).put("device",serverID)
+                .put("createdAt",System.currentTimeMillis()).put("serverID",serverID).put("revision",next)
+                .put("archiveID",Planner.stableID("server|"+serverID+"|"+next));
+            Path temporary=Files.createTempFile(directory,".pending-",".tmp"),destination=directory.resolve(name(next));
+            try{
+                incoming.write(temporary,header);
+                try(FileChannel channel=FileChannel.open(temporary,StandardOpenOption.WRITE)){channel.force(true);}
+                Files.move(temporary,destination,StandardCopyOption.ATOMIC_MOVE);
+            }finally{Files.deleteIfExists(temporary);}
+            revision=next;latest=destination;
+            prune();return status();
+        }
     }
     void handle(HttpExchange exchange){
         try{
@@ -115,13 +125,16 @@ public final class CloudSyncServer implements AutoCloseable {
             if(path.equals("/cloud/status")&&method.equals("GET"))json(exchange,200,status());
             else if(path.equals("/cloud/snapshot")&&method.equals("POST")){
                 String length=exchange.getRequestHeaders().getFirst("Content-Length");if(length!=null&&Long.parseLong(length)>CloudSnapshot.MAX_GZIP){json(exchange,413,new JSONObject().put("error","too_large"));return;}
-                json(exchange,200,accept(exchange.getRequestBody()));
+                if(!uploadLock.tryLock()){exchange.getResponseHeaders().set("Retry-After","30");json(exchange,503,new JSONObject().put("error","sync_busy"));return;}
+                try{json(exchange,200,accept(exchange.getRequestBody()));}finally{uploadLock.unlock();}
             }else if(path.equals("/cloud/latest")&&method.equals("GET"))sendArchive(exchange,null);
             else if(path.matches("/cloud/history/[0-9]{1,19}")&&method.equals("GET"))sendArchive(exchange,Long.parseLong(path.substring(path.lastIndexOf('/')+1)));
             else if(path.equals("/cloud/history")&&method.equals("GET")){
                 synchronized(this){JSONArray history=new JSONArray();for(Path file:archives())history.put(new JSONObject().put("revision",Long.parseLong(file.getFileName().toString().substring(0,20))).put("bytes",Files.size(file)).put("createdAt",Files.getLastModifiedTime(file).toMillis()));
                     json(exchange,200,status().put("versions",history));}
             }else json(exchange,404,new JSONObject().put("error","not_found"));
+        }catch(DiskSnapshot.CapacityException capacity){
+            try{json(exchange,413,new JSONObject().put("error","snapshot_working_set_limit"));}catch(Exception ignored){}
         }catch(OutOfMemoryError exhausted){
             // Unwind disposable candidates and retain the last durable file. Do not let the HTTP
             // worker silently die and turn a resource limit into a misleading network disconnect.
