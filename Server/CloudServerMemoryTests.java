@@ -45,7 +45,7 @@ public final class CloudServerMemoryTests {
     static void verifyLatest(Path directory,long revision)throws Exception{
         try(DiskSnapshot saved=new DiskSnapshot(directory)){
             saved.read(directory.resolve(CloudSyncServer.name(revision)));int count=0;
-            try(DiskSnapshot.RowReader row=new DiskSnapshot.RowReader(saved.rows)){while(row.row!=null){count++;row.advance();}}
+            try(DiskSnapshot.RowReader row=new DiskSnapshot.RowReader(saved.rows)){while(row.encoded!=null){count++;row.advance();}}
             check(count>=NEW_TASKS,"large tombstone ledger lost records");
             check(saved.header.getLong("revision")==revision,"saved revision mismatch");
         }

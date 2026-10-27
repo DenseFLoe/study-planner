@@ -39,7 +39,7 @@ final class DiskSnapshot implements AutoCloseable {
                 validator.records().clear();validator.mergeRecord(row);row.getBoolean("deleted");
                 clock=Math.max(clock,row.getLong("version"));
                 if(row.getString("kind").equals("settings")&&!row.getBoolean("deleted"))settings[0]=true;
-                String line=row.toString();batch.add(new String[]{SyncLedger.key(row),line});chars[0]+=line.length();
+                String line=row.toString();batch.add(new String[]{SyncLedger.key(row),line,row.getBoolean("deleted")?"1":"0"});chars[0]+=line.length();
                 if(batch.size()>=RUN_ROWS||chars[0]>=RUN_CHARS){initialRuns.add(flush(batch));chars[0]=0;}
             });
         }
@@ -65,15 +65,25 @@ final class DiskSnapshot implements AutoCloseable {
         batch.sort(Comparator.comparing(item->item[0]));Path path=temporary();String previous=null;
         try(Writer out=writer(path)){
             for(String[] item:batch){if(item[0].equals(previous))throw new IOException("重复同步记录");
-                out.write(item[1]);out.write('\n');previous=item[0];}
+                out.write(item[0]);out.write('\t');out.write(item[2]);out.write('\t');out.write(item[1]);out.write('\n');previous=item[0];}
         }
         batch.clear();return path;
     }
 
+    // The key/deletion index lets sort and skip passes avoid decoding historical JSON.
     static final class RowReader implements AutoCloseable {
-        final BufferedReader in;String line,key;JSONObject row;
+        final BufferedReader in;String encoded,key;boolean deleted;int payloadOffset;JSONObject parsed;
         RowReader(Path path)throws Exception{in=reader(path);advance();}
-        void advance()throws Exception{line=in.readLine();row=line==null?null:new JSONObject(line);key=row==null?null:SyncLedger.key(row);}
+        void advance()throws IOException{
+            encoded=in.readLine();parsed=null;key=null;
+            if(encoded!=null){
+                int tab=encoded.indexOf('\t');
+                if(tab<1||tab+3>=encoded.length()||encoded.charAt(tab+2)!='\t')throw new IOException("临时记录索引无效");
+                key=encoded.substring(0,tab);deleted=encoded.charAt(tab+1)=='1';payloadOffset=tab+3;
+            }
+        }
+        JSONObject row(){if(parsed==null)parsed=new JSONObject(encoded.substring(payloadOffset));return parsed;}
+        int length(){return encoded.length()-payloadOffset;}
         public void close()throws IOException{in.close();}
     }
 
@@ -81,14 +91,14 @@ final class DiskSnapshot implements AutoCloseable {
     static boolean merge(Path old,Path incoming,Path output,boolean rejectDuplicates)throws Exception {
         boolean changed=false;int count=0;
         try(RowReader a=new RowReader(old);RowReader b=new RowReader(incoming);Writer out=writer(output)){
-            while(a.row!=null||b.row!=null){
+            while(a.encoded!=null||b.encoded!=null){
                 if(++count>MAX_RECORDS)throw new CapacityException();
-                int order=a.row==null?1:b.row==null?-1:a.key.compareTo(b.key);
-                if(order<0){out.write(a.line);a.advance();}
-                else if(order>0){out.write(b.line);b.advance();changed=true;}
+                int order=a.encoded==null?1:b.encoded==null?-1:a.key.compareTo(b.key);
+                if(order<0){out.write(a.encoded);a.advance();}
+                else if(order>0){out.write(b.encoded);b.advance();changed=true;}
                 else {
                     if(rejectDuplicates)throw new IOException("重复同步记录");
-                    boolean wins=SyncLedger.wins(b.row,a.row);out.write(wins?b.line:a.line);changed|=wins;a.advance();b.advance();
+                    boolean wins=SyncLedger.wins(b.row(),a.row());out.write(wins?b.encoded:a.encoded);changed|=wins;a.advance();b.advance();
                 }
                 out.write('\n');
             }
@@ -113,9 +123,9 @@ final class DiskSnapshot implements AutoCloseable {
     WorkingSet workingSet(String device)throws Exception {
         WorkingSet result=new WorkingSet(device,clock);Set<String> confirmedTasks=new HashSet<>(),completionKeys=new HashSet<>();
         try(RowReader r=new RowReader(rows)){
-            while(r.row!=null){JSONObject row=r.row;String kind=row.getString("kind");
-                if(!row.getBoolean("deleted")||kind.equals("courses")){
-                    result.add(row,r.line.length());
+            while(r.encoded!=null){
+                if(!r.deleted||r.key.startsWith("courses/")){
+                    JSONObject row=r.row();String kind=row.getString("kind");result.add(row,r.length());
                     if(kind.equals("completions"))confirmedTasks.add(SyncLedger.payload(row).getString("taskID"));
                     if(kind.equals("tasks"))completionKeys.add("completions/"+Planner.stableID("completion|"+row.getString("id")));
                 }
@@ -124,9 +134,9 @@ final class DiskSnapshot implements AutoCloseable {
         }
         for(String id:confirmedTasks)completionKeys.add("completions/"+Planner.stableID("completion|"+id));
         try(RowReader r=new RowReader(rows)){
-            while(r.row!=null){
-                if(r.row.getBoolean("deleted")&&((r.row.getString("kind").equals("tasks")&&confirmedTasks.contains(r.row.getString("id")))||completionKeys.contains(r.key)))
-                    result.add(r.row,r.line.length());
+            while(r.encoded!=null){
+                if(r.deleted&&((r.key.startsWith("tasks/")&&confirmedTasks.contains(r.key.substring(6)))||completionKeys.contains(r.key)))
+                    result.add(r.row(),r.length());
                 r.advance();
             }
         }
@@ -150,10 +160,10 @@ final class DiskSnapshot implements AutoCloseable {
             if(kind.equals("settings")){desired.add("settings/settings");continue;}
             for(JSONObject row:Planner.list(state.getJSONArray(kind)))desired.add(kind+"/"+(kind.equals("completions")?Planner.stableID("completion|"+row.getString("taskID")):row.getString("id")));
         }
-        try(RowReader r=new RowReader(rows)){while(r.row!=null){if(desired.contains(r.key))work.add(r.row,r.line.length());r.advance();}}
+        try(RowReader r=new RowReader(rows)){while(r.encoded!=null){if(desired.contains(r.key))work.add(r.row(),r.length());r.advance();}}
         long previous=work.ledger.sequence();work.ledger.capture(state);
         List<String[]> edits=new ArrayList<>();JSONArray changes=work.ledger.changes(previous);
-        for(int i=0;i<changes.length();i++){JSONObject row=changes.getJSONObject(i);edits.add(new String[]{SyncLedger.key(row),row.toString()});}
+        for(int i=0;i<changes.length();i++){JSONObject row=changes.getJSONObject(i);edits.add(new String[]{SyncLedger.key(row),row.toString(),row.getBoolean("deleted")?"1":"0"});}
         if(!edits.isEmpty()){
             Path overlay=flush(edits),merged=temporary();merge(rows,overlay,merged,false);Files.delete(rows);Files.delete(overlay);rows=merged;
         }
@@ -164,7 +174,7 @@ final class DiskSnapshot implements AutoCloseable {
             new GZIPOutputStream(new CloudSnapshot.LimitedOutput(Files.newOutputStream(destination),CloudSnapshot.MAX_GZIP)),CloudSnapshot.MAX_RAW),StandardCharsets.UTF_8));
             RowReader r=new RowReader(rows)){
             String text=envelope.toString();out.write(text,0,text.length()-1);out.write(",\"records\":[");long sequence=0;
-            while(r.row!=null){if(sequence>0)out.write(',');r.row.put("sequence",++sequence);SyncJSON.write(out,r.row);r.advance();}
+            while(r.encoded!=null){if(sequence>0)out.write(',');r.row().put("sequence",++sequence);SyncJSON.write(out,r.row());r.advance();}
             out.write("]}");
         }
     }
