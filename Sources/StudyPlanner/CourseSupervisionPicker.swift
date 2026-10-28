@@ -52,9 +52,9 @@ struct PlaybackSupervisionSettings: View {
     var body: some View {
         Section("学习监督 · 此 Mac") {
             Text(supervisor.summary).font(.headline)
-            Text("每门课程只需绑定观看软件。每 1 分钟检查一次，开始后留 1 分钟准备。暂停或软件未打开时每次都提醒；检测不可用不算暂停，连续两次不可用才提醒，同类提醒至少间隔 15 分钟，且不会抑制暂停提醒。")
+            Text("每门课程只需绑定观看软件。到课时间自动开始首次检测，之后每 1 分钟检查一次，无需打开设置页。暂停或软件未打开时每次都提醒；检测不可用不算暂停，连续两次不可用才提醒，同类提醒至少间隔 15 分钟，且不会抑制暂停提醒。")
                 .font(.callout).foregroundStyle(.secondary)
-            Text("跨桌面、全屏和后台均按软件状态检测，不切换桌面或抢焦点。已绑定时关窗继续运行；从菜单栏可重新打开或退出。休眠与会话未激活时暂停。")
+            Text("跨桌面、全屏和后台均按软件状态检测，不切换桌面或抢焦点。已绑定时关窗继续运行；从菜单栏可重新打开或退出。休眠与会话未激活时暂停，恢复后自动检查当前课程。")
                 .font(.caption).foregroundStyle(.secondary)
             Text("只检查软件是否播放，不核对课程、网站或课节。浮动任务按课表当前排列出的具体时间监督；完成、休息或未绑定的课程不检查。")
                 .font(.caption).foregroundStyle(.secondary)
