@@ -31,9 +31,11 @@
 
 | 平台 | 构建命令 | 产物 |
 | --- | --- | --- |
-| macOS | `./Scripts/build-app.sh` | `dist/学习日程.app` |
+| macOS | `./Scripts/build-dmg.sh` | `dist/学习日程-macOS-<短SHA>.dmg` 及 `.dmg.sha256` |
 | Android | `./Android/build.sh` | `dist/学习日程-安卓版.apk` |
 
+- macOS 受影响的每一轮代码改动都必须交付可拖到「应用程序」安装的 DMG，不能只交付 `.app`；DMG 由 `./Scripts/build-dmg.sh` 生成并附带同名 SHA-256 校验文件。
+- Android 仍按影响范围决定是否生成 APK；只改动 macOS 时无需重新构建 Android APK。
 - 本地验收从打包产物进行，而不是直接从源码目录运行。
 - 能自动验证的自行验证；需要用户交互的，给出具体操作步骤，并如实说明哪部分尚未验证。
 - 发现问题并修复后进入下一轮：独立 commit、push、build、test。

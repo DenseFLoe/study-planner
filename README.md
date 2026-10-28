@@ -10,7 +10,7 @@ macOS 14 及以上（Apple Silicon）可使用 macOS 版本；Android 8.0 及以
 
 ## 运行
 
-运行 `./Scripts/build-app.sh` 可生成开发构建 `dist/学习日程.app`。对外分享请运行 `./Scripts/release.sh`，脚本会生成 macOS DMG、Android APK、安装说明、SHA-256 校验和及可直接转发的 ZIP。首次打开为空白数据库，可以直接添加课程，或点击「载入示例，体验自动排程」。示例一旦通过正式应用的按钮载入，也会保存在本机。
+运行 `./Scripts/build-dmg.sh` 可生成 macOS 安装包 `dist/学习日程-macOS-<短SHA>.dmg` 及同名 `.dmg.sha256` 校验文件；打开 DMG 后把「学习日程」拖入「应用程序」即完成安装。`./Scripts/build-app.sh` 只生成开发构建 `dist/学习日程.app`。需要含 Android APK 的完整发布包时运行 `./Scripts/release.sh`，脚本会生成 macOS DMG、Android APK、安装说明、SHA-256 校验和及可直接转发的 ZIP。首次打开为空白数据库，可以直接添加课程，或点击「载入示例，体验自动排程」。示例一旦通过正式应用的按钮载入，也会保存在本机。
 
 开发环境需要 Xcode / Swift 6：
 
@@ -19,11 +19,11 @@ macOS 14 及以上（Apple Silicon）可使用 macOS 版本；Android 8.0 及以
 ./Scripts/build-app.sh
 ```
 
-也可在 Xcode 中打开 `Package.swift`，选择 StudyPlanner 运行。打包脚本默认 Release；传入 `debug` 可构建调试版。本机构建使用临时 ad-hoc 签名，尚未制作 Developer ID 公证的对外发行版本。
+也可在 Xcode 中打开 `Package.swift`，选择 StudyPlanner 运行。`build-app.sh` 与 `build-dmg.sh` 默认 Release；传入 `debug` 可构建调试版。本机构建使用临时 ad-hoc 签名，尚未制作 Developer ID 公证的对外发行版本。
 
 隔离预览：运行 `.build/debug/StudyPlanner --demo`，所有示例操作仅使用内存数据库。不会改动正式数据库。
 
-两端构建版本统一从 `Scripts/version.env` 读取，目前为 1.6.2（构建号 17）。本轮继续保留可选私人云同步：两端上传包含操作时间和删除标记的完整 gzip 数据包，服务器逐条合并并保留最近十版。默认关闭，无需提供服务器信息即可构建；原热点同步继续保留。对应入口与验收边界见 [Android 功能对照](Android/FEATURE_PARITY.md) 和 [云同步部署说明](Server/README.md)。本地包为 `dist/学习日程.app`、`dist/学习日程-安卓版.apk`、`dist/学习日程-云同步服务端.tar.gz`；Android 沿用已有本地签名。
+两端构建版本统一从 `Scripts/version.env` 读取，目前为 1.6.2（构建号 17）。本轮继续保留可选私人云同步：两端上传包含操作时间和删除标记的完整 gzip 数据包，服务器逐条合并并保留最近十版。默认关闭，无需提供服务器信息即可构建；原热点同步继续保留。对应入口与验收边界见 [Android 功能对照](Android/FEATURE_PARITY.md) 和 [云同步部署说明](Server/README.md)。本地包为 `dist/学习日程-macOS-<短SHA>.dmg` 及同名 `.dmg.sha256`、`dist/学习日程-安卓版.apk`、`dist/学习日程-云同步服务端.tar.gz`；Android 沿用已有本地签名。
 
 云同步设置本轮改为两张可选卡片：「HTTPS 直连」与「SSH 密钥」，两种方式分别保存配置，选择卡片后点击保存才切换使用方式。HTTPS 直连仍只接受可信证书的 HTTPS 根地址；SSH 方式填写服务器地址、SSH 端口（默认 22）、登录用户名、导入私钥（可填私钥口令）、SHA256 服务器指纹和服务访问码，连接后在服务器内部固定访问 `127.0.0.1:18090`，无需 Tailscale，也不要求公网开放 18090 或准备域名。首次读取的指纹需与服务器主人核对后保存，指纹变化时停止连接。私钥与口令只保存在本机安全存储，不进入日程同步、备份或安装包；SSH 连接只在同步时建立，结束即关闭，Mac 使用系统 OpenSSH，Android 使用内置 SSH 库。两种连接方式与现有 HTTPS 部署路径见 [云同步部署说明](Server/README.md)。
 
@@ -37,13 +37,16 @@ macOS 14 及以上（Apple Silicon）可使用 macOS 版本；Android 8.0 及以
 # macOS：单元测试与开发构建
 ./Scripts/test.sh
 ./Scripts/build-app.sh          # 生成 dist/学习日程.app
+./Scripts/build-dmg.sh          # 生成 dist/学习日程-macOS-<短SHA>.dmg 及同名 .dmg.sha256
 
 # Android：单元测试与 APK 打包
 ./Android/test.sh
 ./Android/build.sh              # 生成 dist/学习日程-安卓版.apk
 ```
 
-代码改动推送后按影响范围打包，本地验收从打包产物进行，而不是直接从源码目录运行；能自动验证的自动验证，需要人工交互的部分给出具体步骤并说明尚未验证的部分。发现问题修复后进入下一轮独立提交。仅文档修改无需重新打包。默认不创建公开 GitHub Release，不上传安装包，也不做部署。
+macOS 安装：打开 `dist/学习日程-macOS-<短SHA>.dmg`，把「学习日程」拖入 DMG 中的「应用程序」文件夹，再从「应用程序」启动。首次启动若被系统拦截，在 Finder 中右键应用选择「打开」确认。校验安装包：在 `dist` 目录执行 `shasum -a 256 -c 学习日程-macOS-<短SHA>.dmg.sha256`，输出 `OK` 表示文件完整。
+
+代码改动推送后按影响范围打包，本地验收从打包产物进行，而不是直接从源码目录运行；能自动验证的自动验证，需要人工交互的部分给出具体步骤并说明尚未验证的部分。macOS 受影响的每一轮代码改动都必须交付可拖到「应用程序」安装的 DMG，不能只交付 `.app`；Android 仍按影响范围生成 APK。发现问题修复后进入下一轮独立提交。仅文档修改无需重新打包。默认不创建公开 GitHub Release，不上传安装包，也不做部署。
 
 ## 已实现
 
