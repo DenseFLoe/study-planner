@@ -14,6 +14,7 @@ final class PlannerStore {
     var isReady = false
     var showDailyReview = false
     var syncBusy = false
+    @ObservationIgnored private(set) var syncTask: Task<Void, Never>?
     private(set) var orderSaveBusy = false
     @ObservationIgnored private var orderSaveTask: Task<Bool, Never>?
     var syncStatus = "尚未同步"
@@ -250,22 +251,29 @@ final class PlannerStore {
             return
         }
         cloudDeferredTask?.cancel(); cloudDeferredTask = nil
-        cloudRequested = false; cloudLastAttempt = Date(); syncBusy = true; cloudStatus = "正在上传完整课表并获取合并结果…"
-        Task {
+        cloudRequested = false; cloudLastAttempt = Date()
+        beginCloudSync()
+    }
+    func beginCloudSync(
+        operation: @escaping @Sendable () async throws -> SyncOutcome = {
+            guard let credentials = try CloudVault.load(method: CloudVault.selectedMethod) else { throw ClientError.message("请先配置云同步服务器。") }
+            return try await CloudSyncClient.run(credentials: credentials)
+        },
+        snapshot: @escaping @Sendable () async throws -> (PlannerState, SyncLedger) = { try await SyncDatabase.snapshot() }
+    ) {
+        guard !syncBusy else { return }
+        syncBusy = true; cloudStatus = "正在上传完整课表并获取合并结果…"
+        syncTask = Task {
+            defer { finishSync() }
             do {
-                guard let credentials = try CloudVault.load(method: CloudVault.selectedMethod) else { throw ClientError.message("请先配置云同步服务器。") }
-                let outcome = try await CloudSyncClient.run(credentials: credentials)
+                // Keychain access, archive work and SSH teardown must not inherit
+                // the main actor from the UI task.
+                let outcome = try await Task.detached(priority: .userInitiated, operation: operation).value
                 cloudStatus = "已同步 · 云端版本 \(outcome.ledger.cloudProgress?.revision ?? 0) · \(Date().formatted(date: .omitted, time: .shortened))"
             } catch { cloudStatus = "云同步未完成，待传数据已保留：" + error.localizedDescription }
             do {
-                let (loaded, ledger) = try await SyncDatabase.snapshot()
-                let calculated = await Task.detached { ScheduleEngine().generate(state: loaded, now: Date()) }.value
-                repository = try LocalRepository(); state = loaded; syncLedger = ledger; result = calculated
-                studyLoad = StudyLoadAnalyzer().assess(state: loaded, now: Date())
+                try await refreshAfterSync(snapshot: snapshot)
             } catch { errorMessage = "无法读取本地日程：" + error.localizedDescription; isReady = false }
-            syncBusy = false
-            if pendingManualSyncs > 0 { pendingManualSyncs -= 1; startSync() }
-            else if cloudRequested { requestCloudSync(manual: true) }
         }
     }
     func startSync(automatic: Bool = false, host: String? = nil, pairingText: String? = nil) {
@@ -279,7 +287,8 @@ final class PlannerStore {
             return
         }
         syncBusy = true; syncStatus = automatic ? "正在检查自动同步条件" : "正在同步"
-        Task {
+        syncTask = Task {
+            defer { finishSync() }
             do {
                 let outcome = try await SyncClient.run(automatic: automatic, host: host, pairingText: pairingText) { [weak self] message in
                     await self?.recordSyncLog(message)
@@ -289,17 +298,28 @@ final class PlannerStore {
                     syncStatus = "已同步 · 发送 \(outcome.sent) 条，接收 \(outcome.received) 条 · 网络已关闭"
                 } else { syncStatus = "等待下次自动同步（手机窗口与热点连接须同时就绪）" }
             } catch { syncStatus = "同步未完成：" + error.localizedDescription }
-            // Recreate the UI repository after background transactions to discard cached models.
+            // Refresh cached UI models after background transactions.
             do {
-                let (loaded, ledger) = try await SyncDatabase.snapshot()
-                let calculated = await Task.detached { ScheduleEngine().generate(state: loaded, now: Date()) }.value
-                repository = try LocalRepository(); state = loaded; syncLedger = ledger; result = calculated
-                studyLoad = StudyLoadAnalyzer().assess(state: loaded, now: Date())
+                try await refreshAfterSync()
             } catch { errorMessage = "无法重新读取同步后的本地数据：" + error.localizedDescription; isReady = false }
-            syncBusy = false
-            if pendingManualSyncs > 0 { pendingManualSyncs -= 1; startSync() }
-            else if cloudRequested { requestCloudSync(manual: true) }
         }
+    }
+    private func refreshAfterSync(
+        snapshot: @escaping @Sendable () async throws -> (PlannerState, SyncLedger) = { try await SyncDatabase.snapshot() }
+    ) async throws {
+        let (loaded, ledger, calculated, load) = try await Task.detached(priority: .userInitiated) {
+            let (state, ledger) = try await snapshot()
+            let now = Date()
+            return (state, ledger, ScheduleEngine().generate(state: state, now: now),
+                    StudyLoadAnalyzer().assess(state: state, now: now))
+        }.value
+        (repository as? LocalRepository)?.discardCachedModels()
+        state = loaded; syncLedger = ledger; result = calculated; studyLoad = load
+    }
+    private func finishSync() {
+        syncTask = nil; syncBusy = false
+        if pendingManualSyncs > 0 { pendingManualSyncs -= 1; startSync() }
+        else if cloudRequested { requestCloudSync(manual: true) }
     }
     private func recordSyncLog(_ message: String) async {
         syncStatus = message

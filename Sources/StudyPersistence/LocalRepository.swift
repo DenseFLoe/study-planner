@@ -75,6 +75,12 @@ public final class LocalRepository: PlannerRepository {
             try worker.save(state)
         }.value
         // Discard registered objects so the next UI transaction sees the new rows.
+        discardCachedModels()
+    }
+
+    /// Background sync writes through a separate context on the same store.
+    /// Reuse the container instead of opening the database again on the UI thread.
+    @MainActor public func discardCachedModels() {
         context = ModelContext(container)
         context.autosaveEnabled = false
     }

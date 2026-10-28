@@ -46,6 +46,22 @@ struct MainView: View {
             Rectangle().fill(PlannerTheme.hairline).frame(width: 1)
             VStack(spacing: 0) {
                 header
+                if store.syncBusy {
+                    HStack(spacing: 8) {
+                        ProgressView()
+                            .progressViewStyle(.circular)
+                            .controlSize(.small)
+                        Text("正在同步中")
+                            .font(.callout.weight(.medium))
+                        Spacer()
+                    }
+                    .foregroundStyle(PlannerTheme.accent)
+                    .padding(.horizontal, PlannerTheme.pagePadding)
+                    .padding(.vertical, 10)
+                    .background(PlannerTheme.accent.opacity(0.07))
+                    .accessibilityElement(children: .combine)
+                    .accessibilityIdentifier("syncProgress")
+                }
                 Group {
                     if !store.isReady {
                         ContentUnavailableView(
