@@ -52,7 +52,7 @@ struct PlaybackSupervisionSettings: View {
     var body: some View {
         Section("学习监督 · 此 Mac") {
             Text(supervisor.summary).font(.headline)
-            Text("每门课程只需绑定观看软件。每 3 分钟检查一次；开始后留 3 分钟准备，连续两次未播放再提醒，同一课程的提醒至少间隔 15 分钟。")
+            Text("每门课程只需绑定观看软件。每 1 分钟检查一次，开始后留 1 分钟准备。暂停或软件未打开时每次都提醒；检测不可用不算暂停，连续两次不可用才提醒，同类提醒至少间隔 15 分钟，且不会抑制暂停提醒。")
                 .font(.callout).foregroundStyle(.secondary)
             Text("跨桌面、全屏和后台均按软件状态检测，不切换桌面或抢焦点。已绑定时关窗继续运行；从菜单栏可重新打开或退出。休眠与会话未激活时暂停。")
                 .font(.caption).foregroundStyle(.secondary)

@@ -13,10 +13,9 @@ import UserNotifications
         var taskIDs: Set<UUID>
         var firstSeen: Date
         var lastCheck = Date.distantPast
-        var misses = 0
         var unknowns = 0
     }
-    static let checkInterval: TimeInterval = 180
+    static let checkInterval: TimeInterval = 60
     private static let preferenceKey = "macPlaybackSupervision.v1"
     private var configuration = Configuration()
     private(set) var statuses: [UUID: String] = [:]
@@ -31,7 +30,7 @@ import UserNotifications
     @ObservationIgnored private weak var store: PlannerStore?
     @ObservationIgnored private var monitor: Task<Void, Never>?
     @ObservationIgnored private var sessions: [UUID: Session] = [:]
-    @ObservationIgnored private var lastReminders: [UUID: Date] = [:]
+    @ObservationIgnored private var lastUnavailableReminders: [UUID: Date] = [:]
     @ObservationIgnored private var observers: [NSObjectProtocol] = []
     @ObservationIgnored private var suspended = false
     @ObservationIgnored private var checking = false
@@ -229,7 +228,7 @@ import UserNotifications
             sessions[courseID] = session
             guard now.timeIntervalSince(session.firstSeen) >= Self.checkInterval,
                   now.timeIntervalSince(session.lastCheck) >= Self.checkInterval else {
-                if session.lastCheck == .distantPast { statuses[courseID] = "学习开始后保留 3 分钟准备时间" }
+                if session.lastCheck == .distantPast { statuses[courseID] = "学习开始后保留 1 分钟准备时间" }
                 continue
             }
             let observation: PlaybackObservation
@@ -244,21 +243,23 @@ import UserNotifications
             let body: String?
             switch observation {
             case .playing(let detail):
-                session.misses = 0; session.unknowns = 0
+                session.unknowns = 0
                 statuses[courseID] = detail
                 UNUserNotificationCenter.current().removeDeliveredNotifications(withIdentifiers: [identifier(courseID)])
                 body = nil
             case .stopped(let detail):
-                session.misses += 1; session.unknowns = 0
-                statuses[courseID] = detail + "（连续 \(session.misses) 次）"
-                body = session.misses >= 2 ? "当前是“\(store.course(courseID)?.name ?? "课程")”的学习时间。\(detail)，请检查“\(app.name)”。" : nil
+                session.unknowns = 0
+                statuses[courseID] = detail
+                body = "当前是“\(store.course(courseID)?.name ?? "课程")”的学习时间。\(detail)，请检查“\(app.name)”。"
             case .unavailable(let detail):
-                session.misses = 0; session.unknowns += 1
+                session.unknowns += 1
                 statuses[courseID] = "检测不可用：" + detail
-                body = session.unknowns >= 2 ? "“\(app.name)”的学习监督暂不可用。\(detail) 可在学习设置的“学习监督”中处理。" : nil
+                body = session.unknowns >= 2 && Date().timeIntervalSince(lastUnavailableReminders[courseID] ?? .distantPast) >= 900
+                    ? "“\(app.name)”的学习监督暂不可用。\(detail) 可在学习设置的“学习监督”中处理。"
+                    : nil
             }
-            if let body, Date().timeIntervalSince(lastReminders[courseID] ?? .distantPast) >= 900 {
-                if await notify(courseID: courseID, body: body, revision: token, taskIDs: taskIDs) { lastReminders[courseID] = Date() }
+            if let body, await notify(courseID: courseID, body: body, revision: token, taskIDs: taskIDs) {
+                if case .unavailable = observation { lastUnavailableReminders[courseID] = Date() }
             }
             guard revision == token, !suspended else { return }
             sessions[courseID] = session
