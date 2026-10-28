@@ -293,7 +293,7 @@ import UserNotifications
         summary = "屏幕休眠或会话未激活，监督已暂停"
     }
     private func resume() {
-        guard running else { return }
+        guard running, suspended else { return }
         suspended = false; sessions = [:]; activeTaskIDs = []; revision = UUID(); lastTick = .distantPast
         summary = hasBindings ? "等待计划学习时段" : "未绑定监督软件"
         requestCheck()

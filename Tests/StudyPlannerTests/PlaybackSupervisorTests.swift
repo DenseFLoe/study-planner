@@ -133,6 +133,11 @@ import StudyPersistence
         await drain()
         XCTAssertEqual(checks, 2)
         XCTAssertTrue(supervisor.isSupervising(store.state.tasks[0]))
+        // A single wake commonly produces several workspace notifications.
+        NSWorkspace.shared.notificationCenter.post(name: NSWorkspace.didWakeNotification, object: nil)
+        NSWorkspace.shared.notificationCenter.post(name: NSWorkspace.sessionDidBecomeActiveNotification, object: nil)
+        await drain()
+        XCTAssertEqual(checks, 2)
         supervisor.stop()
         XCTAssertNil(supervisor.nextCheckAt)
         XCTAssertFalse(supervisor.isSupervising(store.state.tasks[0]))
