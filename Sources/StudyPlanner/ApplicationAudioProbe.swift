@@ -10,52 +10,55 @@ import Darwin
     private var device: AudioObjectID = 0
     private var ioProc: AudioDeviceIOProcID?
 
-    static func sample(_ app: SupervisedApplication, permissionRequest: Bool = false,
+    static func sample(_ app: SupervisedApplication, captureAllowed: Bool = true,
                        previouslyVerified: Bool = false) async -> PlaybackObservation {
-        let processes = matchingProcesses(app)
-        guard permissionRequest || !processes.isEmpty else {
-            return .stopped("此软件当前没有音频输出进程")
-        }
         let probe = ApplicationAudioProbe()
         defer { probe.stop() }
         do {
-            let meter = try probe.start(processes)
-            try await Task.sleep(for: .seconds(5))
-            let sample = meter.snapshot()
-            guard sample.received > 1 else {
-                return previouslyVerified ? .stopped("该软件当前没有持续音频输出")
-                    : .unavailable("未收到音频活动；请检查系统音频录制权限及输出设备。")
-            }
-            return sample.active >= 1
-                ? .playing("检测到该软件持续输出音频（静音视频可能无法识别）")
-                : .stopped("未检测到该软件持续输出音频（静音视频可能无法识别）")
+            let processes = try matchingProcesses(app)
+            return try await PlaybackAudioDetection.check(captureAllowed: captureAllowed,
+                previouslyVerified: previouslyVerified,
+                readOutputActivity: {
+                    // Refresh after sampling too: a player can close/recreate
+                    // its audio process when it pauses or switches files.
+                    try matchingProcesses(app).map(outputIsRunning)
+                },
+                readSample: {
+                    let meter = try probe.start(processes)
+                    try await Task.sleep(for: .seconds(5))
+                    return meter.snapshot()
+                })
         } catch is CancellationError {
             return .unavailable("检测已暂停")
         } catch {
-            return .unavailable("音频检测未就绪；请在系统设置中允许学习日程录制系统音频。")
+            return .unavailable("音频检测暂不可用（错误码 \((error as NSError).code)）；请稍后重试，并检查系统音频录制权限及输出设备。")
         }
     }
 
-    private static func matchingProcesses(_ app: SupervisedApplication) -> [AudioObjectID] {
+    private static func matchingProcesses(_ app: SupervisedApplication) throws -> [AudioObjectID] {
         var address = AudioObjectPropertyAddress(mSelector: kAudioHardwarePropertyProcessObjectList,
             mScope: kAudioObjectPropertyScopeGlobal, mElement: kAudioObjectPropertyElementMain)
         var size: UInt32 = 0
-        guard AudioObjectGetPropertyDataSize(AudioObjectID(kAudioObjectSystemObject), &address, 0, nil, &size) == noErr,
-              size >= MemoryLayout<AudioObjectID>.size else { return [] }
+        let sizeStatus = AudioObjectGetPropertyDataSize(AudioObjectID(kAudioObjectSystemObject), &address, 0, nil, &size)
+        guard sizeStatus == noErr else { throw NSError(domain: NSOSStatusErrorDomain, code: Int(sizeStatus)) }
+        guard size > 0 else { return [] }
         var objects = [AudioObjectID](repeating: 0, count: Int(size) / MemoryLayout<AudioObjectID>.size)
         let status = objects.withUnsafeMutableBytes {
             AudioObjectGetPropertyData(AudioObjectID(kAudioObjectSystemObject), &address, 0, nil, &size, $0.baseAddress!)
         }
-        guard status == noErr else { return [] }
+        guard status == noErr else { throw NSError(domain: NSOSStatusErrorDomain, code: Int(status)) }
+        // HAL may shrink the process list between the size and data reads.
+        objects = Array(objects.prefix(Int(size) / MemoryLayout<AudioObjectID>.size))
         let roots = NSRunningApplication.runningApplications(withBundleIdentifier: app.bundleID)
             .compactMap { $0.bundleURL?.resolvingSymlinksInPath().path }
             + [URL(fileURLWithPath: app.path).resolvingSymlinksInPath().path]
-        return objects.filter { object in
+        return try objects.filter { object in
             var pid: pid_t = 0
             var pidSize = UInt32(MemoryLayout<pid_t>.size)
             var property = AudioObjectPropertyAddress(mSelector: kAudioProcessPropertyPID,
                 mScope: kAudioObjectPropertyScopeGlobal, mElement: kAudioObjectPropertyElementMain)
-            guard AudioObjectGetPropertyData(object, &property, 0, nil, &pidSize, &pid) == noErr else { return false }
+            let pidStatus = AudioObjectGetPropertyData(object, &property, 0, nil, &pidSize, &pid)
+            guard pidStatus == noErr else { throw NSError(domain: NSOSStatusErrorDomain, code: Int(pidStatus)) }
             if NSRunningApplication(processIdentifier: pid)?.bundleIdentifier == app.bundleID { return true }
             // Chromium/Electron helpers live inside their application's bundle.
             // Shared WebKit helpers are deliberately NOT attributed to Safari by name.
@@ -66,6 +69,15 @@ import Darwin
             let resolved = URL(fileURLWithPath: executable).resolvingSymlinksInPath().path
             return roots.contains { resolved.hasPrefix($0 + "/") }
         }
+    }
+
+    private static func outputIsRunning(_ process: AudioObjectID) -> Bool? {
+        var property = AudioObjectPropertyAddress(mSelector: kAudioProcessPropertyIsRunningOutput,
+            mScope: kAudioObjectPropertyScopeGlobal, mElement: kAudioObjectPropertyElementMain)
+        var running: UInt32 = 0
+        var size = UInt32(MemoryLayout<UInt32>.size)
+        guard AudioObjectGetPropertyData(process, &property, 0, nil, &size, &running) == noErr else { return nil }
+        return running != 0
     }
 
     private func start(_ processes: [AudioObjectID]) throws -> AudioActivityMeter {

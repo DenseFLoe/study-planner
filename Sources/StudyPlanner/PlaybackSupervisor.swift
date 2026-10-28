@@ -124,23 +124,28 @@ import UserNotifications
         case .playing(let detail), .stopped(let detail), .unavailable(let detail):
             permissionMessage += " " + detail
         }
+        for (courseID, bound) in configuration.applications where bound.bundleID == application.bundleID {
+            guard let id = UUID(uuidString: courseID) else { continue }
+            switch observation {
+            case .playing(let detail), .stopped(let detail): statuses[id] = detail
+            case .unavailable(let detail): statuses[id] = "检测不可用：" + detail
+            }
+        }
     }
 
     private func authorizeAudio(_ application: SupervisedApplication) async -> PlaybackObservation {
         guard #available(macOS 14.2, *) else {
             return .unavailable("通用软件的音频检测需要 macOS 14.2 或更新版本。")
         }
-        var next = configuration
-        next.audioAuthorized.insert(application.bundleID)
-        guard save(next) else { return .unavailable(storageMessage ?? "音频检测授权配置未能保存。") }
-        let sample = await ApplicationAudioProbe.sample(application, permissionRequest: true)
+        let sample = await ApplicationAudioProbe.sample(application)
         switch sample {
         case .playing:
+            var next = configuration
+            next.audioAuthorized.insert(application.bundleID)
+            guard save(next) else { return .unavailable(storageMessage ?? "音频检测授权配置未能保存。") }
             verifiedAudioApps.insert(application.bundleID)
             return sample
-        case .stopped:
-            return .unavailable("请让软件有声播放以验证音频检测；静音播放可能无法识别。")
-        case .unavailable: return sample
+        case .stopped, .unavailable: return sample
         }
     }
 
@@ -276,14 +281,14 @@ import UserNotifications
     }
 
     private func observeAudio(_ app: SupervisedApplication) async -> PlaybackObservation {
-        guard configuration.audioAuthorized.contains(app.bundleID), #available(macOS 14.2, *) else {
-            return .unavailable("请让软件有声播放，再点击“授权并检查”完成系统音频检测授权。")
+        guard #available(macOS 14.2, *) else {
+            return .unavailable("通用软件的音频检测需要 macOS 14.2 或更新版本。")
         }
-        let audio = await ApplicationAudioProbe.sample(app, previouslyVerified: verifiedAudioApps.contains(app.bundleID))
+        let audio = await ApplicationAudioProbe.sample(app,
+            captureAllowed: configuration.audioAuthorized.contains(app.bundleID),
+            previouslyVerified: verifiedAudioApps.contains(app.bundleID))
         switch audio {
         case .playing: verifiedAudioApps.insert(app.bundleID); return audio
-        case .stopped where !verifiedAudioApps.contains(app.bundleID):
-            return .unavailable("尚未验证音频权限；请让软件有声播放，再点击“授权并检查”。")
         default: return audio
         }
     }

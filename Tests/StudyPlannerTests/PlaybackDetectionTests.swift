@@ -4,6 +4,82 @@ import XCTest
 // No shared mutable test state; Swift 6 XCTest discovery transfers the instance
 // into async wrappers even though every test runs on the main actor.
 @MainActor final class PlaybackDetectionTests: XCTestCase, @unchecked Sendable {
+    func testPausedOutputIsStoppedBeforeCaptureEvenWithoutVerifiedPermission() async throws {
+        for allowed in [false, true] {
+            for verified in [false, true] {
+                var sampled = false
+                let result = try await PlaybackAudioDetection.check(captureAllowed: allowed,
+                    previouslyVerified: verified, readOutputActivity: { [false, false] },
+                    readSample: { sampled = true; throw NSError(domain: "test", code: 1) })
+                XCTAssertEqual(result, PlaybackAudioDetection.stoppedOutput)
+                XCTAssertFalse(sampled)
+            }
+        }
+    }
+
+    func testNoAudioProcessesIsStoppedWithoutCapture() async throws {
+        let result = try await PlaybackAudioDetection.check(captureAllowed: false,
+            previouslyVerified: false, readOutputActivity: { [] },
+            readSample: { XCTFail("An idle app must not capture audio"); return (0, 0) })
+        XCTAssertEqual(result, PlaybackAudioDetection.stoppedOutput)
+    }
+
+    func testOneActiveHelperKeepsCaptureEnabled() async throws {
+        let result = try await PlaybackAudioDetection.check(captureAllowed: true,
+            previouslyVerified: false, readOutputActivity: { [false, true] },
+            readSample: { (5, 2) })
+        guard case .playing = result else { return XCTFail("One active helper can play for the app") }
+    }
+
+    func testUnreadableOutputIsNotTreatedAsIdle() async throws {
+        for activity: [Bool?] in [[nil], [false, nil], [true]] {
+            let result = try await PlaybackAudioDetection.check(captureAllowed: false,
+                previouslyVerified: false, readOutputActivity: { activity },
+                readSample: { XCTFail("Capture needs prior authorization"); return (0, 0) })
+            XCTAssertEqual(result, .unavailable(PlaybackAudioDetection.authorizationHelp))
+        }
+    }
+
+    func testMissingCallbacksWithActiveOutputRemainUnavailableEvenAfterVerification() async throws {
+        for verified in [false, true] {
+            let result = try await PlaybackAudioDetection.check(captureAllowed: true,
+                previouslyVerified: verified, readOutputActivity: { [true] },
+                readSample: { (0, 0) })
+            guard case .unavailable = result else { return XCTFail("Missing callbacks do not prove a pause") }
+        }
+    }
+
+    func testPauseDuringSamplingIsStoppedEvenWhenCallbacksEnd() async throws {
+        var playing = true
+        let result = try await PlaybackAudioDetection.check(captureAllowed: true,
+            previouslyVerified: false, readOutputActivity: { [playing] },
+            readSample: { playing = false; return (0.2, 0) })
+        XCTAssertEqual(result, PlaybackAudioDetection.stoppedOutput)
+    }
+
+    func testSilentSamplesNeedPermissionVerificationWhenOutputRemainsActive() async throws {
+        for verified in [false, true] {
+            let result = try await PlaybackAudioDetection.check(captureAllowed: true,
+                previouslyVerified: verified, readOutputActivity: { [true] },
+                readSample: { (5, 0) })
+            if verified {
+                guard case .stopped = result else { return XCTFail("Verified silence is stopped") }
+            } else {
+                guard case .unavailable = result else { return XCTFail("Unverified silence can be missing permission") }
+            }
+        }
+    }
+
+    func testFailedProcessEnumerationDoesNotBecomeStopped() async {
+        do {
+            _ = try await PlaybackAudioDetection.check(captureAllowed: true,
+                previouslyVerified: true,
+                readOutputActivity: { throw NSError(domain: "test", code: 2) },
+                readSample: { XCTFail("Enumeration failed"); return (0, 0) })
+            XCTFail("The caller must receive the process query failure")
+        } catch { XCTAssertEqual((error as NSError).code, 2) }
+    }
+
     func testAutomationStatusPreservesFailureReason() async {
         XCTAssertEqual(PlaybackAutomationPermission(status: 0), .granted)
         XCTAssertEqual(PlaybackAutomationPermission(status: -1743), .denied)

@@ -23,6 +23,37 @@ enum PlaybackObservation: Equatable, Sendable {
     case playing(String), stopped(String), unavailable(String)
 }
 
+enum PlaybackAudioDetection {
+    static let stoppedOutput = PlaybackObservation.stopped("该软件已暂停或停止音频输出")
+    static let authorizationHelp = "请让软件有声播放，再点击“授权并检查”完成系统音频检测授权。"
+
+    /// A known idle output is independent of capture permission. Missing or
+    /// unreadable capture data alone never proves that playback has stopped.
+    @MainActor static func check(
+        captureAllowed: Bool, previouslyVerified: Bool,
+        readOutputActivity: () throws -> [Bool?],
+        readSample: () async throws -> (received: Double, active: Double)
+    ) async throws -> PlaybackObservation {
+        let activity = try readOutputActivity()
+        if activity.allSatisfy({ $0 == false }) { return stoppedOutput }
+        guard captureAllowed else { return .unavailable(authorizationHelp) }
+        let sample = try await readSample()
+        if sample.received > 1, sample.active >= 1 {
+            return .playing("检测到该软件持续输出音频（静音视频可能无法识别）")
+        }
+        // Playback can be paused during the five-second sample. Re-read instead
+        // of mistaking its stopped IO callbacks for an unavailable detector.
+        if try readOutputActivity().allSatisfy({ $0 == false }) { return stoppedOutput }
+        guard sample.received > 1 else {
+            return .unavailable("未收到有效音频采样，暂时无法判断播放状态；请在软件有声播放时检查系统音频录制权限及输出设备。")
+        }
+        guard previouslyVerified else {
+            return .unavailable("尚未验证音频权限；请让软件有声播放，再点击“授权并检查”。")
+        }
+        return .stopped("未检测到该软件持续输出音频（静音视频可能无法识别）")
+    }
+}
+
 enum PlaybackAutomationPermission: Equatable, Sendable {
     case granted, consentRequired, denied, notRunning, failed(Int32)
 
