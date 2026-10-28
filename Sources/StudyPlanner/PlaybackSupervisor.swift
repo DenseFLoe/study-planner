@@ -117,32 +117,31 @@ import UserNotifications
             permissionMessage += " 请打开“\(application.name)”后点击“授权并检查”，检测不会代你启动软件。"
             return
         }
-        if application.scripting != nil {
-            _ = await PlaybackStateReader.authorize(pid: running.processIdentifier)
-            if let state = await PlaybackStateReader.read(application, pid: running.processIdentifier) {
-                switch state {
-                case .playing(let detail), .stopped(let detail):
-                    permissionMessage += " " + detail
-                    return
-                case .unavailable: break
-                }
-            }
+        let observation = await PlaybackDetection.check(kind: application.scripting, name: application.name,
+            requestAutomation: { await PlaybackStateReader.authorize(pid: running.processIdentifier) },
+            readScripted: { await PlaybackStateReader.read(application, pid: running.processIdentifier) },
+            readAudio: { await self.authorizeAudio(application) })
+        switch observation {
+        case .playing(let detail), .stopped(let detail), .unavailable(let detail):
+            permissionMessage += " " + detail
         }
+    }
+
+    private func authorizeAudio(_ application: SupervisedApplication) async -> PlaybackObservation {
         guard #available(macOS 14.2, *) else {
-            permissionMessage += " 通用软件的音频检测需要 macOS 14.2 或更新版本。"
-            return
+            return .unavailable("通用软件的音频检测需要 macOS 14.2 或更新版本。")
         }
         var next = configuration
         next.audioAuthorized.insert(application.bundleID)
-        guard save(next) else { return }
+        guard save(next) else { return .unavailable(storageMessage ?? "音频检测授权配置未能保存。") }
         let sample = await ApplicationAudioProbe.sample(application, permissionRequest: true)
         switch sample {
-        case .playing(let detail):
+        case .playing:
             verifiedAudioApps.insert(application.bundleID)
-            permissionMessage += " " + detail
+            return sample
         case .stopped:
-            permissionMessage += " 请让软件有声播放以验证音频检测；静音播放可能无法识别。"
-        case .unavailable(let detail): permissionMessage += " " + detail
+            return .unavailable("请让软件有声播放以验证音频检测；静音播放可能无法识别。")
+        case .unavailable: return sample
         }
     }
 
@@ -270,15 +269,14 @@ import UserNotifications
         guard let running = NSRunningApplication.runningApplications(withBundleIdentifier: app.bundleID).first else {
             return .stopped("对应软件尚未打开")
         }
-        let scripted = await PlaybackStateReader.read(app, pid: running.processIdentifier)
-        if let scripted {
-            switch scripted {
-            case .playing, .stopped: return scripted
-            case .unavailable: break
-            }
-        }
+        return await PlaybackDetection.check(kind: app.scripting, name: app.name,
+            readScripted: { await PlaybackStateReader.read(app, pid: running.processIdentifier) },
+            readAudio: { await self.observeAudio(app) })
+    }
+
+    private func observeAudio(_ app: SupervisedApplication) async -> PlaybackObservation {
         guard configuration.audioAuthorized.contains(app.bundleID), #available(macOS 14.2, *) else {
-            return scripted ?? .unavailable("请让软件有声播放，再点击“授权并检查”完成系统音频检测授权。")
+            return .unavailable("请让软件有声播放，再点击“授权并检查”完成系统音频检测授权。")
         }
         let audio = await ApplicationAudioProbe.sample(app, previouslyVerified: verifiedAudioApps.contains(app.bundleID))
         switch audio {

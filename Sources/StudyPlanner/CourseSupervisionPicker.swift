@@ -83,7 +83,11 @@ struct PlaybackSupervisionSettings: View {
             if let message = supervisor.storageMessage { Text(message).foregroundStyle(.orange) }
         }
         Section("检测权限与限制") {
-            Text("浏览器及部分播放器使用自动化权限读取播放状态；浏览器可能还需在开发者菜单允许来自 Apple 事件的 JavaScript。跨域嵌入播放器或无法读取状态的软件会尝试音频检测。")
+            Text("浏览器及部分播放器使用自动化权限读取播放状态。请在“系统设置 → 隐私与安全性 → 自动化 → 学习日程”中允许对应软件。")
+                .font(.caption).foregroundStyle(.secondary)
+            Text(PlaybackDetection.safariJavaScriptHelp)
+                .font(.caption).foregroundStyle(.secondary).textSelection(.enabled)
+            Text("Safari 的脚本开关与系统自动化权限需分别开启。跨域或受限页面仍可能无法读取；Safari 会显示具体原因，其他软件可尝试音频检测。")
                 .font(.caption).foregroundStyle(.secondary)
             Text("通用软件需 macOS 14.2 及以上，并允许系统音频录制。仅在检测时短暂分析该软件的音量，不保存或上传音频，也不截图。音频方式可能无法识别静音或极低音量播放，首次需有声播放以验证。")
                 .font(.caption).foregroundStyle(.secondary)

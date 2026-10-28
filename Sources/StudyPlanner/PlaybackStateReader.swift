@@ -2,42 +2,24 @@ import AppKit
 import ApplicationServices
 import Carbon
 
-struct SupervisedApplication: Codable, Equatable, Sendable {
-    var bundleID: String
-    var name: String
-    var path: String
-
-    var scripting: PlaybackScripting? {
-        if bundleID == "com.apple.Safari" { return .safari }
-        if bundleID == "com.apple.QuickTimePlayerX" { return .quickTime }
-        if ["com.apple.Music", "com.apple.TV", "com.spotify.client"].contains(bundleID) { return .playerState }
-        guard let bundle = Bundle(url: URL(fileURLWithPath: path)),
-              let definition = (bundle.object(forInfoDictionaryKey: "OSAScriptingDefinition") as? String)
-                ?? (bundle.object(forInfoDictionaryKey: "NSScriptingDefinition") as? String),
-              let url = bundle.url(forResource: definition, withExtension: nil),
-              let source = try? String(contentsOf: url, encoding: .utf8), source.contains("CrSuExJa") else { return nil }
-        return .chromium
-    }
-}
-
-enum PlaybackScripting: Sendable { case safari, chromium, quickTime, playerState }
-enum PlaybackObservation: Sendable {
-    case playing(String), stopped(String), unavailable(String)
-}
-
 /// All Apple events target an already-running PID. Queries cannot launch an app,
 /// activate a window, change the selected tab, or move the user between Spaces.
 enum PlaybackStateReader {
     static func read(_ app: SupervisedApplication, pid: pid_t) async -> PlaybackObservation? {
         guard let kind = app.scripting else { return nil }
-        return await Task.detached(priority: .utility) { read(kind, pid: pid) }.value
+        return await Task.detached(priority: .utility) { read(kind, name: app.name, pid: pid) }.value
     }
 
-    static func authorize(pid: pid_t) async -> Bool {
+    static func authorize(pid: pid_t) async -> PlaybackAutomationPermission {
         await Task.detached(priority: .userInitiated) {
-            let target = NSAppleEventDescriptor(processIdentifier: pid)
-            return AEDeterminePermissionToAutomateTarget(target.aeDesc, typeWildCard, typeWildCard, true) == noErr
+            permission(pid: pid, askUser: true)
         }.value
+    }
+
+    private static func permission(pid: pid_t, askUser: Bool) -> PlaybackAutomationPermission {
+        let target = NSAppleEventDescriptor(processIdentifier: pid)
+        return PlaybackAutomationPermission(status:
+            AEDeterminePermissionToAutomateTarget(target.aeDesc, typeWildCard, typeWildCard, askUser))
     }
 
     private static func code(_ text: String) -> OSType {
@@ -73,10 +55,9 @@ enum PlaybackStateReader {
         return reply.paramDescriptor(forKeyword: keyDirectObject) ?? .null()
     }
 
-    private static func read(_ kind: PlaybackScripting, pid: pid_t) -> PlaybackObservation {
-        let target = NSAppleEventDescriptor(processIdentifier: pid)
-        guard AEDeterminePermissionToAutomateTarget(target.aeDesc, typeWildCard, typeWildCard, false) == noErr else {
-            return .unavailable("需要授权自动化检测；请打开软件后点击“授权并检查”。")
+    private static func read(_ kind: PlaybackScripting, name: String, pid: pid_t) -> PlaybackObservation {
+        if let message = permission(pid: pid, askUser: false).message(for: name) {
+            return .unavailable(message)
         }
         do {
             if kind == .playerState {
@@ -101,6 +82,7 @@ enum PlaybackStateReader {
             guard windows.descriptorType == typeAEList else { return .unavailable("未能读取浏览器窗口列表。") }
             let deadline = Date().addingTimeInterval(8)
             var inspected = 0, failed = false, mediaFound = false
+            var scriptFailure: PlaybackObservation?
             for index in 1..<(windows.numberOfItems + 1) {
                 guard Date() < deadline, let window = windows.atIndex(index) else { failed = true; break }
                 let tabs = try send(pid: pid, direct: object(kind == .safari ? "bTab" : "CrTb", container: window))
@@ -121,13 +103,20 @@ enum PlaybackStateReader {
                         case "empty": break
                         default: failed = true
                         }
-                    } catch { failed = true }
+                    } catch {
+                        failed = true
+                        if scriptFailure == nil {
+                            scriptFailure = PlaybackDetection.scriptFailure(code: (error as NSError).code,
+                                kind: kind, name: name, executingJavaScript: true)
+                        }
+                    }
                 }
             }
-            if failed { return .unavailable("部分标签页无法读取；浏览器可能需要允许来自 Apple 事件的 JavaScript。") }
+            if let scriptFailure { return scriptFailure }
+            if failed { return .unavailable("部分标签页无法读取，可能包含跨域播放器或受限页面；暂时无法判断播放状态。") }
             return .stopped(mediaFound ? "浏览器中的音视频已暂停" : "浏览器没有正在播放的音视频")
         } catch {
-            return .unavailable("暂时无法读取播放状态；请确认软件已打开且已授权。")
+            return PlaybackDetection.scriptFailure(code: (error as NSError).code, kind: kind, name: name)
         }
     }
 
