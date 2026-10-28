@@ -67,4 +67,32 @@ final class ImmediateStudyStoreTests: XCTestCase {
         XCTAssertEqual(store.result.tasks, result.tasks)
         XCTAssertNil(repository.saved)
     }
+
+    @MainActor func testSyncRefreshReappliesImmediateRequestToDisplayedPeerDrafts() async throws {
+        let now = Date()
+        let calendar = Calendar.current
+        guard calendar.component(.hour, from: now) < 23 || calendar.component(.minute, from: now) < 58 else {
+            throw XCTSkip("Immediate lesson must fit before local midnight")
+        }
+        var loaded = PlannerState()
+        var course = Course(name: "立即学习", totalMinutes: 1, startDate: calendar.startOfDay(for: now), deadline: now)
+        course.type = .lessonBasedRecorded
+        course.manualLessons = [.init(id: "sync-lesson", name: "本节", durationMinutes: 1)]
+        loaded.courses = [course]
+        loaded.settings.availability = (1...7).map { .init(weekday: $0, startMinute: 0, endMinute: 1440) }
+        _ = try loaded.studyImmediately(courseID: course.id, now: now)
+        let request = try XCTUnwrap(loaded.settings.immediateStudy)
+        loaded.tasks[0].start = request.task.start.addingTimeInterval(600)
+        let peer = loaded
+        let repository = Repository()
+        let store = PlannerStore(state: peer, repository: repository,
+                                 result: ScheduleEngine().generate(state: peer, now: now))
+        store.beginCloudSync(operation: { throw URLError(.cancelled) }, snapshot: { (peer, SyncLedger()) })
+        await store.syncTask?.value
+        XCTAssertEqual(store.state.tasks.first { $0.id == request.task.id }, request.task)
+        XCTAssertEqual(store.result.tasks, store.state.tasks)
+        XCTAssertEqual(store.state.settings.immediateStudy, request)
+        XCTAssertFalse(store.syncBusy)
+        XCTAssertNil(store.errorMessage)
+    }
 }

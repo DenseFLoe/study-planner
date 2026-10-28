@@ -326,9 +326,14 @@ final class PlannerStore {
         snapshot: @escaping @Sendable () async throws -> (PlannerState, SyncLedger) = { try await SyncDatabase.snapshot() }
     ) async throws {
         let (loaded, ledger, calculated, load) = try await Task.detached(priority: .userInitiated) {
-            let (state, ledger) = try await snapshot()
+            let (loaded, ledger) = try await snapshot()
+            var state = loaded
             let now = Date()
-            return (state, ledger, ScheduleEngine().generate(state: state, now: now),
+            // A peer may have regenerated its drafts without the Mac-only request.
+            // Publish the requested plan in the task list as well as the assessment.
+            let calculated = state.settings.immediateStudy == nil
+                ? ScheduleEngine().generate(state: state, now: now) : state.replan(now: now)
+            return (state, ledger, calculated,
                     StudyLoadAnalyzer().assess(state: state, now: now))
         }.value
         (repository as? LocalRepository)?.discardCachedModels()
