@@ -6,7 +6,7 @@ struct SchedulePrioritiesPanel: View {
 
     var body: some View {
         Section("排课逻辑权重") {
-            Text("数字越小越优先。先满足 0 级时间约束，再按等级考虑已有偏好；同级按下方默认顺序处理。")
+            Text("数字越小越优先。先满足 0 级时间约束，再满足立即学习要求，最后按等级考虑已有偏好；同级按下方默认顺序处理。")
                 .font(.callout).foregroundStyle(.secondary)
             VStack(alignment: .leading, spacing: 8) {
                 Label("0 级 · 必须遵守", systemImage: "lock.fill").font(.headline)
@@ -15,6 +15,8 @@ struct SchedulePrioritiesPanel: View {
                 Text("保留往日及已确认记录；保持整节课与课节顺序，以及 15 分钟课间休息。普通课程遵守最小时间块，最后余量可更短。")
             }
             .font(.callout).padding(.vertical, 6)
+            Text("Mac 主页的“立即学习”仅次于上述时间约束，高于以下所有偏好和拖动顺序；重排必须保留各课程截止日前已排入的学习量。")
+                .font(.callout).foregroundStyle(.secondary)
             ForEach(ScheduleRule.allCases) { rule in
                 VStack(alignment: .leading, spacing: 6) {
                     Picker(rule.title, selection: Binding(

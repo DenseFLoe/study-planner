@@ -73,6 +73,23 @@ public struct ScheduleEngine: Sendable {
         return result
     }
     public func generate(state: PlannerState, now: Date) -> ScheduleResult {
+        let baseline = generatePlan(state: state, now: now, immediate: nil)
+        guard state.settings.immediateStudy != nil else { return baseline }
+        guard let immediate = state.validImmediateStudyTask(now: now, calendar: calendar) else { return baseline }
+        let candidate = generatePlan(state: state, now: now, immediate: immediate)
+        // Date feasibility outranks the request; never trade away another course's
+        // booked work to satisfy it. Soft preferences only operate on the remainder.
+        let before = Dictionary(grouping: baseline.tasks, by: \.courseID).mapValues { $0.reduce(0) { $0 + $1.durationMinutes } }
+        let after = Dictionary(grouping: candidate.tasks, by: \.courseID).mapValues { $0.reduce(0) { $0 + $1.durationMinutes } }
+        guard before.allSatisfy({ after[$0.key, default: 0] >= $0.value }) else {
+            var fallback = baseline
+            fallback.adjustments.append("立即学习要求会挤掉截止日前已排入的课程，已优先保留合理日期安排。")
+            return fallback
+        }
+        return candidate
+    }
+
+    private func generatePlan(state: PlannerState, now: Date, immediate: ScheduledTask?) -> ScheduleResult {
         let today = calendar.startOfDay(for: now)
         let actualStart = state.settings.actualStudyStart(on: now, calendar: calendar)
         // A daily anchor must not send remaining work back before a saved review,
@@ -80,17 +97,19 @@ public struct ScheduleEngine: Sendable {
         // history so reopening and syncing keep the same scheduling boundary.
         let lastConfirmation = state.tasks.compactMap(\.confirmedAt)
             .filter { calendar.isDate($0, inSameDayAs: now) }.max()
-        let scheduleStart = max(actualStart ?? now, lastConfirmation ?? today)
+        let scheduleStart = max(actualStart ?? now, lastConfirmation ?? today,
+                                immediate?.end.addingTimeInterval(breakSeconds) ?? .distantPast)
         let nextMinute = Date(timeIntervalSince1970: ceil(scheduleStart.timeIntervalSince1970 / 60) * 60)
         let courses = state.courses.filter { !$0.isArchived && $0.autoScheduleEnabled && state.remainingMinutes(for: $0) > 0 }
         let priorities = state.settings.schedulePriorities
         let defaultOrder = priorities.usesDefaultOrder
         var diagnostics: [String] = []
-        let validEvents = state.fixedEvents.filter {
+        var validEvents = state.fixedEvents.filter {
             let valid = $0.validDuration && $0.startMinute >= 0 && $0.endMinute <= 1440 && $0.endMinute > $0.startMinute && $0.endDate >= calendar.startOfDay(for: $0.startDate)
             if !valid { diagnostics.append("固定事项「\($0.title)」的时间无效，请修改。") }
             return valid
         }
+        if let immediate { validEvents.append(state.immediateStudyReservation(immediate, calendar: calendar)) }
         let availability = state.settings.availability.filter {
             let valid = (1...7).contains($0.weekday) && $0.startMinute >= 0 && $0.endMinute <= 1440 && $0.endMinute > $0.startMinute
             if !valid { diagnostics.append("部分可学习时间设置无效，已忽略。") }
@@ -140,12 +159,13 @@ public struct ScheduleEngine: Sendable {
                 blocks += regions
             }
             // Only retained history reserves time; a planned start is not evidence of actual study.
-            let history = state.tasks.filter {
+            var history = state.tasks.filter {
                 let replacingToday = actualStart != nil && calendar.isDate($0.start, inSameDayAs: now)
                 return $0.planningStart < now && (($0.isUnconfirmed && $0.planningEnd <= now && !replacingToday) || $0.completedMinutes > 0)
             }
                 .map { buffered(start: $0.retainedHistoryInterval.start,
                                 end: $0.retainedHistoryInterval.end) }
+            if let immediate { history.append(buffered(start: immediate.start, end: immediate.end)) }
             blocks += history
             hardDays.append(.init(date: day, free: subtract(exact + history, from: windows)))
             eventWindows += subtract(exact + history, from: [.init(start: day, end: instant(day: day, minute: 1440))])
@@ -191,10 +211,14 @@ public struct ScheduleEngine: Sendable {
                     left -= size
                 }
             }
+            if let immediate, immediate.courseID == course.id { work.removeFirst() }
             pending[course.id] = work
-            required[course.id] = remaining
+            let reservedMinutes = immediate.map { $0.courseID == course.id ? $0.durationMinutes : 0 } ?? 0
+            required[course.id] = remaining - reservedMinutes
             let shortest = work.map(\.minutes).min() ?? 0
-            let count = days.filter { eligible(course, $0.date) && $0.free.contains(where: { shortest > 0 && $0.minutes >= shortest }) }.count
+            var count = days.filter { eligible(course, $0.date) && $0.free.contains(where: { shortest > 0 && $0.minutes >= shortest }) }.count
+            if immediate?.courseID == course.id,
+               !days.contains(where: { calendar.isDate($0.date, inSameDayAs: today) && $0.free.contains { shortest > 0 && $0.minutes >= shortest } }) { count += 1 }
             demands[course.id] = .init(remainingMinutes: remaining, learnableDays: count)
         }
         let allWork = pending
@@ -707,7 +731,11 @@ public struct ScheduleEngine: Sendable {
                 tasks[i].floatingWindowEnd = max(task.end, affected.map(\.end).max()!)
             }
         }
-        tasks = state.applyingDailyTaskOrders(to: tasks, calendar: calendar)
+        var orderContext = state
+        if let immediate {
+            orderContext.settings.dailyTaskOrders?.removeAll { calendar.isDate($0.day, inSameDayAs: immediate.start) }
+        }
+        tasks = orderContext.applyingDailyTaskOrders(to: tasks, calendar: calendar)
         for i in tasks.indices {
             let t = tasks[i]
             let base = "task|\(t.courseID.uuidString)|\(Int64(t.start.timeIntervalSinceReferenceDate))|\(t.durationMinutes)" + (t.lessonID.map { "|" + $0 } ?? "")
@@ -722,6 +750,11 @@ public struct ScheduleEngine: Sendable {
             tasks[i].replacesConfirmedBlock = previous?.replacesConfirmedBlock ?? (replacement ? true : nil)
         }
         for i in tasks.indices { tasks[i].status = calendar.isDate(tasks[i].start, inSameDayAs: today) ? .planned : .future }
+        if let immediate {
+            tasks.append(immediate)
+            tasks.sort { $0.start < $1.start }
+            adjustments.append("已优先安排立即学习课节，其余课程在满足日期、固定事项、课间休息与整节顺序后重排。")
+        }
         var risks: [ScheduleRisk] = []
         for cutoff in Set(courses.map { calendar.startOfDay(for: $0.deadline) }).sorted() {
             let group = courses.filter { calendar.startOfDay(for: $0.deadline) <= cutoff }
@@ -734,7 +767,8 @@ public struct ScheduleEngine: Sendable {
         var result = ScheduleResult(tasks: tasks, risks: risks, demands: demands, diagnostics: Array(Set(diagnostics)).sorted())
         result.adjustments = adjustments
         result.dayPlans = originalDays.map { day in
-            .init(date: day.date, availableMinutes: day.free.reduce(0) { $0 + $1.minutes },
+            .init(date: day.date, availableMinutes: day.free.reduce(0) { $0 + $1.minutes } +
+                  (immediate.map { calendar.isDate($0.start, inSameDayAs: day.date) ? $0.durationMinutes : 0 } ?? 0),
                   plannedMinutes: tasks.filter { calendar.isDate($0.start, inSameDayAs: day.date) }.reduce(0) { $0 + $1.durationMinutes })
         }
         // Ignoring floating occupancy and breaks gives an optimistic upper bound.

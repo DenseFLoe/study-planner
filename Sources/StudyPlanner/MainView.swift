@@ -10,11 +10,13 @@ enum Page: String, CaseIterable {
 }
 enum EditorSheet: Identifiable {
     case scheduleSearch
+    case immediateStudy
     case course(Course), lessonOrder(Course), fixed(FixedEvent), completion(ScheduledTask), review, risks, webImport, netdiskImport, mergeCourses
 
     var id: String {
         switch self {
         case .scheduleSearch: "scheduleSearch"
+        case .immediateStudy: "immediateStudy"
         case .course(let course): "course\(course.id)"
         case .lessonOrder(let course): "lessonOrder\(course.id)"
         case .fixed(let event): "fixed\(event.id)"
@@ -90,6 +92,11 @@ struct MainView: View {
         }
         .sheet(item: $sheet, onDismiss: { store.showDailyReview = false }) { selection in
             switch selection {
+            case .immediateStudy:
+                ImmediateStudyPicker(store: store) {
+                    selectedDay = Calendar.current.startOfDay(for: Date())
+                    month = selectedDay
+                }
             case .scheduleSearch:
                 ScheduleSearchView(tasks: store.state.tasks, courses: store.state.courses) { date in
                     selectedDay = Calendar.current.startOfDay(for: date)
@@ -587,6 +594,24 @@ struct MainView: View {
                     tasks: store.state.tasks,
                     courses: store.courses
                 )
+
+                VStack(alignment: .leading, spacing: 10) {
+                    Button { sheet = .immediateStudy } label: {
+                        Label("立刻调换一门不定时课程来上", systemImage: "arrow.left.arrow.right")
+                            .frame(maxWidth: .infinity).fixedSize(horizontal: false, vertical: true)
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(!store.isReady || store.syncBusy || store.orderSaveBusy)
+                    .help("选择不定时录播课程的下一节未完成课节，重排其余课表；时间约束优先，无法满足会报错")
+                    if let request = store.state.settings.immediateStudy, request.task.end > Date(),
+                       store.state.tasks.contains(where: { $0.id == request.task.id && $0.isUnconfirmed }) {
+                        Text("立即学习：\(store.course(request.task.courseID)?.name ?? "课程") · \(request.task.lessonName ?? "下一课节")")
+                            .font(.caption).foregroundStyle(.secondary)
+                        Button("取消立即学习安排") { store.cancelImmediateStudy() }
+                            .font(.caption).disabled(store.syncBusy || store.orderSaveBusy)
+                    }
+                }
+                .padding(14).plannerSurface()
 
                 if let health = ScheduleHealthAnalyzer().assess(state: store.state, result: store.result, now: Date(), heavyDayMinutes: dailyLoadWarningMinutes) {
                     ScheduleHealthWarning(health: health, adjustments: store.result.adjustments, showDetails: { sheet = .risks })

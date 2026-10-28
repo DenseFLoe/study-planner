@@ -211,6 +211,8 @@ public struct AppSettings: Codable, Equatable, Sendable {
     /// A dated override; it expires automatically on the next local day.
     public var actualStudyStart: Date? = nil
     public var dailyTaskOrders: [DailyTaskOrder]? = nil
+    /// A macOS request to keep one unfinished lesson at its selected start.
+    public var immediateStudy: ImmediateStudyRequest? = nil
     /// Optional so older saved plans retain the existing scheduling order.
     public var schedulingRuleLevels: [String: Int]? = nil
     public var availability: [DailyAvailability] = (1...7).map { .init(weekday: $0, startMinute: 8 * 60, endMinute: 23 * 60) }
@@ -425,9 +427,11 @@ public struct PlannerState: Codable, Equatable, Sendable {
         }
         let changedWindows = windows(settings) != windows(updated)
         let actualStart = settings.actualStudyStart
+        let immediateStudy = settings.immediateStudy
         settings = updated
         // The settings editor may have been opened before today's start changed.
         settings.actualStudyStart = actualStart
+        settings.immediateStudy = immediateStudy
         if changedWindows && settings.actualStudyStart(on: now, calendar: calendar) == nil {
             settings.actualStudyStart = now
         }
@@ -441,6 +445,10 @@ public struct PlannerState: Codable, Equatable, Sendable {
     }
     public mutating func replan(now: Date, calendar: Calendar = .current) -> ScheduleResult {
         let result = ScheduleEngine(calendar: calendar).generate(state: self, now: now)
+        if let request = settings.immediateStudy,
+           !result.tasks.contains(where: { $0.id == request.task.id }) {
+            settings.immediateStudy = nil
+        }
         // Keep ended and confirmed history; all unfinished plans, including today, are replaceable.
         let hasActualStart = settings.actualStudyStart(on: now, calendar: calendar) != nil
         tasks.removeAll {

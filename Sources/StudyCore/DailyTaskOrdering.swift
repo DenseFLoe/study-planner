@@ -28,6 +28,8 @@ public enum DailyTaskOrderError: Error, LocalizedError {
 
 extension PlannerState {
     public mutating func swapDailyTasks(_ sourceID: UUID, _ targetID: UUID, now: Date = Date(), calendar: Calendar = .current) throws {
+        if let immediate = validImmediateStudyTask(now: now, calendar: calendar),
+           immediate.id == sourceID || immediate.id == targetID { throw ImmediateStudyError.pinnedTask }
         guard let source = tasks.first(where: { $0.id == sourceID }),
               let target = tasks.first(where: { $0.id == targetID }),
               source.isUnconfirmed, target.isUnconfirmed, sourceID != targetID,
