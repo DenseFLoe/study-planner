@@ -26,8 +26,8 @@ enum PlaybackStateReader {
         text.utf8.reduce(0) { ($0 << 8) | OSType($1) }
     }
 
-    private static func object(_ desired: String, container: NSAppleEventDescriptor = .null(),
-                               property: String? = nil) throws -> NSAppleEventDescriptor {
+    static func object(_ desired: String, container: NSAppleEventDescriptor = .null(),
+                       property: String? = nil) throws -> NSAppleEventDescriptor {
         let record = NSAppleEventDescriptor.record()
         record.setDescriptor(.init(typeCode: code(desired)), forKeyword: code("want"))
         record.setDescriptor(.init(enumCode: code(property == nil ? "indx" : "prop")), forKeyword: code("form"))
@@ -36,7 +36,9 @@ enum PlaybackStateReader {
         guard let selection else { throw NSError(domain: NSOSStatusErrorDomain, code: Int(errAECoercionFail)) }
         record.setDescriptor(selection, forKeyword: code("seld"))
         record.setDescriptor(container, forKeyword: code("from"))
-        guard let specifier = NSAppleEventDescriptor(descriptorType: typeObjectSpecifier, data: record.data) else {
+        // A typed object specifier must remain a record. Rebuilding it from raw
+        // data loses its keyed fields and makes receivers fail with -1700.
+        guard let specifier = record.coerce(toDescriptorType: typeObjectSpecifier) else {
             throw NSError(domain: NSOSStatusErrorDomain, code: Int(errAECoercionFail))
         }
         return specifier
