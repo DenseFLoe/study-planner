@@ -11,7 +11,6 @@ import UserNotifications
     }
     private struct Session {
         var taskIDs: Set<UUID>
-        var firstSeen: Date
         var lastCheck = Date.distantPast
         var unknowns = 0
     }
@@ -28,7 +27,12 @@ import UserNotifications
     /// stale "supervising" label.
     private(set) var activeTaskIDs: Set<UUID> = []
     @ObservationIgnored private weak var store: PlannerStore?
-    @ObservationIgnored private var monitor: Task<Void, Never>?
+    private(set) var nextCheckAt: Date?
+    @ObservationIgnored private var running = false
+    @ObservationIgnored private var timer: Timer?
+    @ObservationIgnored private var checkTask: Task<Void, Never>?
+    @ObservationIgnored private var needsRefresh = false
+    @ObservationIgnored private var observationToken = UUID()
     @ObservationIgnored private var sessions: [UUID: Session] = [:]
     @ObservationIgnored private var lastUnavailableReminders: [UUID: Date] = [:]
     @ObservationIgnored private var observers: [NSObjectProtocol] = []
@@ -40,9 +44,17 @@ import UserNotifications
     @ObservationIgnored private var configurationWritable = true
     @ObservationIgnored private var activity: NSObjectProtocol?
     @ObservationIgnored private let persistent: Bool
+    @ObservationIgnored private let monitoringEnabled: Bool
+    @ObservationIgnored private let observationOverride: (@MainActor (SupervisedApplication) async -> PlaybackObservation)?
+    @ObservationIgnored private let reminderOverride: (@MainActor (UUID, String) async -> Bool)?
 
-    init(persistent: Bool = true) {
+    init(persistent: Bool = true, monitoringEnabled: Bool? = nil,
+         observe: (@MainActor (SupervisedApplication) async -> PlaybackObservation)? = nil,
+         remind: (@MainActor (UUID, String) async -> Bool)? = nil) {
         self.persistent = persistent
+        self.monitoringEnabled = monitoringEnabled ?? persistent
+        self.observationOverride = observe
+        self.reminderOverride = remind
         if persistent, let data = UserDefaults.standard.data(forKey: Self.preferenceKey) {
             do { configuration = try JSONDecoder().decode(Configuration.self, from: data) }
             catch { configurationWritable = false; storageMessage = "软件绑定读取失败；原数据未覆盖，请重新启动后检查。" }
@@ -57,7 +69,7 @@ import UserNotifications
     /// task, rebinding its course or moving its time range makes it false without
     /// waiting for the next tick.
     func isSupervising(_ task: ScheduledTask, now: Date = Date()) -> Bool {
-        guard activeTaskIDs.contains(task.id), monitor != nil, !suspended, !authorizing else { return false }
+        guard activeTaskIDs.contains(task.id), running, !suspended, !authorizing else { return false }
         guard task.isUnconfirmed, task.start <= now, now < task.end else { return false }
         guard application(for: task.courseID) != nil else { return false }
         return store?.course(task.courseID)?.isArchived == false
@@ -86,6 +98,7 @@ import UserNotifications
         statuses.removeValue(forKey: courseID)
         if persistent { UNUserNotificationCenter.current().removeDeliveredNotifications(withIdentifiers: [identifier(courseID)]) }
         summary = hasBindings ? "等待计划学习时段" : "未绑定监督软件"
+        requestCheck()
         return true
     }
 
@@ -107,7 +120,7 @@ import UserNotifications
         authorizing = true
         activeTaskIDs = []
         revision = UUID()
-        defer { authorizing = false; sessions = [:] }
+        defer { authorizing = false; sessions = [:]; requestCheck() }
         do {
             let granted = try await UNUserNotificationCenter.current().requestAuthorization(options: [.alert])
             permissionMessage = granted ? "系统通知已允许。" : "通知未允许，请在系统设置中开启学习日程的通知。"
@@ -150,8 +163,12 @@ import UserNotifications
     }
 
     func start(store: PlannerStore) {
-        guard persistent, monitor == nil else { return }
+        guard monitoringEnabled, !running else { return }
         self.store = store
+        running = true
+        suspended = false
+        observationToken = UUID()
+        trackPlanChanges()
         let center = NSWorkspace.shared.notificationCenter
         for name in [NSWorkspace.willSleepNotification, NSWorkspace.screensDidSleepNotification, NSWorkspace.sessionDidResignActiveNotification] {
             observers.append(center.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
@@ -163,36 +180,129 @@ import UserNotifications
                 Task { @MainActor in self?.resume() }
             })
         }
-        monitor = Task { [weak self] in
-            while !Task.isCancelled {
-                await self?.tick()
-                do { try await Task.sleep(for: .seconds(30)) } catch { break }
+        for name in [NSWorkspace.didLaunchApplicationNotification, NSWorkspace.didTerminateApplicationNotification] {
+            observers.append(center.addObserver(forName: name, object: nil, queue: .main) { [weak self] note in
+                let bundleID = (note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication)?.bundleIdentifier
+                Task { @MainActor in
+                    guard let self, let bundleID,
+                          self.configuration.applications.values.contains(where: { $0.bundleID == bundleID }) else { return }
+                    self.sessions = [:]; self.revision = UUID()
+                    self.requestCheck()
+                }
+            })
+        }
+        observers.append(NotificationCenter.default.addObserver(forName: NSNotification.Name.NSSystemClockDidChange,
+            object: nil, queue: .main) { [weak self] _ in
+                Task { @MainActor in
+                    guard let self, self.running else { return }
+                    self.sessions = [:]; self.revision = UUID(); self.lastTick = .distantPast
+                    self.requestCheck()
+                }
+            })
+        requestCheck()
+    }
+
+    func stop() {
+        running = false
+        revision = UUID(); observationToken = UUID()
+        timer?.invalidate(); timer = nil; nextCheckAt = nil
+        checkTask?.cancel()
+        activeTaskIDs = []; sessions = [:]
+        endActivity()
+        for observer in observers {
+            NSWorkspace.shared.notificationCenter.removeObserver(observer)
+            NotificationCenter.default.removeObserver(observer)
+        }
+        observers = []
+    }
+
+    private func trackPlanChanges() {
+        guard running, let store else { return }
+        let token = observationToken
+        withObservationTracking {
+            _ = store.state
+            _ = store.isReady
+        } onChange: { [weak self] in
+            // Observation invokes onChange before the write completes. Read the
+            // updated snapshot on the next main-actor turn and re-arm tracking.
+            Task { @MainActor in
+                guard let self, self.running, self.observationToken == token else { return }
+                self.trackPlanChanges()
+                self.revision = UUID()
+                self.requestCheck()
             }
         }
     }
 
-    func stop() {
-        monitor?.cancel(); monitor = nil
-        activeTaskIDs = []
-        endActivity()
-        for observer in observers { NSWorkspace.shared.notificationCenter.removeObserver(observer) }
-        observers = []
+    private func requestCheck() {
+        guard running, !suspended else { return }
+        timer?.invalidate(); timer = nil; nextCheckAt = nil
+        // Keep the waiting interval out of App Nap too, otherwise the very timer
+        // intended to start supervision can be deferred until a window opens.
+        if hasBindings {
+            if activity == nil {
+                activity = ProcessInfo.processInfo.beginActivity(options: [.userInitiatedAllowingIdleSystemSleep],
+                    reason: "等待并按学习计划监督软件播放状态")
+            }
+        } else { endActivity() }
+        guard checkTask == nil else { needsRefresh = true; return }
+        checkTask = Task { [weak self] in
+            await self?.tick()
+            guard let self else { return }
+            self.checkTask = nil
+            guard self.running, !self.suspended else { return }
+            if self.needsRefresh {
+                self.needsRefresh = false
+                self.requestCheck()
+            } else { self.scheduleNextCheck() }
+        }
+    }
+
+    private func scheduleNextCheck() {
+        guard running, !suspended, let store else { return }
+        let now = Date()
+        // A short fallback handles day rollover/loading. Every concrete task
+        // boundary and per-course check deadline can wake us earlier.
+        var next = now.addingTimeInterval(30)
+        if hasBindings, store.isReady, !authorizing {
+            for task in store.state.tasks where task.isUnconfirmed && application(for: task.courseID) != nil
+                && store.course(task.courseID)?.isArchived == false {
+                if task.start > now { next = min(next, task.start) }
+                if task.end > now { next = min(next, task.end) }
+            }
+            for session in sessions.values {
+                next = min(next, session.lastCheck.addingTimeInterval(Self.checkInterval))
+            }
+        }
+        // Failed/stale observations can leave a session due. Retry promptly,
+        // while avoiding a zero-delay loop if the plan changes during a probe.
+        next = max(next, now.addingTimeInterval(0.05))
+        nextCheckAt = next
+        let timer = Timer(fire: next, interval: 0, repeats: false) { [weak self] _ in
+            Task { @MainActor in self?.requestCheck() }
+        }
+        self.timer = timer
+        RunLoop.main.add(timer, forMode: .common)
     }
 
     private func suspend() {
+        guard running else { return }
         suspended = true; sessions = [:]; activeTaskIDs = []; revision = UUID()
+        timer?.invalidate(); timer = nil; nextCheckAt = nil
         endActivity()
         summary = "屏幕休眠或会话未激活，监督已暂停"
     }
     private func resume() {
+        guard running else { return }
         suspended = false; sessions = [:]; activeTaskIDs = []; revision = UUID(); lastTick = .distantPast
         summary = hasBindings ? "等待计划学习时段" : "未绑定监督软件"
+        requestCheck()
     }
 
     private func tick() async {
-        guard let store, store.isReady, !checking, !authorizing, !suspended else { return }
+        guard running, !Task.isCancelled, let store, store.isReady, !checking, !authorizing, !suspended else { return }
         let now = Date()
-        // Sleep/long scheduling delays start a fresh grace period, with no catch-up alerts.
+        // Resume/long scheduling delays discard previous failure counts; only check current tasks.
         if now.timeIntervalSince(lastTick) > 90 { sessions = [:] }
         defer { lastTick = Date() }
         store.checkDay()
@@ -215,10 +325,7 @@ import UserNotifications
         let groups = Dictionary(grouping: active, by: \.courseID)
         sessions = sessions.filter { groups[$0.key] != nil }
         statuses = statuses.filter { groups[$0.key] != nil }
-        guard !groups.isEmpty else { endActivity(); summary = "等待计划学习时段"; return }
-        if activity == nil {
-            activity = ProcessInfo.processInfo.beginActivity(options: [.userInitiatedAllowingIdleSystemSleep], reason: "按学习计划监督软件播放状态")
-        }
+        guard !groups.isEmpty else { summary = "等待计划学习时段"; return }
         summary = "正在监督 \(groups.count) 门课程"
         checking = true
         defer { checking = false }
@@ -228,14 +335,10 @@ import UserNotifications
             guard !Task.isCancelled, !suspended, revision == token,
                   let app = application(for: courseID) else { return }
             let taskIDs = Set(tasks.map(\.id))
-            var session = sessions[courseID] ?? Session(taskIDs: taskIDs, firstSeen: now)
-            if session.taskIDs != taskIDs { session = Session(taskIDs: taskIDs, firstSeen: now) }
+            var session = sessions[courseID] ?? Session(taskIDs: taskIDs)
+            if session.taskIDs != taskIDs { session = Session(taskIDs: taskIDs) }
             sessions[courseID] = session
-            guard now.timeIntervalSince(session.firstSeen) >= Self.checkInterval,
-                  now.timeIntervalSince(session.lastCheck) >= Self.checkInterval else {
-                if session.lastCheck == .distantPast { statuses[courseID] = "学习开始后保留 1 分钟准备时间" }
-                continue
-            }
+            guard now.timeIntervalSince(session.lastCheck) >= Self.checkInterval else { continue }
             let observation: PlaybackObservation
             if let cached = observations[app.bundleID] { observation = cached }
             else {
@@ -250,7 +353,7 @@ import UserNotifications
             case .playing(let detail):
                 session.unknowns = 0
                 statuses[courseID] = detail
-                UNUserNotificationCenter.current().removeDeliveredNotifications(withIdentifiers: [identifier(courseID)])
+                if persistent { UNUserNotificationCenter.current().removeDeliveredNotifications(withIdentifiers: [identifier(courseID)]) }
                 body = nil
             case .stopped(let detail):
                 session.unknowns = 0
@@ -272,6 +375,7 @@ import UserNotifications
     }
 
     private func observe(_ app: SupervisedApplication) async -> PlaybackObservation {
+        if let observationOverride { return await observationOverride(app) }
         guard let running = NSRunningApplication.runningApplications(withBundleIdentifier: app.bundleID).first else {
             return .stopped("对应软件尚未打开")
         }
@@ -298,6 +402,8 @@ import UserNotifications
     }
 
     private func notify(courseID: UUID, body: String, revision token: UUID, taskIDs: Set<UUID>) async -> Bool {
+        if let reminderOverride { return await reminderOverride(courseID, body) }
+        guard persistent else { return false }
         let center = UNUserNotificationCenter.current()
         let settings = await center.notificationSettings()
         guard revision == token, !suspended,
