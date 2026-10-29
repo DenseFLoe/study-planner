@@ -122,7 +122,7 @@ import UserNotifications
         revision = UUID()
         defer { authorizing = false; sessions = [:]; requestCheck() }
         do {
-            let granted = try await UNUserNotificationCenter.current().requestAuthorization(options: [.alert])
+            let granted = try await UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound])
             permissionMessage = granted ? "系统通知已允许。" : "通知未允许，请在系统设置中开启学习日程的通知。"
         } catch { permissionMessage = "通知授权未完成，请在系统设置中检查。" }
         guard let running = NSRunningApplication.runningApplications(withBundleIdentifier: application.bundleID).first else {
@@ -414,6 +414,7 @@ import UserNotifications
         }
         let content = UNMutableNotificationContent()
         content.title = "学习监督提醒"; content.body = body
+        content.sound = .default
         do { try await center.add(UNNotificationRequest(identifier: identifier(courseID), content: content, trigger: nil)); return true }
         catch { permissionMessage = "监督通知发送失败，请检查系统通知设置。"; return false }
     }

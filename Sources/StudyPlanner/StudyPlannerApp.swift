@@ -25,7 +25,7 @@ import UserNotifications
     }
     func applicationWillTerminate(_ notification: Notification) { store?.playbackSupervisor.stop() }
     nonisolated func userNotificationCenter(_ center: UNUserNotificationCenter,
-        willPresent notification: UNNotification) async -> UNNotificationPresentationOptions { [.banner, .list] }
+        willPresent notification: UNNotification) async -> UNNotificationPresentationOptions { [.banner, .list, .sound] }
 }
 struct StudyPlannerApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var delegate
