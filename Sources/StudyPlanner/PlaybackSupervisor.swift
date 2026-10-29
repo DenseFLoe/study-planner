@@ -17,6 +17,7 @@ import UserNotifications
     static let checkInterval: TimeInterval = 60
     private static let preferenceKey = "macPlaybackSupervision.v1"
     private var configuration = Configuration()
+    let reminderSound: SupervisionSoundSettings
     private(set) var statuses: [UUID: String] = [:]
     private(set) var summary = "未绑定监督软件"
     private(set) var storageMessage: String?
@@ -52,6 +53,7 @@ import UserNotifications
          observe: (@MainActor (SupervisedApplication) async -> PlaybackObservation)? = nil,
          remind: (@MainActor (UUID, String) async -> Bool)? = nil) {
         self.persistent = persistent
+        self.reminderSound = SupervisionSoundSettings(defaults: persistent ? .standard : nil)
         self.monitoringEnabled = monitoringEnabled ?? persistent
         self.observationOverride = observe
         self.reminderOverride = remind
@@ -414,7 +416,7 @@ import UserNotifications
         }
         let content = UNMutableNotificationContent()
         content.title = "学习监督提醒"; content.body = body
-        content.sound = .default
+        content.sound = reminderSound.notificationSound
         do { try await center.add(UNNotificationRequest(identifier: identifier(courseID), content: content, trigger: nil)); return true }
         catch { permissionMessage = "监督通知发送失败，请检查系统通知设置。"; return false }
     }

@@ -82,6 +82,7 @@ struct PlaybackSupervisionSettings: View {
             Text(supervisor.permissionMessage).font(.caption).foregroundStyle(.secondary).textSelection(.enabled)
             if let message = supervisor.storageMessage { Text(message).foregroundStyle(.orange) }
         }
+        SupervisionSoundPicker(settings: supervisor.reminderSound)
         Section("检测权限与限制") {
             Text("浏览器及部分播放器使用自动化权限读取播放状态。请在“系统设置 → 隐私与安全性 → 自动化 → 学习日程”中允许对应软件。")
                 .font(.caption).foregroundStyle(.secondary)
