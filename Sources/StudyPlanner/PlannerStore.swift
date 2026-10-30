@@ -6,7 +6,10 @@ import Network
 
 @MainActor @Observable
 final class PlannerStore {
-    private(set) var state = PlannerState()
+    private(set) var state = PlannerState() {
+        didSet { compressedPlan.update(state: state) }
+    }
+    let compressedPlan = CompressedScheduleController()
     private(set) var result = ScheduleResultPlaceholder.empty
     private(set) var studyLoad: StudyLoadAssessment?
     var errorMessage: String?
@@ -48,6 +51,7 @@ final class PlannerStore {
             isReady = true
             if demo { loadExample() } else { replan() }
             checkDay()
+            compressedPlan.update(state: state)
         } catch { errorMessage = "无法打开本地数据库：\(error.localizedDescription)\n为保护已有数据，未创建替代数据库。" }
     }
     init(state: PlannerState, repository: any PlannerRepository, result: ScheduleResult,
@@ -59,6 +63,7 @@ final class PlannerStore {
         self.demo = true
         self.playbackSupervisor = PlaybackSupervisor(persistent: false)
         self.isReady = true
+        compressedPlan.update(state: state)
     }
     var courses: [Course] { state.courses.filter { !$0.isArchived }.sorted { $0.deadline < $1.deadline } }
     func course(_ id: UUID) -> Course? { state.courses.first { $0.id == id } }
