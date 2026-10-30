@@ -57,6 +57,35 @@ final class ImmediateStudyStoreTests: XCTestCase {
         XCTAssertNil(repository.saved)
     }
 
+    @MainActor func testSelectedLessonIsSavedAndDisplayedAheadOfEarlierLesson() throws {
+        let (state, result, now) = fixture()
+        let repository = Repository()
+        let store = PlannerStore(state: state, repository: repository, result: result)
+        XCTAssertTrue(store.studyImmediately(courseID: state.courses[0].id, lessonID: "2", now: now))
+        let saved = try XCTUnwrap(repository.saved)
+        XCTAssertEqual(saved, store.state)
+        XCTAssertEqual(saved.settings.immediateStudy?.task.lessonID, "2")
+        XCTAssertEqual(store.result.tasks.map(\.lessonID), ["2", "1"])
+        XCTAssertEqual(store.result.tasks.first?.start, now)
+        XCTAssertEqual(store.result.tasks, saved.tasks)
+        XCTAssertTrue(saved.completions.isEmpty)
+        XCTAssertNil(store.errorMessage)
+    }
+
+    @MainActor func testSelectedLessonSaveFailurePreservesPreviousPlanAndRequest() throws {
+        var (state, result, now) = fixture()
+        result = try state.studyImmediately(courseID: state.courses[0].id, now: now)
+        let repository = Repository()
+        repository.fails = true
+        let store = PlannerStore(state: state, repository: repository, result: result)
+        XCTAssertFalse(store.studyImmediately(courseID: state.courses[0].id, lessonID: "2", now: now))
+        XCTAssertEqual(store.state, state)
+        XCTAssertEqual(store.result.tasks, result.tasks)
+        XCTAssertEqual(store.state.settings.immediateStudy?.task.lessonID, "1")
+        XCTAssertNil(repository.saved)
+        XCTAssertNotNil(store.errorMessage)
+    }
+
     @MainActor func testImpossibleRequestDoesNotWriteRepository() {
         var (state, result, now) = fixture()
         state.fixedEvents = [.init(title: "占用", startMinute: 480, endMinute: 600, startDate: now, endDate: now)]

@@ -211,7 +211,11 @@ public struct ScheduleEngine: Sendable {
                     left -= size
                 }
             }
-            if let immediate, immediate.courseID == course.id { work.removeFirst() }
+            // Only the selected lesson moves ahead; earlier unfinished lessons
+            // stay in their original order in the remaining queue.
+            if let immediate, immediate.courseID == course.id {
+                work.removeAll { $0.lessonID == immediate.lessonID }
+            }
             pending[course.id] = work
             let reservedMinutes = immediate.map { $0.courseID == course.id ? $0.durationMinutes : 0 } ?? 0
             required[course.id] = remaining - reservedMinutes

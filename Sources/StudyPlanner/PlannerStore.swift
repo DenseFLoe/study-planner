@@ -112,13 +112,13 @@ final class PlannerStore {
     func waitForOrderSave() async -> Bool { await orderSaveTask?.value ?? true }
     func replan() { change { _ in } }
     @discardableResult
-    func studyImmediately(courseID: UUID, now: Date = Date()) -> Bool {
+    func studyImmediately(courseID: UUID, lessonID: String? = nil, now: Date = Date()) -> Bool {
         guard !syncBusy else { errorMessage = "正在同步，请等待完成后再调换。"; return false }
         guard !orderSaveBusy else { errorMessage = "正在保存课程顺序，请稍后再试。"; return false }
         guard let repository, isReady else { return false }
         do {
             var next = state
-            let planned = try next.studyImmediately(courseID: courseID, now: now)
+            let planned = try next.studyImmediately(courseID: courseID, lessonID: lessonID, now: now)
             try repository.save(next)
             state = next; result = planned
             studyLoad = StudyLoadAnalyzer().assess(state: next, now: now)

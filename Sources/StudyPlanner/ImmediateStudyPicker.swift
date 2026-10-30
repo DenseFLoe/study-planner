@@ -1,57 +1,44 @@
 import SwiftUI
 import StudyCore
 
-struct ImmediateStudyPicker: View {
+/// 两层原生菜单：课程 → 未完成分节。选中后仅该分节提前到当前分钟开始，其余分节按原顺序重排。
+struct ImmediateStudyMenu: View {
     @Bindable var store: PlannerStore
     var didSchedule: () -> Void
-    @Environment(\.dismiss) private var dismiss
-    @State private var selectedID: UUID?
-    @State private var failure: String?
+
+    private var entryDisabled: Bool { !store.isReady || store.syncBusy || store.orderSaveBusy }
 
     var body: some View {
         let courses = store.state.immediateStudyCourses
-        VStack(alignment: .leading, spacing: 18) {
-            Text("立刻调换到现在来上").font(.title2.bold())
-            Text("选择一门不定时录播课程，将下一节未完成课节安排在现在（按分钟取整），其余未确认课程重新排课。")
-                .foregroundStyle(.secondary)
+        Menu {
             if courses.isEmpty {
-                ContentUnavailableView("没有可选的不定时课程", systemImage: "books.vertical",
-                                       description: Text("请先添加含课节的不定时录播课程，并开启自动排课。"))
+                Button("暂无可立即学习的不定时课程") {}.disabled(true)
             } else {
-                Picker("选择课程", selection: $selectedID) {
-                    Text("请选择课程").tag(nil as UUID?)
-                    ForEach(courses) { course in Text(course.name).tag(Optional(course.id)) }
-                }
-                if let course = courses.first(where: { $0.id == selectedID }),
-                   let lesson = store.state.lessonWorkItems(for: course).first(where: { $0.remainingMinutes > 0 }) {
-                    VStack(alignment: .leading, spacing: 6) {
-                        Text(lesson.name).font(.headline)
-                        Text("本节剩余 \(lesson.remainingMinutes) 分钟 · 保留原课节顺序")
-                            .font(.callout).foregroundStyle(.secondary)
+                ForEach(courses) { course in
+                    Menu(course.name) {
+                        let lessons = store.state.lessonWorkItems(for: course).filter { $0.remainingMinutes > 0 }
+                        if lessons.isEmpty {
+                            Button("暂无未完成分节") {}.disabled(true)
+                        } else {
+                            ForEach(lessons) { lesson in
+                                Button {
+                                    if store.studyImmediately(courseID: course.id, lessonID: lesson.id) { didSchedule() }
+                                } label: {
+                                    Text("\(lesson.name) · 剩余 \(lesson.remainingMinutes) 分钟")
+                                }
+                            }
+                        }
                     }
                 }
             }
-            Text("日期、可学习时段、固定事项与 15 分钟课间休息优先。立即学习高于混排、每日加量、课程优先级、均衡和拖动顺序；重排必须保留各课程截止日前已排入的学习量。无法满足时提示错误并保留原课表。")
-                .font(.caption).foregroundStyle(.secondary)
-            Text("成功后，本节在结束或确认前继续优先；修改时间约束使其失效时按时间约束重排，也可在右侧取消。")
-                .font(.caption).foregroundStyle(.secondary)
-            if let failure { Text(failure).font(.callout).foregroundStyle(.red).textSelection(.enabled) }
-            HStack {
-                Spacer()
-                Button("取消") { dismiss() }.keyboardShortcut(.cancelAction)
-                Button("立即调换并重排") {
-                    guard let selectedID else { return }
-                    if store.studyImmediately(courseID: selectedID) {
-                        didSchedule(); dismiss()
-                    } else {
-                        failure = store.errorMessage
-                        store.errorMessage = nil
-                    }
-                }
-                .buttonStyle(.borderedProminent).keyboardShortcut(.defaultAction)
-                .disabled(selectedID == nil || store.syncBusy || store.orderSaveBusy)
-            }
+        } label: {
+            Label("立即上某节课", systemImage: "play.circle")
+                .frame(maxWidth: .infinity)
+                .fixedSize(horizontal: false, vertical: true)
         }
-        .padding(24).frame(width: 560)
+        .menuStyle(.button)
+        .buttonStyle(.borderedProminent)
+        .disabled(entryDisabled)
+        .help("选择任意未完成分节，从当前分钟向上取整开始上课；仅该分节提前，其余分节按原顺序重排，失败时保留原课表")
     }
 }

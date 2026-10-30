@@ -28,9 +28,12 @@ extension PlannerState {
 
     /// Builds and validates a complete replacement before publishing any mutation.
     @discardableResult
-    public mutating func studyImmediately(courseID: UUID, now: Date = Date(), calendar: Calendar = .current) throws -> ScheduleResult {
+    public mutating func studyImmediately(courseID: UUID, lessonID: String? = nil,
+                                         now: Date = Date(), calendar: Calendar = .current) throws -> ScheduleResult {
         guard let course = immediateStudyCourses.first(where: { $0.id == courseID }),
-              let lesson = lessonWorkItems(for: course).first(where: { $0.remainingMinutes > 0 }) else {
+              let lesson = lessonWorkItems(for: course).first(where: {
+                  $0.remainingMinutes > 0 && (lessonID == nil || $0.id == lessonID)
+              }) else {
             throw ImmediateStudyError.unavailable
         }
         let start = Date(timeIntervalSince1970: ceil(now.timeIntervalSince1970 / 60) * 60)
@@ -57,8 +60,8 @@ extension PlannerState {
               task.start.timeIntervalSince(now) < 60,
               !tasks.contains(where: { $0.id == task.id && !$0.isUnconfirmed }),
               let course = immediateStudyCourses.first(where: { $0.id == task.courseID }),
-              let lesson = lessonWorkItems(for: course).first(where: { $0.remainingMinutes > 0 }),
-              lesson.id == task.lessonID, lesson.remainingMinutes == task.durationMinutes,
+              let lesson = lessonWorkItems(for: course).first(where: { $0.id == task.lessonID && $0.remainingMinutes > 0 }),
+              lesson.remainingMinutes == task.durationMinutes,
               lessonWorkItems(for: course).reduce(0, { $0 + $1.remainingMinutes }) == remainingMinutes(for: course) else { return nil }
         let day = calendar.startOfDay(for: task.start)
         let engine = ScheduleEngine(calendar: calendar)
