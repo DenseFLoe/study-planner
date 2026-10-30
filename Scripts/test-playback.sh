@@ -9,7 +9,9 @@ export CLANG_MODULE_CACHE_PATH="$test_dir/clang-module-cache"
 export SWIFTPM_MODULECACHE_OVERRIDE="$test_dir/swift-module-cache"
 mkdir -p "$test_dir/Sources/StudyPlanner" "$test_dir/Tests/StudyPlannerTests"
 cp "$repo_dir/Sources/StudyPlanner/PlaybackDetection.swift" "$test_dir/Sources/StudyPlanner/"
+cp "$repo_dir/Sources/StudyPlanner/BrowserPlaybackScan.swift" "$test_dir/Sources/StudyPlanner/"
 cp "$repo_dir/Tests/StudyPlannerTests/PlaybackDetectionTests.swift" "$test_dir/Tests/StudyPlannerTests/"
+cp "$repo_dir/Tests/StudyPlannerTests/BrowserPlaybackScanTests.swift" "$test_dir/Tests/StudyPlannerTests/"
 cat > "$test_dir/Package.swift" <<'SWIFT'
 // swift-tools-version: 6.0
 import PackageDescription

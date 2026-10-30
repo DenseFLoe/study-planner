@@ -167,5 +167,29 @@ import StudyPersistence
         XCTAssertTrue(supervisor.activeTaskIDs.isEmpty)
     }
 
+    func testReadableBrowserPauseWithUnreadableTabDeliversPauseReminder() async throws {
+        let (store, app, root) = try fixture(starts: [Date().addingTimeInterval(-1)])
+        defer { try? FileManager.default.removeItem(at: root) }
+        let reminded = expectation(description: "browser pause reminder")
+        let supervisor = PlaybackSupervisor(persistent: false, monitoringEnabled: true, observe: { _ in
+            var scan = BrowserPlaybackScan()
+            scan.record("unknown")
+            scan.record("stopped")
+            return await PlaybackDetection.check(kind: .safari, name: "Safari",
+                readScripted: { scan.observation },
+                readAudio: { XCTFail("Safari must not use shared WebKit audio"); return .unavailable("audio") })
+        }, remind: { _, body in
+            XCTAssertTrue(body.contains("已暂停"))
+            XCTAssertFalse(body.contains("暂不可用"))
+            reminded.fulfill()
+            return true
+        })
+        defer { supervisor.stop() }
+        XCTAssertTrue(supervisor.setApplication(app, for: store.state.courses[0].id))
+        supervisor.start(store: store)
+        await fulfillment(of: [reminded], timeout: 2)
+        XCTAssertEqual(supervisor.statuses[store.state.courses[0].id], "浏览器中已读取到的音视频已暂停")
+    }
+
     private func drain() async { try? await Task.sleep(for: .milliseconds(100)) }
 }

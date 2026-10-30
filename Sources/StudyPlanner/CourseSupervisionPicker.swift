@@ -88,7 +88,7 @@ struct PlaybackSupervisionSettings: View {
                 .font(.caption).foregroundStyle(.secondary)
             Text(PlaybackDetection.safariJavaScriptHelp)
                 .font(.caption).foregroundStyle(.secondary).textSelection(.enabled)
-            Text("Safari 的脚本开关与系统自动化权限需分别开启。跨域或受限页面仍可能无法读取；Safari 会显示具体原因，其他软件可尝试音频检测。")
+            Text("Safari 的脚本开关与系统自动化权限需分别开启。已读取到的播放或暂停状态优先，其他受限页面不会覆盖暂停状态。播放器本身不可读时仍显示检测不可用；Safari 会显示具体原因，其他软件可尝试音频检测。")
                 .font(.caption).foregroundStyle(.secondary)
             Text("通用软件需 macOS 14.2 及以上，并允许系统音频录制。仅在检测时短暂分析该软件的音量，不保存或上传音频，也不截图。音频方式可能无法识别静音或极低音量播放，首次需有声播放以验证。")
                 .font(.caption).foregroundStyle(.secondary)

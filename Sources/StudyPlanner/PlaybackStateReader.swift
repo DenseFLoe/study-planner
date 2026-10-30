@@ -83,61 +83,39 @@ enum PlaybackStateReader {
             let windows = try send(pid: pid, direct: object("cwin"))
             guard windows.descriptorType == typeAEList else { return .unavailable("未能读取浏览器窗口列表。") }
             let deadline = Date().addingTimeInterval(8)
-            var inspected = 0, failed = false, mediaFound = false
-            var scriptFailure: PlaybackObservation?
+            var inspected = 0
+            var scan = BrowserPlaybackScan()
             for index in 1..<(windows.numberOfItems + 1) {
-                guard Date() < deadline, let window = windows.atIndex(index) else { failed = true; break }
-                let tabs = try send(pid: pid, direct: object(kind == .safari ? "bTab" : "CrTb", container: window))
-                guard tabs.descriptorType == typeAEList else { failed = true; continue }
+                guard Date() < deadline, let window = windows.atIndex(index) else { scan.recordFailure(); break }
+                let tabs: NSAppleEventDescriptor
+                do {
+                    tabs = try send(pid: pid, direct: object(kind == .safari ? "bTab" : "CrTb", container: window))
+                } catch {
+                    scan.recordFailure(PlaybackDetection.scriptFailure(code: (error as NSError).code, kind: kind, name: name))
+                    continue
+                }
+                guard tabs.descriptorType == typeAEList else { scan.recordFailure(); continue }
                 for tabIndex in 1..<(tabs.numberOfItems + 1) {
-                    guard inspected < 100, Date() < deadline, let tab = tabs.atIndex(tabIndex) else { failed = true; break }
+                    guard inspected < 100, Date() < deadline, let tab = tabs.atIndex(tabIndex) else { scan.recordFailure(); break }
                     inspected += 1
                     do {
                         let result: NSAppleEventDescriptor
                         if kind == .safari {
-                            result = try send(pid: pid, eventClass: "sfri", eventID: "dojs", direct: .init(string: mediaScript), parameter: ("dcnm", tab))
+                            result = try send(pid: pid, eventClass: "sfri", eventID: "dojs", direct: .init(string: BrowserPlaybackScan.mediaScript), parameter: ("dcnm", tab))
                         } else {
-                            result = try send(pid: pid, eventClass: "CrSu", eventID: "ExJa", direct: tab, parameter: ("JvSc", .init(string: mediaScript)))
+                            result = try send(pid: pid, eventClass: "CrSu", eventID: "ExJa", direct: tab, parameter: ("JvSc", .init(string: BrowserPlaybackScan.mediaScript)))
                         }
-                        switch result.stringValue {
-                        case "playing": return .playing("浏览器中有音视频正在播放")
-                        case "stopped": mediaFound = true
-                        case "empty": break
-                        default: failed = true
-                        }
+                        scan.record(result.stringValue)
+                        if scan.isPlaying { return scan.observation }
                     } catch {
-                        failed = true
-                        if scriptFailure == nil {
-                            scriptFailure = PlaybackDetection.scriptFailure(code: (error as NSError).code,
-                                kind: kind, name: name, executingJavaScript: true)
-                        }
+                        scan.recordFailure(PlaybackDetection.scriptFailure(code: (error as NSError).code,
+                            kind: kind, name: name, executingJavaScript: true))
                     }
                 }
             }
-            if let scriptFailure { return scriptFailure }
-            if failed { return .unavailable("部分标签页无法读取，可能包含跨域播放器或受限页面；暂时无法判断播放状态。") }
-            return .stopped(mediaFound ? "浏览器中的音视频已暂停" : "浏览器没有正在播放的音视频")
+            return scan.observation
         } catch {
             return PlaybackDetection.scriptFailure(code: (error as NSError).code, kind: kind, name: name)
         }
     }
-
-    // Returns only a state. No URLs, page titles, course names, or media content leave the browser.
-    private static let mediaScript = #"""
-    (() => {
-      let found = false, playing = false, inaccessible = false;
-      const visit = (doc) => {
-        for (const media of doc.querySelectorAll('video,audio')) {
-          found = true;
-          if (!media.paused && !media.ended && !media.seeking && media.readyState >= 2 && media.playbackRate > 0) playing = true;
-        }
-        for (const frame of doc.querySelectorAll('iframe,frame')) {
-          try { if (frame.contentDocument) visit(frame.contentDocument); else inaccessible = true; }
-          catch (_) { inaccessible = true; }
-        }
-      };
-      visit(document);
-      return playing ? 'playing' : (inaccessible ? 'unknown' : (found ? 'stopped' : 'empty'));
-    })()
-    """#
 }
