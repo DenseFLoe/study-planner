@@ -522,7 +522,7 @@ struct DailyReviewView: View {
                 Button("保存并重新排程") {
                     let now = Date()
                     let needsReplan = tasks.contains { $0.confirmationRequiresReplan(actualMinutes: values[$0.id] ?? 0, now: now) }
-                    let success = store.change(replan: needsReplan) { state in
+                    let success = store.change(replan: needsReplan, now: now) { state in
                         for task in tasks { try state.confirm(taskID: task.id, actualMinutes: values[task.id] ?? 0, now: now, studyDate: studyDates[task.id] ?? min(task.start, now)) }
                     }
                     if success { dismiss() }

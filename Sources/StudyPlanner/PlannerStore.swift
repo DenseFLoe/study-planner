@@ -63,7 +63,7 @@ final class PlannerStore {
     var courses: [Course] { state.courses.filter { !$0.isArchived }.sorted { $0.deadline < $1.deadline } }
     func course(_ id: UUID) -> Course? { state.courses.first { $0.id == id } }
     @discardableResult
-    func change(replan shouldReplan: Bool = true, _ mutation: (inout PlannerState) throws -> Void) -> Bool {
+    func change(replan shouldReplan: Bool = true, now: Date = Date(), _ mutation: (inout PlannerState) throws -> Void) -> Bool {
         guard !syncBusy else { errorMessage = "正在同步，请等待完成后再保存修改。"; return false }
         guard !orderSaveBusy else { errorMessage = "正在保存课程顺序，请稍后再试。"; return false }
         guard let repository, isReady else { return false }
@@ -71,10 +71,10 @@ final class PlannerStore {
             var next = state
             try mutation(&next)
             next.removeArchivedCourses()
-            let planned = shouldReplan ? next.replan(now: Date()) : ScheduleEngine().generate(state: next, now: Date())
+            let planned = shouldReplan ? next.replan(now: now) : ScheduleEngine().assessSavedPlan(state: next, now: now)
             try repository.save(next)
             state = next; result = planned
-            studyLoad = StudyLoadAnalyzer().assess(state: next, now: Date())
+            studyLoad = StudyLoadAnalyzer().assess(state: next, now: now)
             return true
         } catch { errorMessage = "操作未保存：\(error.localizedDescription)"; return false }
     }
@@ -181,11 +181,10 @@ final class PlannerStore {
     func setEventSkipped(_ event: FixedEvent, on day: Date, skipped: Bool) {
         change { try $0.setFixedEventSkipped(id: event.id, on: day, skipped: skipped, now: Date()) }
     }
-    func confirm(_ task: ScheduledTask, minutes: Int, studyDate: Date? = nil) -> Bool {
+    func confirm(_ task: ScheduledTask, minutes: Int, studyDate: Date? = nil, now: Date = Date()) -> Bool {
         // Preserve active/future full completions; ended tasks may already have
         // replacement work scheduled, which must shrink when progress is credited.
-        let now = Date()
-        return change(replan: task.confirmationRequiresReplan(actualMinutes: minutes, now: now)) {
+        return change(replan: task.confirmationRequiresReplan(actualMinutes: minutes, now: now), now: now) {
             try $0.confirm(taskID: task.id, actualMinutes: minutes, now: now, studyDate: studyDate)
         }
     }
@@ -320,7 +319,7 @@ final class PlannerStore {
             // A peer may have regenerated its drafts without the Mac-only request.
             // Publish the requested plan in the task list as well as the assessment.
             let calculated = state.settings.immediateStudy == nil
-                ? ScheduleEngine().generate(state: state, now: now) : state.replan(now: now)
+                ? ScheduleEngine().assessSavedPlan(state: state, now: now) : state.replan(now: now)
             return (state, ledger, calculated,
                     StudyLoadAnalyzer().assess(state: state, now: now))
         }.value
