@@ -19,7 +19,7 @@ fi
 if command -v sha256sum >/dev/null; then digest="$(sha256sum "$json_source")"; else digest="$(shasum -a 256 "$json_source")"; fi
 [[ "${digest%% *}" == 3cf6cd6892e32e2b4c1c39e0f52f5248a2f5b37646fdfbb79a66b46b618414ed ]] || { echo 'JSON-java dependency checksum mismatch' >&2; exit 1; }
 sources=()
-for name in Planner SchedulePreferenceOptimizer SchedulePriorities ScheduleExplanation DailyTaskOrdering CourseTools StudyLoad ScheduleFeasibilitySearch ScheduleHealth WebCourseImport SyncLedger SyncJSON SyncExchange CloudSnapshot; do
+for name in Planner SchedulePreferenceOptimizer SchedulePriorities ScheduleExplanation DailyTaskOrdering CourseTools StudyLoad ScheduleFeasibilitySearch ScheduleHealth SavedScheduleAssessment WebCourseImport SyncLedger SyncJSON SyncExchange CloudSnapshot; do
   sources+=("Android/src/local/studyplanner/$name.java")
 done
 "$JDK/bin/javac" --release 11 -encoding UTF-8 -cp "$json_source" -d "$classes" "${sources[@]}" Server/src/local/studyplanner/*.java

@@ -5,11 +5,13 @@ import StudyCore
 @MainActor @Observable
 final class CompressedScheduleController {
     private(set) var plan: CompressedSchedule?
+    private(set) var sharedPreview: CompressedSchedulePreview?
     private(set) var calculating = false
     private(set) var message: String?
     @ObservationIgnored private var task: Task<Void, Never>?
     @ObservationIgnored private var generation = UUID()
     @ObservationIgnored private var input: Input?
+    @ObservationIgnored var onResolved: ((CompressedSchedulePreview) -> Void)?
     @ObservationIgnored private let calculate: @Sendable (PlannerState, Date, Calendar) async throws -> CompressedSchedule
 
     private struct Input: Equatable {
@@ -36,12 +38,13 @@ final class CompressedScheduleController {
         task?.cancel()
         let token = UUID(), operation = calculate
         generation = token
-        calculating = true; plan = nil; message = nil
+        calculating = true; plan = nil; sharedPreview = nil; message = nil
         task = Task.detached(priority: .utility) { [weak self] in
             do {
                 let value = try await operation(next.state, now, calendar)
                 guard !Task.isCancelled else { return }
-                await self?.accept(value, message: nil, token: token)
+                let preview = try? CompressedSchedulePreview(plan: value, state: next.state)
+                await self?.accept(value, preview: preview, message: nil, token: token)
             } catch is CancellationError {
                 // Replaced inputs own their own running indicator and result.
             } catch {
@@ -51,9 +54,10 @@ final class CompressedScheduleController {
         }
     }
 
-    private func accept(_ value: CompressedSchedule?, message: String?, token: UUID) {
+    private func accept(_ value: CompressedSchedule?, preview: CompressedSchedulePreview? = nil, message: String?, token: UUID) {
         guard generation == token else { return }
-        plan = value; self.message = message; calculating = false; task = nil
+        plan = value; sharedPreview = preview; self.message = message; calculating = false; task = nil
+        if let preview { onResolved?(preview) }
     }
 
     func waitForCalculation() async { await task?.value }

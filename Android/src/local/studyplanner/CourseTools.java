@@ -53,6 +53,28 @@ public final class CourseTools {
         Set<String> ids=new HashSet<>();JSONArray raw=course.optJSONArray("deletedLessonIDs");
         if(raw!=null)for(int i=0;i<raw.length();i++)ids.add(raw.getString(i));return ids;
     }
+    /** Apply an editor draft atomically; manual deletions use the same progress rules as the order editor. */
+    public static void updateCourse(JSONObject state,JSONObject edited,double now)throws Exception {
+        JSONObject next=copy(state),saved=copy(edited),original=Planner.course(next,saved.getString("id"));
+        if(original!=null&&original.optJSONArray("manualLessons")!=null&&saved.optJSONArray("manualLessons")!=null&&Planner.isManualLessonCourse(original,original.optString("type"))&&Planner.isManualLessonCourse(saved,saved.optString("type"))){
+            Set<String> retained=new HashSet<>();for(JSONObject l:Planner.list(saved.optJSONArray("manualLessons")))retained.add(l.getString("id"));
+            Set<String> removed=new HashSet<>();for(JSONObject l:Planner.list(original.optJSONArray("manualLessons")))if(!retained.contains(l.getString("id")))removed.add(l.getString("id"));
+            Set<String> deleted=deletedIDs(original);deleted.addAll(deletedIDs(saved));
+            if(!Collections.disjoint(deleted,retained))throw new IllegalArgumentException("部分课节已删除，请重新打开课程后编辑。");
+            if(!removed.isEmpty()){
+                removeLessons(next,original.getString("id"),removed);
+                JSONObject trimmed=Planner.course(next,original.getString("id"));
+                // Deduct only credit belonging to deleted lessons, retaining edits to the baseline.
+                int removedCredit=original.optInt("initialCompletedMinutes")-trimmed.optInt("initialCompletedMinutes");
+                saved.put("initialCompletedMinutes",Math.max(0,saved.optInt("initialCompletedMinutes")-removedCredit));
+                deleted.addAll(removed);
+            }
+            if(!deleted.isEmpty())saved.put("deletedLessonIDs",new JSONArray(new TreeSet<>(deleted)));
+        }
+        Planner.put(next.getJSONArray("courses"),saved);purgeDeletedLessonRecords(next,Collections.emptyList());
+        Planner.validateCourseEdit(next,saved,now);
+        for(String key:new String[]{"courses","tasks","completions"})state.put(key,next.get(key));
+    }
     public static void removeLessons(JSONObject state,String courseID,Set<String> ids)throws Exception {
         JSONObject next=copy(state),course=Planner.course(next,courseID);
         if(course==null||course.optBoolean("isArchived"))throw new IllegalArgumentException("课程已不存在，请重新打开。");

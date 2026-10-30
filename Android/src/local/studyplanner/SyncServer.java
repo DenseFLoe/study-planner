@@ -19,7 +19,7 @@ public final class SyncServer implements AutoCloseable {
     private static final String ALIAS="planner-sync-tls-v1";
     private final Context context;private final PlannerDatabase db;private final ExecutorService databaseWorker;
     private final Consumer<String> notice;private final Runnable changed;private final SharedPreferences prefs;
-    private volatile boolean running;private volatile ServerSocket listener;private volatile Socket active;
+    private volatile boolean running,transferring;private volatile ServerSocket listener;private volatile Socket active;
     private ScheduledExecutorService deadline;private String code="",pairingText="",session="",sessionDate="";private boolean sessionAuto;
     private SyncTransfer transfer;
     private volatile boolean pendingChanges;
@@ -27,6 +27,8 @@ public final class SyncServer implements AutoCloseable {
     public SyncServer(Context c,PlannerDatabase d,ExecutorService worker,Consumer<String> notice,Runnable changed){this(c,d,worker,notice,changed,120);}
     SyncServer(Context c,PlannerDatabase d,ExecutorService worker,Consumer<String> notice,Runnable changed,int seconds){context=c;db=d;databaseWorker=worker;this.notice=notice;this.changed=changed;windowSeconds=seconds;prefs=c.getSharedPreferences("local-sync",0);}
     public boolean isRunning(){return running;}
+    public boolean isTransferring(){return transferring;}
+    private void markTransfer(){if(!transferring){transferring=true;log("正在交换日程…");}}
     public synchronized String pairingText(){return pairingText;}
     private void log(String text){android.util.Log.i("PlannerSync",text);try{File f=new File(context.getFilesDir(),"sync.log");if(f.length()>131072)try(FileOutputStream clear=new FileOutputStream(f)){clear.write(new byte[0]);}try(FileOutputStream out=new FileOutputStream(f,true)){out.write((new Date()+" "+text+"\n").getBytes(StandardCharsets.UTF_8));}}catch(Exception ignored){}notice.accept(text);}
     public synchronized void start(boolean pairing,boolean manual){
@@ -61,12 +63,12 @@ public final class SyncServer implements AutoCloseable {
                         case "/sync/status":if(!request.method.equals("GET"))throw new IOException("方法无效");result=new JSONObject().put("protocol",1).put("listening",true);break;
                         case "/sync/transfer":
                             if(!request.method.equals("POST"))throw new IOException("方法无效");
-                            if(transfer==null)transfer=new SyncTransfer(context.getCacheDir());
+                            markTransfer();if(transfer==null)transfer=new SyncTransfer(context.getCacheDir());
                             result=transfer.handle(request.body,this::exchangeFiles);break;
                         // Retain the original endpoint for older Mac clients.
                         case "/sync/changes":
                             if(!request.method.equals("POST"))throw new IOException("方法无效");
-                            result=exchange(request.body);break;
+                            markTransfer();result=exchange(request.body);break;
                         case "/sync/finish":
                             if(!request.method.equals("POST")||session.isEmpty()||!session.equals(request.body.optString("session")))throw new RequestFailure("session_invalid","会话无效");
                             sessionDate=java.time.LocalDate.now(Planner.ZONE).toString();
@@ -123,7 +125,7 @@ public final class SyncServer implements AutoCloseable {
         SSLContext ssl=SSLContext.getInstance("TLSv1.2");ssl.init(new KeyManager[]{manager},null,new SecureRandom());return ssl;
     }
     public synchronized void close(){
-        if(!running)return;running=false;code="";pairingText="";
+        if(!running)return;running=false;transferring=false;code="";pairingText="";
         try{if(listener!=null)listener.close();}catch(IOException ignored){}try{if(active!=null)active.close();}catch(IOException ignored){}
         listener=null;active=null;if(transfer!=null){transfer.close();transfer=null;}if(pendingChanges){pendingChanges=false;changed.run();}if(deadline!=null){deadline.shutdownNow();deadline=null;}
         log((lastFailure.isEmpty()?"":lastFailure+"；")+"网络模块关闭：监听 0，连接 0，同步定时任务 0");

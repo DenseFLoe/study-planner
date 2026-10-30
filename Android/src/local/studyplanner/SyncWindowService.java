@@ -17,6 +17,7 @@ public final class SyncWindowService extends Service {
     private final Handler main=new Handler(Looper.getMainLooper());
     private boolean stopping=false,started=false;
     private final Runnable timeout=()->{lastStatus="接收窗口已到期，请按需重新开启";stopSelf();};
+    static boolean transferring(){SyncWindowService s=active;return s!=null&&s.server!=null&&s.server.isTransferring();}
     static boolean exists(){return active!=null;}
     static boolean running(){SyncWindowService s=active;return s!=null&&s.server!=null&&s.server.isRunning();}
     static String pairing(){SyncWindowService s=active;return s==null||s.server==null?"":s.server.pairingText();}

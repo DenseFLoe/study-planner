@@ -32,6 +32,8 @@ final class CompressedScheduleControllerTests: XCTestCase {
         var (state, now) = fixture()
         let gate = Gate()
         let controller = CompressedScheduleController { try await gate.hold($0, now: $1, calendar: $2) }
+        var delivered: [CompressedSchedulePreview] = []
+        controller.onResolved = { delivered.append($0) }
         controller.update(state: state, now: now)
         await gate.waitForCount(1)
         XCTAssertTrue(controller.calculating)
@@ -49,6 +51,8 @@ final class CompressedScheduleControllerTests: XCTestCase {
         for _ in 0..<20 { await Task.yield() }
         XCTAssertEqual(controller.plan?.finish, finish)
         XCTAssertFalse(controller.calculating)
+        XCTAssertEqual(delivered.count, 1)
+        XCTAssertEqual(delivered.first?.courses.first?.remainingMinutes, 30)
     }
 
     @MainActor func testStopsAfterCompletionIgnoresDraftChangesAndRefreshesNextDay() async {

@@ -31,6 +31,7 @@ final class PlannerStore {
     private var cloudRequested = false
     private var cloudLastAttempt = Date.distantPast
     private var pendingManualSyncs = 0
+    @ObservationIgnored private var pendingCompressedPreview: CompressedSchedulePreview?
     private var repository: (any PlannerRepository)?
     private var lastDay = Calendar.current.startOfDay(for: Date())
     private var reviewPrompted = false
@@ -51,6 +52,7 @@ final class PlannerStore {
             isReady = true
             if demo { loadExample() } else { replan() }
             checkDay()
+            compressedPlan.onResolved = { [weak self] in self?.publishCompressedPreview($0) }
             compressedPlan.update(state: state)
         } catch { errorMessage = "无法打开本地数据库：\(error.localizedDescription)\n为保护已有数据，未创建替代数据库。" }
     }
@@ -66,6 +68,21 @@ final class PlannerStore {
         compressedPlan.update(state: state)
     }
     var courses: [Course] { state.courses.filter { !$0.isArchived }.sorted { $0.deadline < $1.deadline } }
+    private func publishCompressedPreview(_ preview: CompressedSchedulePreview) {
+        guard !demo, isReady, let repository else { return }
+        guard !syncBusy, !orderSaveBusy else { pendingCompressedPreview = preview; return }
+        pendingCompressedPreview = nil
+        guard state.settings.compressedSchedulePreview != preview else { return }
+        guard preview.inputDay == SyncLedger.day(Date()),
+              compressedPlan.sharedPreview == preview, !compressedPlan.calculating else { return }
+        do {
+            var next = state
+            next.settings.compressedSchedulePreview = preview
+            try repository.save(next)
+            state = next
+            requestCloudSync(manual: false)
+        } catch { errorMessage = "极限压缩结果未保存到同步数据：" + error.localizedDescription }
+    }
     func course(_ id: UUID) -> Course? { state.courses.first { $0.id == id } }
     @discardableResult
     func change(replan shouldReplan: Bool = true, now: Date = Date(), _ mutation: (inout PlannerState) throws -> Void) -> Bool {
@@ -99,7 +116,10 @@ final class PlannerStore {
             result = planned
             orderSaveBusy = true
             orderSaveTask = Task { @MainActor in
-                defer { orderSaveBusy = false; orderSaveTask = nil }
+                defer {
+                    orderSaveBusy = false; orderSaveTask = nil
+                    if let preview = pendingCompressedPreview { publishCompressedPreview(preview) }
+                }
                 do {
                     try await repository.saveForInteraction(next)
                     return true
@@ -333,6 +353,7 @@ final class PlannerStore {
     }
     private func finishSync() {
         syncTask = nil; syncBusy = false
+        if let preview = pendingCompressedPreview ?? compressedPlan.sharedPreview { publishCompressedPreview(preview) }
         if pendingManualSyncs > 0 { pendingManualSyncs -= 1; startSync() }
         else if cloudRequested { requestCloudSync(manual: true) }
     }

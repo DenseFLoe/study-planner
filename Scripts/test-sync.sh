@@ -5,6 +5,6 @@ Scripts/test.sh
 Android/test.sh
 JDK="$(/usr/libexec/java_home -v 11)"
 mkdir -p Android/build/tests
-"$JDK/bin/javac" -cp Android/tools/json.jar:Android/build/tests -d Android/build/tests Android/src/local/studyplanner/Planner.java Android/src/local/studyplanner/DailyTaskOrdering.java Android/src/local/studyplanner/SyncLedger.java Android/tests/SyncTests.java
+"$JDK/bin/javac" -cp Android/tools/json.jar:Android/build/tests -d Android/build/tests Android/src/local/studyplanner/Planner.java Android/src/local/studyplanner/SavedScheduleAssessment.java Android/src/local/studyplanner/DailyTaskOrdering.java Android/src/local/studyplanner/SyncLedger.java Android/tests/SyncTests.java
 "$JDK/bin/java" -cp Android/tools/json.jar:Android/build/tests local.studyplanner.SyncTests
 Scripts/test.sh --filter 'SyncLedgerTests/test(WireFixtureAndJavaResponse|ConfirmationWireRoundTrip)'

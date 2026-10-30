@@ -1,0 +1,204 @@
+{
+  "archiveGzip": "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",
+  "preview": {
+    "capturedAt": 815011200,
+    "courses": [
+      {
+        "color": "blue",
+        "finish": 815029200,
+        "id": "58D76109-7CEF-4A40-96C5-CE1922E53764",
+        "name": "合成课程 / 🐳",
+        "remainingMinutes": 150
+      }
+    ],
+    "finish": 815029200,
+    "format": 1,
+    "inputDay": "2026-10-30",
+    "rows": [
+      {
+        "color": "blue",
+        "end": 815013000,
+        "fixed": false,
+        "start": 815011200,
+        "title": "合成课程 / 🐳 · 第一节"
+      },
+      {
+        "color": "orange",
+        "end": 815022000,
+        "fixed": true,
+        "start": 815018400,
+        "title": "合成固定事项"
+      },
+      {
+        "color": "blue",
+        "end": 815029200,
+        "fixed": false,
+        "start": 815022000,
+        "title": "合成课程 / 🐳 · 第二节"
+      }
+    ],
+    "sourceSignature": "ccd7089a8e9a911756295aef3c182a2f9def470d4b0630b4e5731db80ec9ccd6",
+    "totalRows": 3
+  },
+  "state": {
+    "completions": [
+      {
+        "courseID": "58D76109-7CEF-4A40-96C5-CE1922E53764",
+        "id": "0080C397-E386-537D-91F1-A3270B33D656",
+        "minutes": 30,
+        "recordedAt": 815011200,
+        "studyDate": 814982400,
+        "taskID": "F7ED52C5-32C6-4AD8-8166-4CB766B70F5F"
+      }
+    ],
+    "courses": [
+      {
+        "autoScheduleEnabled": true,
+        "color": "blue",
+        "deadline": 815011200,
+        "id": "58D76109-7CEF-4A40-96C5-CE1922E53764",
+        "initialCompletedMinutes": 0,
+        "isArchived": false,
+        "manualLessons": [
+          {
+            "durationMinutes": 60,
+            "id": "a",
+            "name": "第一节"
+          },
+          {
+            "durationMinutes": 120,
+            "id": "b",
+            "name": "第二节"
+          }
+        ],
+        "minimumBlockMinutes": 60,
+        "name": "合成课程 / 🐳",
+        "notes": "",
+        "priority": 2,
+        "startDate": 815011200,
+        "totalMinutes": 180,
+        "type": "不定时录播课程"
+      }
+    ],
+    "fixedEvents": [
+      {
+        "color": "orange",
+        "endDate": 815011200,
+        "endMinute": 660,
+        "excludedDates": [],
+        "id": "0F357B2F-EAE1-45F8-8903-62589BA6FAEE",
+        "notes": "",
+        "startDate": 814982400,
+        "startMinute": 600,
+        "title": "合成固定事项",
+        "weekdays": [
+          4,
+          6,
+          2
+        ]
+      }
+    ],
+    "schemaVersion": 1,
+    "settings": {
+      "availability": [
+        {
+          "endMinute": 1080,
+          "id": "94786124-1BBB-4E65-923A-018A27ACA977",
+          "startMinute": 480,
+          "weekday": 1
+        },
+        {
+          "endMinute": 1080,
+          "id": "6CFFEAB8-0153-44D1-87AD-1661C117AC27",
+          "startMinute": 480,
+          "weekday": 2
+        },
+        {
+          "endMinute": 1080,
+          "id": "DD33DB96-AFAB-4D96-ACE0-AABF62795A61",
+          "startMinute": 480,
+          "weekday": 3
+        },
+        {
+          "endMinute": 1080,
+          "id": "56F7C661-573C-4806-9602-C89684479330",
+          "startMinute": 480,
+          "weekday": 4
+        },
+        {
+          "endMinute": 1080,
+          "id": "DC4F77F6-E49F-4145-8E48-B9E607FBBE67",
+          "startMinute": 480,
+          "weekday": 5
+        },
+        {
+          "endMinute": 1080,
+          "id": "EAEAFBAB-2178-48F8-BB52-1457039DFDED",
+          "startMinute": 480,
+          "weekday": 6
+        },
+        {
+          "endMinute": 1080,
+          "id": "AEE4B171-9E8F-438A-BE88-871BADC34CA4",
+          "startMinute": 480,
+          "weekday": 7
+        }
+      ],
+      "compressedSchedulePreview": {
+        "capturedAt": 815011200,
+        "courses": [
+          {
+            "color": "blue",
+            "finish": 815029200,
+            "id": "58D76109-7CEF-4A40-96C5-CE1922E53764",
+            "name": "合成课程 / 🐳",
+            "remainingMinutes": 150
+          }
+        ],
+        "finish": 815029200,
+        "format": 1,
+        "inputDay": "2026-10-30",
+        "rows": [
+          {
+            "color": "blue",
+            "end": 815013000,
+            "fixed": false,
+            "start": 815011200,
+            "title": "合成课程 / 🐳 · 第一节"
+          },
+          {
+            "color": "orange",
+            "end": 815022000,
+            "fixed": true,
+            "start": 815018400,
+            "title": "合成固定事项"
+          },
+          {
+            "color": "blue",
+            "end": 815029200,
+            "fixed": false,
+            "start": 815022000,
+            "title": "合成课程 / 🐳 · 第二节"
+          }
+        ],
+        "sourceSignature": "ccd7089a8e9a911756295aef3c182a2f9def470d4b0630b4e5731db80ec9ccd6",
+        "totalRows": 3
+      },
+      "minimumScheduleUnit": 60,
+      "notificationMinute": 1260
+    },
+    "tasks": [
+      {
+        "completedMinutes": 30,
+        "confirmedAt": 815011200,
+        "courseID": "58D76109-7CEF-4A40-96C5-CE1922E53764",
+        "durationMinutes": 60,
+        "id": "F7ED52C5-32C6-4AD8-8166-4CB766B70F5F",
+        "lessonID": "a",
+        "lessonName": "第一节",
+        "start": 814924800,
+        "status": "partial"
+      }
+    ]
+  }
+}

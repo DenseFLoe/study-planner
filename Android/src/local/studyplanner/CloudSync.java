@@ -47,7 +47,7 @@ final class CloudSync {
     synchronized void request(Consumer<Boolean> completion){
         if(!CloudSettings.enabled(context)){if(completion!=null)completion.accept(true);return;}
         if(completion!=null)callbacks.add(completion);
-        if(running){again=true;return;}running=true;
+        if(running){again=true;return;}running=true;status("正在同步完整课表…");
         network.execute(()->{
             boolean success=false;
             try{sync();success=true;failures=0;synchronized(this){if(retry!=null){retry.cancel(false);retry=null;}}}catch(Exception e){
@@ -56,6 +56,7 @@ final class CloudSync {
             }
             List<Consumer<Boolean>> done;boolean repeat;
             synchronized(this){running=false;repeat=again;again=false;done=new ArrayList<>(callbacks);callbacks.clear();}
+            context.sendBroadcast(new Intent(ACTION).setPackage(context.getPackageName()));
             final boolean ok=success;for(Consumer<Boolean> callback:done)new Handler(Looper.getMainLooper()).post(()->callback.accept(ok));
             if(repeat)request(null);
         });
@@ -97,6 +98,7 @@ final class CloudSync {
             current.value.put("cloudProgress",new JSONObject().put("endpoint",identityEndpoint).put("serverID",identity).put("revision",remote.getLong("revision"))
                 .put("uploadedSequence",dirty?-1:current.sequence()).put("lastSuccess",System.currentTimeMillis()/1000.0));
             database.commit(current,false);
+            CompressedPreviewStore.receive(context,state);
         }
         for(File file:queued)if(!file.delete()&&file.exists())throw new IOException("无法清理已上传文件");
         status("已同步 · 云端版本 "+remote.getLong("revision")+" · "+java.time.LocalTime.now(Planner.ZONE).withSecond(0).withNano(0));

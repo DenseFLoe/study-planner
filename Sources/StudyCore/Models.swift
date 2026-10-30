@@ -215,6 +215,8 @@ public struct AppSettings: Codable, Equatable, Sendable {
     public var immediateStudy: ImmediateStudyRequest? = nil
     /// Optional so older saved plans retain the existing scheduling order.
     public var schedulingRuleLevels: [String: Int]? = nil
+    /// Mac-produced read-only result; Android displays only a result received through cloud sync.
+    public var compressedSchedulePreview: CompressedSchedulePreview? = nil
     public var availability: [DailyAvailability] = (1...7).map { .init(weekday: $0, startMinute: 8 * 60, endMinute: 23 * 60) }
     public init() {}
     public func actualStudyStart(on day: Date, calendar: Calendar = .current) -> Date? {
@@ -428,10 +430,12 @@ public struct PlannerState: Codable, Equatable, Sendable {
         let changedWindows = windows(settings) != windows(updated)
         let actualStart = settings.actualStudyStart
         let immediateStudy = settings.immediateStudy
+        let compressedPreview = settings.compressedSchedulePreview
         settings = updated
         // The settings editor may have been opened before today's start changed.
         settings.actualStudyStart = actualStart
         settings.immediateStudy = immediateStudy
+        settings.compressedSchedulePreview = compressedPreview
         if changedWindows && settings.actualStudyStart(on: now, calendar: calendar) == nil {
             settings.actualStudyStart = now
         }
