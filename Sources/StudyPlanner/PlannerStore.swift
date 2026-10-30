@@ -9,7 +9,7 @@ final class PlannerStore {
     private(set) var state = PlannerState() {
         didSet { compressedPlan.update(state: state) }
     }
-    let compressedPlan = CompressedScheduleController()
+    let compressedPlan: CompressedScheduleController
     private(set) var result = ScheduleResultPlaceholder.empty
     private(set) var studyLoad: StudyLoadAssessment?
     var errorMessage: String?
@@ -39,6 +39,7 @@ final class PlannerStore {
     let playbackSupervisor: PlaybackSupervisor
     init() {
         demo = CommandLine.arguments.contains("--demo") || Bundle.main.bundleIdentifier == "local.studyplanner.preview"
+        compressedPlan = CompressedScheduleController(cache: CompressedScheduleRepository(inMemory: demo))
         playbackSupervisor = PlaybackSupervisor(persistent: !demo)
         if !demo {
             cloudEndpoint = (try? CloudVault.load(method: CloudVault.selectedMethod))?.endpoint ?? ""
@@ -63,6 +64,7 @@ final class PlannerStore {
         self.result = result
         self.studyLoad = studyLoad
         self.demo = true
+        self.compressedPlan = CompressedScheduleController()
         self.playbackSupervisor = PlaybackSupervisor(persistent: false)
         self.isReady = true
         compressedPlan.update(state: state)
@@ -73,8 +75,7 @@ final class PlannerStore {
         guard !syncBusy, !orderSaveBusy else { pendingCompressedPreview = preview; return }
         pendingCompressedPreview = nil
         guard state.settings.compressedSchedulePreview != preview else { return }
-        guard preview.inputDay == SyncLedger.day(Date()),
-              compressedPlan.sharedPreview == preview, !compressedPlan.calculating else { return }
+        guard compressedPlan.sharedPreview == preview, !compressedPlan.calculating else { return }
         do {
             var next = state
             next.settings.compressedSchedulePreview = preview

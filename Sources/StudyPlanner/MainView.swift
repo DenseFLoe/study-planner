@@ -635,7 +635,9 @@ struct MainView: View {
     private var courseList: some View {
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 16) {
-                CompressedScheduleCard(controller: store.compressedPlan)
+                CompressedScheduleCard(controller: store.compressedPlan) {
+                    store.compressedPlan.recalculate(state: store.state)
+                }
                 PlannerSectionTitle(title: "可调度课程", detail: "\(store.courses.count) 门")
                 HStack {
                     Button("合并课程", systemImage: "arrow.triangle.merge") { sheet = .mergeCourses }

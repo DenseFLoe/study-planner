@@ -3,6 +3,7 @@ import StudyCore
 
 struct CompressedScheduleCard: View {
     @Bindable var controller: CompressedScheduleController
+    var recalculate: () -> Void
     @State private var expanded = false
     @State private var selectedDay = Calendar.current.startOfDay(for: Date())
     @State private var month = Date()
@@ -10,6 +11,10 @@ struct CompressedScheduleCard: View {
     var body: some View {
         DisclosureGroup(isExpanded: $expanded) {
             VStack(alignment: .leading, spacing: 18) {
+                if let plan = controller.plan {
+                    Text("计算于 \(plan.capturedAt.formatted(date: .abbreviated, time: .shortened)) · 保留本次基准方案")
+                        .font(.callout).foregroundStyle(.secondary)
+                }
                 Text("按所有未完成课程计算，保留完整课节和课节顺序；固定课表、每日学习时段保持不变。此极限方案不预留额外课间休息，不受原开始日、截止日、每日加量和自动排程开关限制。")
                     .font(.caption).foregroundStyle(.secondary)
                 if controller.calculating {
@@ -27,7 +32,10 @@ struct CompressedScheduleCard: View {
                         if !plan.tasks.isEmpty { preview(plan) }
                     }
                 }
-                Text("独立方案预览 · 不修改当前日程 · 课程、进度、固定课表或学习时段变化后自动重新计算")
+                if let message = controller.cacheMessage {
+                    Text(message).font(.caption).foregroundStyle(.orange)
+                }
+                Text("独立基准方案 · 跨天与日常学习确认不重算；课程结构、未来固定课表或学习时段变化时，按当时剩余量重新计算。也可点击“重新计算”手动更新。")
                     .font(.caption2).foregroundStyle(.secondary)
             }
             .padding(.top, 16)
@@ -38,16 +46,25 @@ struct CompressedScheduleCard: View {
                 VStack(alignment: .leading, spacing: 4) {
                     Text("极限压缩方案").font(.headline)
                     Text(summary).font(.callout).foregroundStyle(.secondary)
+                    if let plan = controller.plan {
+                        Text("计算于 \(plan.capturedAt.formatted(date: .abbreviated, time: .shortened))")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
                 }
                 Spacer()
                 if controller.calculating { ProgressView().controlSize(.small) }
+                Button("重新计算", action: recalculate)
+                    .buttonStyle(.borderless)
+                    .disabled(controller.calculating)
+                    .help("以当前日期和剩余学习量重新计算基准方案")
+                    .accessibilityIdentifier("recalculateCompressedSchedule")
             }
             .padding(.vertical, 4)
         }
         .accessibilityIdentifier("compressedScheduleCard")
         .padding(18)
         .plannerSurface(radius: 18, material: .thinMaterial, shadow: false)
-        .onChange(of: controller.plan?.capturedAt) { _, value in
+        .onChange(of: controller.plan?.capturedAt, initial: true) { _, value in
             if let value { selectedDay = Calendar.current.startOfDay(for: value); month = selectedDay }
         }
     }
@@ -96,7 +113,7 @@ struct CompressedScheduleCard: View {
 
     private func preview(_ plan: CompressedSchedule) -> some View {
         VStack(alignment: .leading, spacing: 16) {
-            PlannerSectionTitle(title: "方案日历与课表", detail: "计算基于 \(plan.capturedAt.formatted(date: .abbreviated, time: .shortened)) 的进度")
+            PlannerSectionTitle(title: "方案日历与课表", detail: "按计算时的剩余量生成；不随日常学习推进更新")
             MonthCalendar(selectedDay: $selectedDay, month: $month, tasks: plan.tasks,
                           fixed: calendarEvents(plan), select: {})
                 .frame(maxWidth: 440)

@@ -1,20 +1,20 @@
 import Foundation
 
-public struct CompressedCourseFinish: Identifiable, Sendable {
+public struct CompressedCourseFinish: Identifiable, Codable, Sendable {
     public var id: UUID { course.id }
     public let course: Course
     public let remainingMinutes: Int
     public let finish: Date?
 }
 
-public struct CompressedFixedOccurrence: Identifiable, Sendable {
+public struct CompressedFixedOccurrence: Identifiable, Codable, Sendable {
     public var id: String { "\(event.id)|\(start.timeIntervalSinceReferenceDate)" }
     public let event: FixedEvent
     public let start: Date
     public let end: Date
 }
 
-public struct CompressedSchedule: Sendable {
+public struct CompressedSchedule: Codable, Sendable {
     public let capturedAt: Date
     public let courses: [CompressedCourseFinish]
     public let tasks: [ScheduledTask]
