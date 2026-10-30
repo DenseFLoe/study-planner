@@ -4,6 +4,37 @@ import SwiftData
 @testable import StudyPersistence
 
 final class LocalRepositoryTests: XCTestCase {
+    @MainActor func testSplitImmediateRequestSurvivesDiskAndSyncLedgerRoundTrip() throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let url = dir.appendingPathComponent("immediate.store")
+        let calendar = Calendar.current
+        let day = calendar.startOfDay(for: Date())
+        let now = ScheduleEngine().instant(day: day, minute: 480)
+        var state = PlannerState()
+        var course = Course(name: "分段学习", totalMinutes: 120, startDate: day,
+                            deadline: calendar.date(byAdding: .day, value: 2, to: day)!)
+        course.type = .lessonBasedRecorded
+        course.manualLessons = [.init(id: "earlier", name: "第一节", durationMinutes: 30),
+                                .init(id: "selected", name: "第二节", durationMinutes: 90)]
+        state.courses = [course]
+        state.settings.availability = (1...7).map { .init(weekday: $0, startMinute: 480, endMinute: 540) }
+        _ = try state.studyImmediately(courseID: course.id, lessonID: "selected", now: now)
+        do { try LocalRepository(url: url).save(state) }
+        let reopened = try LocalRepository(url: url)
+        let loaded = try reopened.load()
+        XCTAssertEqual(loaded.settings, state.settings)
+        XCTAssertEqual(loaded.settings.immediateStudy?.continuesLesson, true)
+        XCTAssertEqual(loaded.tasks, state.tasks)
+        XCTAssertEqual(loaded.immediateStudyContinuation(now: now)?.id, "selected")
+        let peer = try reopened.loadLedger().materialize()
+        XCTAssertEqual(peer.settings, loaded.settings)
+        XCTAssertEqual(Set(peer.tasks.map(\.id)), Set(loaded.tasks.map(\.id)))
+        XCTAssertEqual(peer.remainingMinutes(for: course), 120)
+        XCTAssertTrue(peer.completions.isEmpty)
+    }
+
     @MainActor func testBackgroundSaveRefreshesContextBeforeNextTransaction() async throws {
         let repo = try LocalRepository(inMemory: true)
         var state = PlannerState()

@@ -446,7 +446,8 @@ public struct PlannerState: Codable, Equatable, Sendable {
     public mutating func replan(now: Date, calendar: Calendar = .current) -> ScheduleResult {
         let result = ScheduleEngine(calendar: calendar).generate(state: self, now: now)
         if let request = settings.immediateStudy,
-           !result.tasks.contains(where: { $0.id == request.task.id }) {
+           (validImmediateStudyTask(now: now, calendar: calendar) == nil || !result.tasks.contains(where: { $0.id == request.task.id })),
+           immediateStudyContinuation(now: now, calendar: calendar) == nil {
             settings.immediateStudy = nil
         }
         // Keep ended and confirmed history; all unfinished plans, including today, are replaceable.

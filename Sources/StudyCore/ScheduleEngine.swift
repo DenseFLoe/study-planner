@@ -73,23 +73,19 @@ public struct ScheduleEngine: Sendable {
         return result
     }
     public func generate(state: PlannerState, now: Date) -> ScheduleResult {
-        let baseline = generatePlan(state: state, now: now, immediate: nil)
-        guard state.settings.immediateStudy != nil else { return baseline }
-        guard let immediate = state.validImmediateStudyTask(now: now, calendar: calendar) else { return baseline }
-        let candidate = generatePlan(state: state, now: now, immediate: immediate)
-        // Date feasibility outranks the request; never trade away another course's
-        // booked work to satisfy it. Soft preferences only operate on the remainder.
-        let before = Dictionary(grouping: baseline.tasks, by: \.courseID).mapValues { $0.reduce(0) { $0 + $1.durationMinutes } }
-        let after = Dictionary(grouping: candidate.tasks, by: \.courseID).mapValues { $0.reduce(0) { $0 + $1.durationMinutes } }
-        guard before.allSatisfy({ after[$0.key, default: 0] >= $0.value }) else {
-            var fallback = baseline
-            fallback.adjustments.append("立即学习要求会挤掉截止日前已排入的课程，已优先保留合理日期安排。")
-            return fallback
-        }
-        return candidate
+        // Treat the chosen lesson as a new scheduling constraint, rather than
+        // requiring the replacement to reproduce the old plan's booked amounts.
+        // Any remaining deficit stays visible in the normal risks and demands.
+        generatePlan(state: state, now: now, immediate: state.validImmediateStudyTask(now: now, calendar: calendar))
     }
 
-    private func generatePlan(state: PlannerState, now: Date, immediate: ScheduledTask?) -> ScheduleResult {
+    private func generatePlan(state original: PlannerState, now: Date, immediate: ScheduledTask?) -> ScheduleResult {
+        var state = original
+        if let continuation = state.immediateStudyContinuation(now: now, calendar: calendar),
+           let index = state.courses.firstIndex(where: { $0.id == state.settings.immediateStudy?.task.courseID }) {
+            let order = state.lessonWorkItems(for: state.courses[index]).map(\.id)
+            state.courses[index].lessonOrder = [continuation.id] + order.filter { $0 != continuation.id }
+        }
         let today = calendar.startOfDay(for: now)
         let actualStart = state.settings.actualStudyStart(on: now, calendar: calendar)
         // A daily anchor must not send remaining work back before a saved review,
@@ -97,8 +93,10 @@ public struct ScheduleEngine: Sendable {
         // history so reopening and syncing keep the same scheduling boundary.
         let lastConfirmation = state.tasks.compactMap(\.confirmedAt)
             .filter { calendar.isDate($0, inSameDayAs: now) }.max()
+        let requestFloor = immediate == nil && state.settings.immediateStudy != nil ? now : Date.distantPast
         let scheduleStart = max(actualStart ?? now, lastConfirmation ?? today,
-                                immediate?.end.addingTimeInterval(breakSeconds) ?? .distantPast)
+                                immediate?.end.addingTimeInterval(breakSeconds) ?? .distantPast,
+                                requestFloor)
         let nextMinute = Date(timeIntervalSince1970: ceil(scheduleStart.timeIntervalSince1970 / 60) * 60)
         let courses = state.courses.filter { !$0.isArchived && $0.autoScheduleEnabled && state.remainingMinutes(for: $0) > 0 }
         let priorities = state.settings.schedulePriorities
@@ -211,10 +209,12 @@ public struct ScheduleEngine: Sendable {
                     left -= size
                 }
             }
-            // Only the selected lesson moves ahead; earlier unfinished lessons
-            // stay in their original order in the remaining queue.
-            if let immediate, immediate.courseID == course.id {
-                work.removeAll { $0.lessonID == immediate.lessonID }
+            // A partial first segment reserves only its own minutes. The rest
+            // keeps the same lesson identity and stays ahead of the other lessons.
+            if let immediate, immediate.courseID == course.id,
+               let index = work.firstIndex(where: { $0.lessonID == immediate.lessonID }) {
+                work[index].minutes -= immediate.durationMinutes
+                if work[index].minutes == 0 { work.remove(at: index) }
             }
             pending[course.id] = work
             let reservedMinutes = immediate.map { $0.courseID == course.id ? $0.durationMinutes : 0 } ?? 0
@@ -738,6 +738,13 @@ public struct ScheduleEngine: Sendable {
         var orderContext = state
         if let immediate {
             orderContext.settings.dailyTaskOrders?.removeAll { calendar.isDate($0.day, inSameDayAs: immediate.start) }
+        }
+        if let continuation = state.immediateStudyContinuation(now: now, calendar: calendar),
+           let request = state.settings.immediateStudy {
+            orderContext.settings.dailyTaskOrders?.removeAll { order in
+                tasks.contains { $0.courseID == request.task.courseID && $0.lessonID == continuation.id &&
+                    calendar.isDate($0.start, inSameDayAs: order.day) }
+            }
         }
         tasks = orderContext.applyingDailyTaskOrders(to: tasks, calendar: calendar)
         for i in tasks.indices {

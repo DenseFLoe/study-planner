@@ -30,6 +30,12 @@ extension PlannerState {
     public mutating func swapDailyTasks(_ sourceID: UUID, _ targetID: UUID, now: Date = Date(), calendar: Calendar = .current) throws {
         if let immediate = validImmediateStudyTask(now: now, calendar: calendar),
            immediate.id == sourceID || immediate.id == targetID { throw ImmediateStudyError.pinnedTask }
+        if let continuation = immediateStudyContinuation(now: now, calendar: calendar),
+           let request = settings.immediateStudy,
+           tasks.contains(where: {
+               ($0.id == sourceID || $0.id == targetID) && $0.isUnconfirmed &&
+               $0.courseID == request.task.courseID && $0.lessonID == continuation.id
+           }) { throw ImmediateStudyError.pinnedTask }
         guard let source = tasks.first(where: { $0.id == sourceID }),
               let target = tasks.first(where: { $0.id == targetID }),
               source.isUnconfirmed, target.isUnconfirmed, sourceID != targetID,

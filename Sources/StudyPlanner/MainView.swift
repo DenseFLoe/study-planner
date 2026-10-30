@@ -593,8 +593,9 @@ struct MainView: View {
                         selectedDay = Calendar.current.startOfDay(for: Date())
                         month = selectedDay
                     }
-                    if let request = store.state.settings.immediateStudy, request.task.end > Date(),
-                       store.state.tasks.contains(where: { $0.id == request.task.id && $0.isUnconfirmed }) {
+                    if let request = store.state.settings.immediateStudy,
+                       (request.task.end > Date() && store.state.tasks.contains(where: { $0.id == request.task.id && $0.isUnconfirmed })) ||
+                        store.state.immediateStudyContinuation() != nil {
                         Text("立即学习：\(store.course(request.task.courseID)?.name ?? "课程") · \(request.task.lessonName ?? "下一课节")")
                             .font(.caption).foregroundStyle(.secondary)
                         Button("取消立即学习安排") { store.cancelImmediateStudy() }

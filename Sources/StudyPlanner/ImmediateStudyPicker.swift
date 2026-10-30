@@ -1,7 +1,7 @@
 import SwiftUI
 import StudyCore
 
-/// 两层原生菜单：课程 → 未完成分节。选中后仅该分节提前到当前分钟开始，其余分节按原顺序重排。
+/// 两层原生菜单：课程 → 未完成分节。选中后把该课节作为新的排课约束从现在开始，允许后续未确认课表整体重排。
 struct ImmediateStudyMenu: View {
     @Bindable var store: PlannerStore
     var didSchedule: () -> Void
@@ -39,6 +39,6 @@ struct ImmediateStudyMenu: View {
         .menuStyle(.button)
         .buttonStyle(.borderedProminent)
         .disabled(entryDisabled)
-        .help("选择任意未完成分节，从当前分钟向上取整开始上课；仅该分节提前，其余分节按原顺序重排，失败时保留原课表")
+        .help("选择任意未完成分节，从当前分钟向上取整开始；空档不足整节时先学一段，剩余分钟保留并在后续优先接续同一节；其余未确认课表允许整体重排，失败时保留原数据")
     }
 }

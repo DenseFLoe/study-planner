@@ -141,16 +141,19 @@ final class ImmediateStudyTests: XCTestCase {
         }
     }
 
-    func testSelectedLessonMustFitEvenWhenFirstLessonWouldFit() {
+    func testSelectedLessonCanStartWithOneSegmentAndContinueOnAnotherDay() throws {
         var state = fixture()
         state.courses = [course("甲", lengths: [30, 90])]
         state.settings.availability = (1...7).map { .init(weekday: $0, startMinute: 480, endMinute: 540) }
-        let original = state
-        XCTAssertThrowsError(try state.studyImmediately(courseID: state.courses[0].id, lessonID: "甲-1",
-                                                       now: date(), calendar: cal)) {
-            XCTAssertEqual($0 as? ImmediateStudyError, .noSpace)
-        }
-        XCTAssertEqual(state, original)
+        let result = try state.studyImmediately(courseID: state.courses[0].id, lessonID: "甲-1",
+                                                now: date(), calendar: cal)
+        XCTAssertEqual(result.tasks.map(\.lessonID), ["甲-1", "甲-1", "甲-0"])
+        XCTAssertEqual(result.tasks.map(\.durationMinutes), [60, 30, 30])
+        XCTAssertEqual(result.tasks.first?.start, date())
+        XCTAssertGreaterThanOrEqual(result.tasks[1].start, date(29, 0))
+        XCTAssertEqual(state.settings.immediateStudy?.continuesLesson, true)
+        XCTAssertTrue(result.risks.isEmpty)
+        XCTAssertEqual(totals(result.tasks)[state.courses[0].id], 120)
     }
 
     func testRequestSurvivesReloadAndChangesWithoutDuplicateWork() throws {
@@ -170,15 +173,13 @@ final class ImmediateStudyTests: XCTestCase {
     }
 
     func testDateWindowAndFixedConflictsFailAtomically() {
-        for kind in 0..<6 {
+        for kind in 0..<4 {
             var state = fixture()
             switch kind {
             case 0: state.courses[0].startDate = date(29, 0)
             case 1: state.courses[0].deadline = date(27, 0)
             case 2: state.settings.availability = []
-            case 3: state.settings.availability = [.init(weekday: cal.component(.weekday, from: date()), startMinute: 480, endMinute: 510)]
-            case 4: state.fixedEvents = [.init(title: "固定课", startMinute: 500, endMinute: 560, startDate: date(), endDate: date())]
-            default: state.settings.actualStudyStart = date(28, 9)
+            default: state.fixedEvents = [.init(title: "固定课", startMinute: 480, endMinute: 560, startDate: date(), endDate: date())]
             }
             let original = state
             XCTAssertThrowsError(try state.studyImmediately(courseID: state.courses[0].id, now: date(), calendar: cal))
@@ -186,16 +187,20 @@ final class ImmediateStudyTests: XCTestCase {
         }
     }
 
-    func testRejectsSacrificingCourseDueTodayEvenWhenSelectedCourseFitsNow() {
+    func testNewConstraintKeepsImmediateLessonAndReportsAnyRemainingDeadlineDeficit() throws {
         var state = fixture()
         state.courses = [course("紧急", lengths: [60], deadline: 28), course("选中", lengths: [60], deadline: 29)]
         state.settings.availability = (1...7).map { .init(weekday: $0, startMinute: 480, endMinute: 540) }
         _ = state.replan(now: date(), calendar: cal)
-        let original = state
-        XCTAssertThrowsError(try state.studyImmediately(courseID: state.courses[1].id, now: date(), calendar: cal)) {
-            XCTAssertEqual($0 as? ImmediateStudyError, .noFeasiblePlan)
-        }
-        XCTAssertEqual(state, original)
+        let result = try state.studyImmediately(courseID: state.courses[1].id, now: date(), calendar: cal)
+        XCTAssertEqual(result.tasks.first?.courseID, state.courses[1].id)
+        XCTAssertEqual(result.tasks.first?.start, date())
+        XCTAssertEqual(state.settings.immediateStudy?.task, result.tasks.first)
+        XCTAssertEqual(result.risks.first?.unscheduledMinutes, 60)
+        XCTAssertEqual(state.remainingMinutes(for: state.courses[0]), 60)
+        XCTAssertTrue(state.completions.isEmpty)
+        let refreshed = state.replan(now: date(28, 8, 5), calendar: cal)
+        XCTAssertEqual(refreshed.tasks.first?.id, state.settings.immediateStudy?.task.id)
     }
 
     func testMovesUrgentCourseLaterWhenItsDeadlineStillFits() throws {
@@ -228,15 +233,149 @@ final class ImmediateStudyTests: XCTestCase {
         XCTAssertEqual(state, original)
     }
 
-    func testRetainedHistoryAndRestAreProtected() {
-        for completed in [false, true] {
-            var state = fixture()
-            var history = ScheduledTask(courseID: state.courses[2].id, start: date(28, 7), durationMinutes: 60)
-            if completed { history.status = .completed; history.confirmedAt = date(); history.completedMinutes = 60 }
-            state.tasks = [history]
-            let original = state
-            XCTAssertThrowsError(try state.studyImmediately(courseID: state.courses[0].id, now: date(), calendar: cal))
-            XCTAssertEqual(state, original)
+    func testConfirmedHistoryAndRestAreProtected() {
+        var state = fixture()
+        var history = ScheduledTask(courseID: state.courses[2].id, start: date(28, 7), durationMinutes: 60)
+        history.status = .completed; history.confirmedAt = date(); history.completedMinutes = 60
+        state.tasks = [history]
+        let original = state
+        XCTAssertThrowsError(try state.studyImmediately(courseID: state.courses[0].id, now: date(), calendar: cal))
+        XCTAssertEqual(state, original)
+    }
+
+    func testUnconfirmedElapsedDraftDoesNotForceRestOrRetainDuplicateWork() throws {
+        var state = fixture()
+        let old = ScheduledTask(courseID: state.courses[2].id, start: date(28, 7), durationMinutes: 60)
+        state.tasks = [old]
+        let result = try state.studyImmediately(courseID: state.courses[0].id, now: date(), calendar: cal)
+        XCTAssertEqual(result.tasks.first?.start, date())
+        XCTAssertEqual(state.settings.actualStudyStart, date())
+        XCTAssertFalse(state.tasks.contains { $0.id == old.id })
+        XCTAssertTrue(state.completions.isEmpty)
+        assertSchedule(result, state: state)
+    }
+
+    func testNewPlanStartsNowInsteadOfUsingAnOldFutureStartAnchor() throws {
+        var state = fixture()
+        state.settings.actualStudyStart = date(28, 9)
+        let result = try state.studyImmediately(courseID: state.courses[0].id, now: date(), calendar: cal)
+        XCTAssertEqual(result.tasks.first?.start, date())
+        XCTAssertEqual(state.settings.actualStudyStart, date())
+        assertSchedule(result, state: state)
+    }
+
+    func testNewPlanCanMoveOtherCoursesToLaterDays() throws {
+        var state = fixture()
+        state.courses = [course("原先优先", lengths: [60]), course("现在选择", lengths: [60])]
+        state.courses[0].priority = 5
+        state.settings.availability = (1...7).map { .init(weekday: $0, startMinute: 480, endMinute: 600) }
+        let baseline = state.replan(now: date(), calendar: cal)
+        XCTAssertEqual(baseline.tasks.first?.courseID, state.courses[0].id)
+        let result = try state.studyImmediately(courseID: state.courses[1].id, now: date(), calendar: cal)
+        XCTAssertEqual(result.tasks.first?.courseID, state.courses[1].id)
+        XCTAssertGreaterThan(try XCTUnwrap(result.tasks.first { $0.courseID == state.courses[0].id }).start, date(29, 0))
+        XCTAssertEqual(totals(result.tasks), totals(baseline.tasks))
+        assertSchedule(result, state: state)
+    }
+
+    func testStartsBeforeLunchWithoutRestFromUnconfirmedDraftAndResumesSameLesson() throws {
+        var state = fixture()
+        state.courses = [course("选中", lengths: [90])]
+        state.settings.availability = (1...7).map { .init(weekday: $0, startMinute: 540, endMinute: 1320) }
+        state.fixedEvents = [.init(title: "午休", startMinute: 720, endMinute: 780, startDate: date(), endDate: date())]
+        let old = ScheduledTask(courseID: state.courses[0].id, start: date(28, 10, 55), durationMinutes: 56, lessonID: "选中-0")
+        state.tasks = [old]
+        let result = try state.studyImmediately(courseID: state.courses[0].id, now: date(28, 11, 58), calendar: cal)
+        XCTAssertEqual(result.tasks.map(\.durationMinutes), [2, 88])
+        XCTAssertEqual(result.tasks.map(\.lessonID), ["选中-0", "选中-0"])
+        XCTAssertEqual(result.tasks.map(\.start), [date(28, 11, 58), date(28, 13)])
+        XCTAssertFalse(state.tasks.contains { $0.id == old.id })
+        XCTAssertTrue(state.completions.isEmpty)
+        XCTAssertTrue(result.risks.isEmpty)
+        XCTAssertEqual(state.remainingMinutes(for: state.courses[0]), 90)
+    }
+
+    func testSplitLessonContinuationSurvivesReloadAndConfirmationUntilLessonCompletes() throws {
+        var state = fixture()
+        state.courses = [course("选中", lengths: [30, 90])]
+        let originalCourse = state.courses[0]
+        state.fixedEvents = [.init(title: "午休", startMinute: 720, endMinute: 780, startDate: date(), endDate: date())]
+        let initial = try state.studyImmediately(courseID: originalCourse.id, lessonID: "选中-1", now: date(28, 11, 50), calendar: cal)
+        let first = try XCTUnwrap(initial.tasks.first)
+        XCTAssertEqual(initial.tasks.map(\.lessonID), ["选中-1", "选中-1", "选中-0"])
+        XCTAssertEqual(initial.tasks.map(\.durationMinutes), [10, 80, 30])
+        state = try JSONDecoder().decode(PlannerState.self, from: JSONEncoder().encode(state))
+        let refreshed = state.replan(now: date(28, 11, 55), calendar: cal)
+        XCTAssertEqual(refreshed.tasks.first, first)
+        XCTAssertEqual(totals(refreshed.tasks)[originalCourse.id], 120)
+        try state.confirm(taskID: first.id, actualMinutes: 10, now: date(28, 12), calendar: cal)
+        let resumed = state.replan(now: date(28, 12, 1), calendar: cal)
+        XCTAssertEqual(resumed.tasks.map(\.lessonID), ["选中-1", "选中-0"])
+        XCTAssertEqual(resumed.tasks.map(\.durationMinutes), [80, 30])
+        XCTAssertEqual(state.immediateStudyContinuation(now: date(28, 12, 1), calendar: cal)?.id, "选中-1")
+        let continuation = resumed.tasks[0]
+        try state.confirm(taskID: continuation.id, actualMinutes: 80, now: continuation.end, calendar: cal)
+        let completed = state.replan(now: continuation.end.addingTimeInterval(900), calendar: cal)
+        XCTAssertNil(state.settings.immediateStudy)
+        XCTAssertEqual(completed.tasks.map(\.lessonID), ["选中-0"])
+        XCTAssertEqual(state.lessonWorkItems(for: originalCourse).map(\.remainingMinutes), [30, 0])
+        XCTAssertEqual(state.courses[0], originalCourse)
+    }
+
+    func testPartialConfirmationOnlyCreditsActualSegmentMinutes() throws {
+        var state = fixture()
+        state.courses = [course("选中", lengths: [30, 90])]
+        state.fixedEvents = [.init(title: "午休", startMinute: 720, endMinute: 780, startDate: date(), endDate: date())]
+        let first = try state.studyImmediately(courseID: state.courses[0].id, lessonID: "选中-1", now: date(28, 11, 50), calendar: cal).tasks[0]
+        try state.confirm(taskID: first.id, actualMinutes: 5, now: date(28, 11, 55), calendar: cal)
+        let result = state.replan(now: date(28, 11, 55), calendar: cal)
+        XCTAssertEqual(result.tasks.map(\.durationMinutes), [85, 30])
+        XCTAssertEqual(result.tasks.first?.lessonID, "选中-1")
+        XCTAssertEqual(result.tasks.first?.start, date(28, 13))
+        XCTAssertEqual(state.completedMinutes(for: state.courses[0]), 5)
+        XCTAssertEqual(state.settings.immediateStudy?.continuesLesson, true)
+    }
+
+    func testExpiredUnconfirmedSegmentKeepsAllMinutesAndDoesNotReplanIntoThePast() throws {
+        var state = fixture()
+        state.courses = [course("选中", lengths: [90])]
+        state.fixedEvents = [.init(title: "午休", startMinute: 720, endMinute: 780, startDate: date(), endDate: date())]
+        _ = try state.studyImmediately(courseID: state.courses[0].id, now: date(28, 11, 50), calendar: cal)
+        let result = state.replan(now: date(28, 13), calendar: cal)
+        XCTAssertEqual(result.tasks.first?.start, date(28, 13))
+        XCTAssertEqual(totals(result.tasks)[state.courses[0].id], 90)
+        XCTAssertTrue(state.completions.isEmpty)
+        XCTAssertNotNil(state.settings.immediateStudy)
+    }
+
+    func testFloatingEventCanShortenFirstSegmentInsteadOfPreventingStart() throws {
+        var state = fixture()
+        state.courses = [course("选中", lengths: [60])]
+        var event = FixedEvent(title: "浮动事项", startMinute: 480, endMinute: 570, startDate: date(), endDate: date())
+        event.floatingDurationMinutes = 60
+        state.fixedEvents = [event]
+        let result = try state.studyImmediately(courseID: state.courses[0].id, now: date(), calendar: cal)
+        XCTAssertEqual(result.tasks.map(\.durationMinutes), [30, 30])
+        XCTAssertEqual(result.tasks.first?.start, date())
+        XCTAssertEqual(totals(result.tasks)[state.courses[0].id], 60)
+        XCTAssertTrue(result.risks.isEmpty)
+        XCTAssertNotNil(FloatingPlacement.reserve([event, state.immediateStudyReservation(result.tasks[0], calendar: cal)]))
+    }
+
+    func testContinuationOutranksSavedFutureDragOrderAndCannotBeDragged() throws {
+        var state = fixture()
+        state.courses = [course("选中", lengths: [30, 90], deadline: 29)]
+        let todayWeekday = cal.component(.weekday, from: date())
+        state.settings.availability = (1...7).map { .init(weekday: $0, startMinute: 480, endMinute: $0 == todayWeekday ? 540 : 600) }
+        let initial = try state.studyImmediately(courseID: state.courses[0].id, lessonID: "选中-1", now: date(), calendar: cal)
+        let tomorrow = initial.tasks.filter { cal.isDate($0.start, inSameDayAs: date(29, 0)) }
+        XCTAssertEqual(tomorrow.map(\.lessonID), ["选中-1", "选中-0"])
+        guard tomorrow.count == 2 else { return }
+        state.settings.dailyTaskOrders = [.init(day: date(29, 0), keys: DailyTaskOrder.keys(for: tomorrow).reversed())]
+        let refreshed = state.replan(now: date(28, 8, 5), calendar: cal)
+        XCTAssertEqual(refreshed.tasks.filter { cal.isDate($0.start, inSameDayAs: date(29, 0)) }.map(\.lessonID), ["选中-1", "选中-0"])
+        XCTAssertThrowsError(try state.swapDailyTasks(tomorrow[0].id, tomorrow[1].id, now: date(28, 8, 5), calendar: cal)) {
+            XCTAssertEqual($0 as? ImmediateStudyError, .pinnedTask)
         }
     }
 
@@ -305,5 +444,15 @@ final class ImmediateStudyTests: XCTestCase {
         let data = try JSONEncoder().encode(AppSettings())
         let settings = try JSONDecoder().decode(AppSettings.self, from: data)
         XCTAssertNil(settings.immediateStudy)
+    }
+
+    func testLegacyImmediateRequestDecodesWithoutContinuationFlag() throws {
+        let task = ScheduledTask(courseID: UUID(), start: date(), durationMinutes: 60, lessonID: "legacy")
+        let data = try JSONEncoder().encode(ImmediateStudyRequest(task: task))
+        let object = try XCTUnwrap(try JSONSerialization.jsonObject(with: data) as? [String: Any])
+        XCTAssertNil(object["continuesLesson"])
+        let decoded = try JSONDecoder().decode(ImmediateStudyRequest.self, from: data)
+        XCTAssertEqual(decoded.task, task)
+        XCTAssertNil(decoded.continuesLesson)
     }
 }
