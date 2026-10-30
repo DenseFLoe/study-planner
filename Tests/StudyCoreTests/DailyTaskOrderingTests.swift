@@ -84,6 +84,42 @@ final class DailyTaskOrderingTests: XCTestCase {
         try state.swapDailyTasks(ids[0], ids[1], now: date(7), calendar: calendar)
         XCTAssertEqual(state.tasks.map(\.id), ids)
     }
+
+    func testSwappingOtherLessonsKeepsImmediateTaskAndItsFloatingReservation() throws {
+        var state = PlannerState()
+        state.settings.availability = (1...7).map { .init(weekday: $0, startMinute: 480, endMinute: 780) }
+        state.courses = (0..<3).map { index in
+            var course = Course(name: "课程\(index)", totalMinutes: 30, startDate: date(), deadline: date())
+            course.type = .lessonBasedRecorded
+            course.manualLessons = [.init(id: "lesson-\(index)", name: "课节\(index)", durationMinutes: 30)]
+            return course
+        }
+        var event = FixedEvent(title: "浮动事项", startMinute: 480, endMinute: 600, startDate: date(), endDate: date())
+        event.floatingDurationMinutes = 60
+        state.fixedEvents = [event]
+        let plan = try state.studyImmediately(courseID: state.courses[0].id, now: date(9), calendar: calendar)
+        let request = try XCTUnwrap(state.settings.immediateStudy)
+        let pinned = request.task
+        let other = plan.tasks.filter { $0.id != pinned.id }
+        XCTAssertEqual(other.count, 2)
+        for _ in 0..<2 {
+            let previousOrder = state.tasks.filter { $0.id != pinned.id }.map(\.id)
+            try state.swapDailyTasks(other[0].id, other[1].id, now: date(9), calendar: calendar)
+            XCTAssertEqual(state.tasks.first { $0.id == pinned.id }, pinned)
+            XCTAssertEqual(state.settings.immediateStudy, request)
+            XCTAssertEqual(state.fixedEvents, [event], "The reservation must not become a persisted user event")
+            XCTAssertEqual(state.tasks.filter { $0.id != pinned.id }.map(\.id), Array(previousOrder.reversed()))
+            XCTAssertEqual(state.tasks.reduce(0) { $0 + $1.durationMinutes }, 90)
+            for (first, second) in zip(state.tasks, state.tasks.dropFirst()) {
+                XCTAssertGreaterThanOrEqual(second.start.timeIntervalSince(first.end), 900)
+            }
+            XCTAssertNotNil(FloatingPlacement.reserve(state.fixedEvents + [state.immediateStudyReservation(pinned, calendar: calendar)]))
+        }
+        state = try JSONDecoder().decode(PlannerState.self, from: JSONEncoder().encode(state))
+        _ = state.replan(now: date(9, minute: 5), calendar: calendar)
+        XCTAssertEqual(state.tasks.first { $0.id == pinned.id }, pinned)
+        XCTAssertEqual(state.settings.immediateStudy, request)
+    }
     private func eveningFixture() -> PlannerState {
         var state = PlannerState()
         state.settings.availability = [.init(weekday: 2, startMinute: 9 * 60, endMinute: 22 * 60)]

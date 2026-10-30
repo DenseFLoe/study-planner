@@ -1,6 +1,50 @@
 import Foundation
 
 extension PlannerState {
+    /// Save an editor draft together with any manual-lesson deletion tombstones.
+    /// The draft's baseline is already adjusted by removeLessons before display.
+    public mutating func updateCourse(_ edited: Course) throws {
+        var saved = edited
+        if let original = courses.first(where: { $0.id == saved.id }),
+           original.type == .lessonBasedRecorded, original.webCourse == nil, original.mergedSources == nil,
+           saved.type == .lessonBasedRecorded, saved.webCourse == nil, saved.mergedSources == nil,
+           let previous = original.manualLessons, let lessons = saved.manualLessons {
+            let removed = Set(previous.map(\.id)).subtracting(lessons.map(\.id))
+            if !removed.isEmpty {
+                guard !lessons.isEmpty else {
+                    throw WebCourseImportError.invalid("请至少保留一节课；删除整门课程请使用「删除课程」。")
+                }
+                try validateLessonRecords(for: original, known: Set(lessonWorkItems(for: original).map(\.id)))
+            }
+            let deleted = Set(original.deletedLessonIDs ?? []).union(saved.deletedLessonIDs ?? []).union(removed)
+            guard deleted.isDisjoint(with: lessons.map(\.id)) else {
+                throw WebCourseImportError.invalid("部分课节已删除，请重新打开课程后编辑。")
+            }
+            saved.deletedLessonIDs = deleted.isEmpty ? nil : deleted.sorted()
+            saved.lessonOrder = saved.lessonOrder?.filter { !deleted.contains($0) }
+            saved.netdiskLessons = saved.netdiskLessons?.filter { !deleted.contains($0.key) }
+        }
+        var next = self
+        let index: Int
+        if let existing = next.courses.firstIndex(where: { $0.id == saved.id }) {
+            index = existing
+            next.courses[index] = saved
+        } else {
+            index = next.courses.count
+            next.courses.append(saved)
+        }
+        next.purgeDeletedLessonRecords()
+        if saved.type == .lessonBasedRecorded, saved.lessonOrder == nil {
+            if let website = saved.webCourse {
+                next.courses[index].lessonOrder = website.lessons.map(\.id)
+                next.courses[index].lessonOrderCustomized = false
+            } else {
+                next.courses[index].lessonOrder = LessonOrdering.intelligent(next.lessonWorkItems(for: saved)).map(\.id)
+            }
+        }
+        self = next
+    }
+
     /// Atomically delete a subset of a course, including the selected lessons' history.
     public mutating func removeLessons(courseID: UUID, ids: Set<String>) throws {
         guard let index = courses.firstIndex(where: { $0.id == courseID && !$0.isArchived }) else {
@@ -14,15 +58,19 @@ extension PlannerState {
         guard ids != known else {
             throw WebCourseImportError.invalid("请至少保留一节课；删除整门课程请使用「删除课程」。")
         }
-        let taskByID = Dictionary(tasks.filter { $0.courseID == courseID }.map { ($0.id, $0) },
+        try validateLessonRecords(for: course, known: known)
+        courses[index] = try removingLessons(ids, from: course)
+        purgeDeletedLessonRecords()
+    }
+
+    private func validateLessonRecords(for course: Course, known: Set<String>) throws {
+        let taskByID = Dictionary(tasks.filter { $0.courseID == course.id }.map { ($0.id, $0) },
                                   uniquingKeysWith: { first, _ in first })
-        guard completions.filter({ $0.courseID == courseID }).allSatisfy({
+        guard completions.filter({ $0.courseID == course.id }).allSatisfy({
             taskByID[$0.taskID]?.lessonID.map(known.contains) == true
         }) else {
             throw WebCourseImportError.invalid("部分旧完成记录没有课节标识，暂不能安全删除部分课节。")
         }
-        courses[index] = try removingLessons(ids, from: course)
-        purgeDeletedLessonRecords()
     }
 
     private func removingLessons(_ ids: Set<String>, from course: Course) throws -> Course {

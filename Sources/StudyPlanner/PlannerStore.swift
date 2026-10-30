@@ -141,19 +141,7 @@ final class PlannerStore {
         return change { try $0.recordActualStudyStart(minute: minute, now: Date(), calendar: calendar) }
     }
     func saveCourse(_ course: Course) -> Bool {
-        change { state in
-            var saved = course
-            if saved.type == .lessonBasedRecorded, saved.lessonOrder == nil {
-                if let website = saved.webCourse {
-                    saved.lessonOrder = website.lessons.map(\.id)
-                    saved.lessonOrderCustomized = false
-                } else {
-                    saved.lessonOrder = LessonOrdering.intelligent(state.lessonWorkItems(for: saved)).map(\.id)
-                }
-            }
-            if let i = state.courses.firstIndex(where: { $0.id == saved.id }) { state.courses[i] = saved }
-            else { state.courses.append(saved) }
-        }
+        change { try $0.updateCourse(course) }
     }
     func deleteCourse(_ course: Course) -> Bool {
         change { $0.removeCourse(id: course.id) }

@@ -10,7 +10,7 @@ struct CourseEditor: View {
     @State private var message = ""
     @State private var supervisedApplication: SupervisedApplication?
     private var existing: Bool { store.course(course.id) != nil }
-    private var logged: Int { store.state.completions.filter { $0.courseID == course.id }.reduce(0) { $0 + $1.minutes } }
+    private var logged: Int { previewState.completions.filter { $0.courseID == course.id }.reduce(0) { $0 + $1.minutes } }
     private var isManualLessonCourse: Bool { course.type == .lessonBasedRecorded && course.webCourse == nil && course.mergedSources == nil }
     private func setManualLessons(_ lessons: [ManualLesson]) {
         course.manualLessons = lessons
@@ -24,9 +24,21 @@ struct CourseEditor: View {
     }
     private var previewState: PlannerState {
         var state = store.state
-        if let index = state.courses.firstIndex(where: { $0.id == course.id }) { state.courses[index] = course }
-        else { state.courses.append(course) }
+        try? state.updateCourse(course)
         return state
+    }
+    private func removeManualLesson(_ id: String) {
+        if store.course(course.id)?.manualLessons?.contains(where: { $0.id == id }) != true {
+            setManualLessons((course.manualLessons ?? []).filter { $0.id != id })
+            message = ""
+            return
+        }
+        var state = previewState
+        do {
+            try state.removeLessons(courseID: course.id, ids: [id])
+            if let updated = state.courses.first(where: { $0.id == course.id }) { course = updated }
+            message = ""
+        } catch { message = error.localizedDescription }
     }
     private var validation: String? {
         if course.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { return "请填写课程名称。" }
@@ -38,6 +50,10 @@ struct CourseEditor: View {
             if lessons.reduce(0, { $0 + $1.durationMinutes }) != course.totalMinutes { return "课节时长与总学习量不一致。" }
         }
         if course.totalMinutes <= 0 || course.totalMinutes > 600_000 { return "总时长须大于 0，且不超过 10,000 小时。" }
+        do {
+            var state = store.state
+            try state.updateCourse(course)
+        } catch { return error.localizedDescription }
         if course.initialCompletedMinutes < 0 || course.initialCompletedMinutes + logged > course.totalMinutes { return "已完成时长不能超过总学习时长。" }
         if Calendar.current.startOfDay(for: course.deadline) < Calendar.current.startOfDay(for: course.startDate) { return "截止日期不能早于开始日期。" }
         if course.deadline > Calendar.current.date(byAdding: .year, value: 10, to: Date())! { return "截止日期须在未来十年以内。" }
@@ -69,9 +85,7 @@ struct CourseEditor: View {
                                 }, set: { value in updateManualLesson(lesson.id) { $0.durationMinutes = value } }), format: .number)
                                 .frame(width: 65)
                                 Button(role: .destructive) {
-                                    var lessons = course.manualLessons ?? []
-                                    lessons.removeAll { $0.id == lesson.id }
-                                    setManualLessons(lessons)
+                                    removeManualLesson(lesson.id)
                                 } label: { Image(systemName: "minus.circle") }
                                 .buttonStyle(.plain)
                             }
@@ -82,6 +96,8 @@ struct CourseEditor: View {
                             setManualLessons(lessons)
                         }
                         Text("每节课程会生成一项独立任务；总时长由课节相加。")
+                            .font(.caption).foregroundStyle(.secondary)
+                        Text("删除课节会在保存时清除其安排和完成记录；请至少保留一节。")
                             .font(.caption).foregroundStyle(.secondary)
                     }
                 }

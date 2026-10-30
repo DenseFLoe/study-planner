@@ -28,7 +28,8 @@ public enum DailyTaskOrderError: Error, LocalizedError {
 
 extension PlannerState {
     public mutating func swapDailyTasks(_ sourceID: UUID, _ targetID: UUID, now: Date = Date(), calendar: Calendar = .current) throws {
-        if let immediate = validImmediateStudyTask(now: now, calendar: calendar),
+        let immediate = validImmediateStudyTask(now: now, calendar: calendar)
+        if let immediate,
            immediate.id == sourceID || immediate.id == targetID { throw ImmediateStudyError.pinnedTask }
         if let continuation = immediateStudyContinuation(now: now, calendar: calendar),
            let request = settings.immediateStudy,
@@ -52,7 +53,14 @@ extension PlannerState {
         keys.swapAt(a, b)
         var reordered = original
         reordered.swapAt(a, b)
-        guard let placed = placeDailyTasks(reordered, earliest: original[0].start, calendar: calendar) else {
+        var context = self
+        if let immediate, calendar.isDate(immediate.start, inSameDayAs: day) {
+            // Other swaps must keep both the pinned slot and the floating-event
+            // placement that makes it possible. Its history also reserves rest.
+            reordered.removeAll { $0.id == immediate.id }
+            context.fixedEvents.append(immediateStudyReservation(immediate, calendar: calendar))
+        }
+        guard let placed = context.placeDailyTasks(reordered, earliest: original[0].start, calendar: calendar) else {
             throw DailyTaskOrderError.noSpace
         }
         let byID = Dictionary(uniqueKeysWithValues: placed.map { ($0.id, $0) })
