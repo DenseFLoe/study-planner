@@ -10,13 +10,13 @@ macOS 14 及以上（Apple Silicon）可使用 macOS 版本；Android 8.0 及以
 
 ## 运行
 
-运行 `./Scripts/build-dmg.sh` 可生成 macOS 安装包 `dist/学习日程-macOS-<短SHA>.dmg` 及同名 `.dmg.sha256` 校验文件；打开 DMG 后把「学习日程」拖入「应用程序」即完成安装。`./Scripts/build-app.sh` 只生成开发构建 `dist/学习日程.app`。需要含 Android APK 的完整发布包时运行 `./Scripts/release.sh`，脚本会生成 macOS DMG、Android APK、安装说明、SHA-256 校验和及可直接转发的 ZIP。首次打开为空白数据库，可以直接添加课程，或点击「载入示例，体验自动排程」。示例一旦通过正式应用的按钮载入，也会保存在本机。
+运行 `./Scripts/build-dmg.sh` 可生成 macOS 安装包 `dist/学习日程-macOS-<短SHA>.dmg` 及同名 `.dmg.sha256` 校验文件；打开 DMG 后把「学习日程」拖入「应用程序」即完成安装。`./Scripts/build-app.sh` 是内部辅助脚本，只生成开发构建 `dist/学习日程.app`，不单独交付，也不提供 `.app` 下载链接或路径。需要含 Android APK 的完整发布包时运行 `./Scripts/release.sh`，脚本会生成 macOS DMG、Android APK、安装说明、SHA-256 校验和及可直接转发的 ZIP。首次打开为空白数据库，可以直接添加课程，或点击「载入示例，体验自动排程」。示例一旦通过正式应用的按钮载入，也会保存在本机。
 
 开发环境需要 Xcode / Swift 6：
 
 ```sh
 ./Scripts/test.sh
-./Scripts/build-app.sh
+./Scripts/build-dmg.sh
 ```
 
 也可在 Xcode 中打开 `Package.swift`，选择 StudyPlanner 运行。`build-app.sh` 与 `build-dmg.sh` 默认 Release；传入 `debug` 可构建调试版。本机构建使用临时 ad-hoc 签名，尚未制作 Developer ID 公证的对外发行版本。
@@ -34,9 +34,8 @@ macOS 14 及以上（Apple Silicon）可使用 macOS 版本；Android 8.0 及以
 已有命令：
 
 ```sh
-# macOS：单元测试与开发构建
+# macOS：单元测试与安装包
 ./Scripts/test.sh
-./Scripts/build-app.sh          # 生成 dist/学习日程.app
 ./Scripts/build-dmg.sh          # 生成 dist/学习日程-macOS-<短SHA>.dmg 及同名 .dmg.sha256
 
 # Android：单元测试与 APK 打包
@@ -46,7 +45,7 @@ macOS 14 及以上（Apple Silicon）可使用 macOS 版本；Android 8.0 及以
 
 macOS 安装：打开 `dist/学习日程-macOS-<短SHA>.dmg`，把「学习日程」拖入 DMG 中的「应用程序」文件夹，再从「应用程序」启动。首次启动若被系统拦截，在 Finder 中右键应用选择「打开」确认。校验安装包：在 `dist` 目录执行 `shasum -a 256 -c 学习日程-macOS-<短SHA>.dmg.sha256`，输出 `OK` 表示文件完整。
 
-代码改动推送后按影响范围打包，本地验收从打包产物进行，而不是直接从源码目录运行；能自动验证的自动验证，需要人工交互的部分给出具体步骤并说明尚未验证的部分。macOS 受影响的每一轮代码改动都必须交付可拖到「应用程序」安装的 DMG，不能只交付 `.app`；Android 仍按影响范围生成 APK。发现问题修复后进入下一轮独立提交。仅文档修改无需重新打包。默认不创建公开 GitHub Release，不上传安装包，也不做部署。
+代码改动推送后按影响范围打包，本地验收从打包产物进行，而不是直接从源码目录运行；能自动验证的自动验证，需要人工交互的部分给出具体步骤并说明尚未验证的部分。macOS 受影响的每一轮代码改动仅交付可拖到「应用程序」安装的 DMG 及同名 SHA-256 校验文件，不单独交付 `.app`；Android 仍按影响范围生成 APK。发现问题修复后进入下一轮独立提交。仅文档修改无需重新打包。默认不创建公开 GitHub Release，不上传安装包，也不做部署。
 
 ## 已实现
 

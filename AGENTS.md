@@ -34,7 +34,7 @@
 | macOS | `./Scripts/build-dmg.sh` | `dist/学习日程-macOS-<短SHA>.dmg` 及 `.dmg.sha256` |
 | Android | `./Android/build.sh` | `dist/学习日程-安卓版.apk` |
 
-- macOS 受影响的每一轮代码改动都必须交付可拖到「应用程序」安装的 DMG，不能只交付 `.app`；DMG 由 `./Scripts/build-dmg.sh` 生成并附带同名 SHA-256 校验文件。
+- macOS 受影响的每一轮代码改动，只向用户交付 `./Scripts/build-dmg.sh` 生成、可拖到「应用程序」安装的 DMG 及同名 SHA-256 校验文件，不单独交付 `.app`，也不提供 `.app` 下载链接或交付路径。`.app` 仅作为开发/打包的内部中间产物（DMG 内含 `.app` 供正常安装）。
 - Android 仍按影响范围决定是否生成 APK；只改动 macOS 时无需重新构建 Android APK。
 - 本地验收从打包产物进行，而不是直接从源码目录运行。
 - 能自动验证的自行验证；需要用户交互的，给出具体操作步骤，并如实说明哪部分尚未验证。
@@ -53,4 +53,4 @@
 
 ### 每轮报告
 
-每轮结束报告：提交的简短 SHA、推送分支、测试结果、本地安装包路径。
+每轮结束报告：提交的简短 SHA、推送分支、测试结果、本地安装包路径。macOS 只列 DMG 和同名 `.dmg.sha256` 校验文件，不列 `.app`。
