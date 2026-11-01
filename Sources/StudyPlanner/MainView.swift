@@ -127,7 +127,6 @@ struct MainView: View {
         .onAppear {
             store.startCloudMonitoring()
             store.triggerAutomaticSync()
-            store.requestCloudSync()
             if store.showDailyReview { sheet = .review }
         }
         .onChange(of: store.showDailyReview) { _, value in
@@ -137,7 +136,6 @@ struct MainView: View {
             if value == .active {
                 store.checkDay()
                 store.triggerAutomaticSync()
-                store.requestCloudSync()
             }
         }
         .task {
