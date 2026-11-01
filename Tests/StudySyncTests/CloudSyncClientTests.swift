@@ -74,9 +74,13 @@ final class CloudSyncClientTests: XCTestCase, @unchecked Sendable {
         try await Task.detached { try LocalRepository(url: database).save(PlannerState()) }.value
         var ledger = SyncLedger(); try ledger.capture(PlannerState()); let server = ArchiveServer(ledger)
         await server.editOnUpload {
-            try await SyncDatabase.update(url: database) { state, _ in
-                state.courses.append(Course(name: "Edited during transfer", totalMinutes: 10, startDate: Date(), deadline: Date()))
-            }
+            try await Task.detached {
+                let repository = try LocalRepository(url: database)
+                let baseline = try repository.load()
+                var edited = baseline
+                edited.courses.append(Course(name: "Edited during transfer", totalMinutes: 10, startDate: Date(), deadline: Date()))
+                _ = try repository.saveChanges(edited, from: baseline)
+            }.value
         }
         let result = try await CloudSyncClient.run(endpoint: "https://fixture.test", databaseURL: database, outbox: outbox, transport: server)
         XCTAssertEqual(result.state.courses.first?.name, "Edited during transfer")

@@ -39,7 +39,7 @@ final class ImmediateStudyStoreTests: XCTestCase {
         XCTAssertNil(store.errorMessage)
     }
 
-    @MainActor func testFailedPersistenceAndSyncPreserveStateAndCachedResult() {
+    @MainActor func testFailedPersistencePreservesStateAndSyncAllowsImmediateStudy() {
         let (state, result, now) = fixture()
         let repository = Repository()
         repository.fails = true
@@ -51,10 +51,10 @@ final class ImmediateStudyStoreTests: XCTestCase {
         XCTAssertNotNil(store.errorMessage)
         repository.fails = false
         store.syncBusy = true
-        XCTAssertFalse(store.studyImmediately(courseID: state.courses[0].id, now: now))
-        XCTAssertEqual(store.state, state)
-        XCTAssertEqual(store.result.tasks, result.tasks)
-        XCTAssertNil(repository.saved)
+        XCTAssertTrue(store.studyImmediately(courseID: state.courses[0].id, now: now))
+        XCTAssertEqual(repository.saved, store.state)
+        XCTAssertEqual(store.result.tasks, store.state.tasks)
+        XCTAssertNotNil(store.state.settings.immediateStudy)
     }
 
     @MainActor func testSelectedLessonIsSavedAndDisplayedAheadOfEarlierLesson() throws {

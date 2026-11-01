@@ -48,7 +48,7 @@ struct ActualStudyStartEntry: View {
             if store.saveActualStudyStart(time) { didSave() }
         }
         .buttonStyle(SoftButtonStyle(prominent: true))
-        .disabled(!store.isReady || store.syncBusy)
+        .disabled(!store.isReady)
         .accessibilityIdentifier("apply-actual-study-start")
     }
 }

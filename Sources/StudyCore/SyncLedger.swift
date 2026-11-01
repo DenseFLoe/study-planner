@@ -41,6 +41,40 @@ public struct SyncLedger: Codable, Sendable {
     public func changes(after cursor: Int64) -> [SyncRecord] {
         records.values.filter { $0.sequence > cursor }.sorted { $0.sequence < $1.sequence }
     }
+    /// Apply only the rows edited in a displayed snapshot. Unseen remote rows
+    /// must not become deletions when the UI saves while sync is in flight.
+    public mutating func captureChanges(from baseline: PlannerState, to edited: PlannerState, now: Date = Date()) throws {
+        var delta = SyncLedger()
+        try delta.capture(baseline, now: now)
+        let cursor = delta.sequence
+        let original = delta.records
+        try delta.capture(edited, now: now)
+        let changes = delta.changes(after: cursor)
+        guard !changes.isEmpty else { return }
+        clock += 1
+        for var row in changes {
+            if !row.deleted, let before = original[row.key], let current = records[row.key], !current.deleted {
+                // Editors submit whole models. Keep fields the editor did not
+                // change, such as a remote rename during a local weight edit.
+                row.payload = try Self.overlayEditedFields(before: before.payload, edited: row.payload, current: current.payload)
+            }
+            sequence += 1
+            row.sequence = sequence; row.version = clock; row.device = device
+            row.modifiedAt = max(Int64(now.timeIntervalSince1970 * 1000), (records[row.key]?.modifiedAt ?? 0) + 1)
+            records[row.key] = row
+        }
+    }
+    private static func overlayEditedFields(before: Data, edited: Data, current: Data) throws -> Data {
+        guard let baseline = try JSONSerialization.jsonObject(with: before) as? [String: Any],
+              let changes = try JSONSerialization.jsonObject(with: edited) as? [String: Any],
+              var merged = try JSONSerialization.jsonObject(with: current) as? [String: Any] else { throw SyncFailure.invalidData }
+        for key in Set(baseline.keys).union(changes.keys) {
+            let old = baseline[key] as? NSObject, new = changes[key] as? NSObject
+            if let old, let new, old.isEqual(new) { continue }
+            merged[key] = changes[key]
+        }
+        return try JSONSerialization.data(withJSONObject: merged, options: [.sortedKeys])
+    }
     public mutating func capture(_ state: PlannerState, now: Date = Date()) throws {
         var state = state
         state.removeArchivedCourses()

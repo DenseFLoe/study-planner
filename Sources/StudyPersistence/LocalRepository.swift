@@ -17,13 +17,31 @@ public protocol PlannerRepository {
     func load() throws -> PlannerState
     func save(_ state: PlannerState) throws
     @MainActor func saveForInteraction(_ state: PlannerState) async throws
+    func saveChanges(_ state: PlannerState, from baseline: PlannerState) throws -> PlannerState
+    @MainActor func saveChangesForInteraction(_ state: PlannerState, from baseline: PlannerState) async throws -> PlannerState
 }
 
 extension PlannerRepository {
     @MainActor public func saveForInteraction(_ state: PlannerState) async throws { try save(state) }
+    public func saveChanges(_ state: PlannerState, from baseline: PlannerState) throws -> PlannerState {
+        try save(state)
+        return state
+    }
+    @MainActor public func saveChangesForInteraction(_ state: PlannerState, from baseline: PlannerState) async throws -> PlannerState {
+        try await saveForInteraction(state)
+        return state
+    }
 }
 
 public final class LocalRepository: PlannerRepository {
+    private static let transactionLock = NSRecursiveLock()
+    /// Serialize local read/modify/write transactions with background sync.
+    /// Network transfers and schedule calculations never hold this lock.
+    public static func withExclusiveAccess<T>(_ operation: () throws -> T) rethrows -> T {
+        transactionLock.lock()
+        defer { transactionLock.unlock() }
+        return try operation()
+    }
     private let container: ModelContainer
     private var context: ModelContext
     private let encoder: JSONEncoder
@@ -78,6 +96,44 @@ public final class LocalRepository: PlannerRepository {
         discardCachedModels()
     }
 
+    public func saveChanges(_ state: PlannerState, from baseline: PlannerState) throws -> PlannerState {
+        try Self.withExclusiveAccess {
+            // Sync may already have committed rows absent from the displayed UI.
+            context = ModelContext(container)
+            context.autosaveEnabled = false
+            try backupBeforeMigrationIfNeeded()
+            let latest = try load()
+            var ledger = try loadLedger()
+            try ledger.capture(latest)
+            try ledger.captureChanges(from: baseline, to: state)
+            var merged = try ledger.materialize()
+            // Materialization sorts by sync keys. Preserve displayed ordering so
+            // an ordinary save does not appear to be a different plan and trigger
+            // another expensive assessment on the main actor.
+            func ordered<T: Identifiable>(_ values: [T], like reference: [T]) -> [T] {
+                var remaining = Dictionary(uniqueKeysWithValues: values.map { ($0.id, $0) })
+                let known = reference.compactMap { remaining.removeValue(forKey: $0.id) }
+                return known + values.filter { remaining[$0.id] != nil }
+            }
+            merged.courses = ordered(merged.courses, like: state.courses)
+            merged.fixedEvents = ordered(merged.fixedEvents, like: state.fixedEvents)
+            merged.tasks = ordered(merged.tasks, like: state.tasks)
+            merged.completions = ordered(merged.completions, like: state.completions)
+            try save(merged, ledger: ledger)
+            return merged
+        }
+    }
+
+    @MainActor public func saveChangesForInteraction(_ state: PlannerState, from baseline: PlannerState) async throws -> PlannerState {
+        let container = container, backup = migrationBackupURL, outbox = cloudOutboxURL
+        let merged = try await Task.detached(priority: .userInitiated) {
+            let worker = LocalRepository(container: container, migrationBackupURL: backup, cloudOutboxURL: outbox)
+            return try worker.saveChanges(state, from: baseline)
+        }.value
+        discardCachedModels()
+        return merged
+    }
+
     /// Background sync writes through a separate context on the same store.
     /// Reuse the container instead of opening the database again on the UI thread.
     @MainActor public func discardCachedModels() {
@@ -114,13 +170,16 @@ public final class LocalRepository: PlannerRepository {
         return SyncLedger()
     }
     public func save(_ state: PlannerState) throws {
+        try backupBeforeMigrationIfNeeded()
+        // The transactional overload captures the state once.
+        try save(state, ledger: loadLedger())
+    }
+    private func backupBeforeMigrationIfNeeded() throws {
         if let backup = migrationBackupURL, !FileManager.default.fileExists(atPath: backup.path),
            !(try context.fetch(FetchDescriptor<LocalRecord>())).contains(where: { $0.kind == "sync" }) {
             try encoder.encode(load()).write(to: backup, options: .atomic)
             try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: backup.path)
         }
-        // The transactional overload captures the state once.
-        try save(state, ledger: loadLedger())
     }
     public func save(_ state: PlannerState, ledger: SyncLedger, enqueueCloud: Bool = true) throws {
         let previousSequence = try loadLedger().sequence

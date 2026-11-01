@@ -4,6 +4,84 @@ import SwiftData
 @testable import StudyPersistence
 
 final class LocalRepositoryTests: XCTestCase {
+    @MainActor func testSavingWithoutRemoteChangesKeepsDisplayedOrder() throws {
+        let repository = try LocalRepository(inMemory: true)
+        let day = Date()
+        var baseline = PlannerState()
+        baseline.courses = (0..<8).map { Course(name: "课程\($0)", totalMinutes: 60, startDate: day, deadline: day) }
+        baseline.tasks = baseline.courses.enumerated().map {
+            ScheduledTask(courseID: $0.element.id, start: day.addingTimeInterval(Double($0.offset) * 3600), durationMinutes: 60)
+        }
+        try repository.save(baseline)
+        var edited = baseline
+        edited.courses[0].name = "已编辑"
+        let saved = try repository.saveChanges(edited, from: baseline)
+        XCTAssertEqual(saved, edited)
+    }
+
+    @MainActor func testSavingDisplayedEditsPreservesUnseenRemoteChangesAndLedgerProgress() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let url = directory.appendingPathComponent("concurrent.store")
+        let local = try LocalRepository(url: url)
+        let day = Date()
+        var baseline = PlannerState()
+        baseline.courses = [Course(name: "本地待删除", totalMinutes: 60, startDate: day, deadline: day),
+                            Course(name: "远端待编辑", totalMinutes: 60, startDate: day, deadline: day)]
+        try local.save(baseline)
+        _ = try local.load() // Cache rows before the other context commits.
+        let remote = try LocalRepository(url: url)
+        var incoming = baseline
+        incoming.courses[1].name = "远端已编辑"
+        incoming.courses.append(Course(name: "远端新增", totalMinutes: 60, startDate: day, deadline: day))
+        incoming.settings.minimumScheduleUnit = 30
+        var progress = try remote.loadLedger()
+        progress.peerCursor = 123
+        try remote.save(incoming, ledger: progress)
+        var edited = baseline
+        edited.courses[1].dailyStudyWeight = 2
+        edited.settings.notificationMinute = 1200
+        edited.removeCourse(id: baseline.courses[0].id)
+        let saved = try local.saveChanges(edited, from: baseline)
+        XCTAssertEqual(Set(saved.courses.map(\.name)), ["远端已编辑", "远端新增"])
+        XCTAssertEqual(saved.settings.minimumScheduleUnit, 30)
+        XCTAssertEqual(saved.settings.notificationMinute, 1200)
+        XCTAssertEqual(saved.courses.first { $0.id == baseline.courses[1].id }?.dailyStudyWeight, 2)
+        let reopened = try LocalRepository(url: url)
+        XCTAssertEqual(Set(try reopened.load().courses.map(\.name)), ["远端已编辑", "远端新增"])
+        let ledger = try reopened.loadLedger()
+        XCTAssertEqual(ledger.peerCursor, 123)
+        XCTAssertEqual(ledger.records["courses/" + baseline.courses[0].id.uuidString]?.deleted, true)
+        XCTAssertEqual(Set(try ledger.materialize().courses.map(\.name)), ["远端已编辑", "远端新增"])
+    }
+
+    @MainActor func testBackgroundInteractionSaveMergesConfirmationWithRemoteAddition() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let url = directory.appendingPathComponent("confirm.store")
+        let local = try LocalRepository(url: url)
+        var baseline = PlannerState()
+        let day = Date()
+        let course = Course(name: "确认进度", totalMinutes: 60, startDate: day, deadline: day)
+        baseline.courses = [course]
+        let task = ScheduledTask(courseID: course.id, start: day, durationMinutes: 60)
+        baseline.tasks = [task]
+        try local.save(baseline)
+        var incoming = baseline
+        incoming.courses.append(Course(name: "云端新增", totalMinutes: 60, startDate: day, deadline: day))
+        try LocalRepository(url: url).save(incoming)
+        var edited = baseline
+        try edited.confirm(taskID: task.id, actualMinutes: 30, now: task.end)
+        let saved = try await local.saveChangesForInteraction(edited, from: baseline)
+        XCTAssertEqual(saved.completedMinutes(for: course), 30)
+        XCTAssertEqual(Set(saved.courses.map(\.name)), ["确认进度", "云端新增"])
+        let reopened = try LocalRepository(url: url)
+        XCTAssertEqual(try reopened.load().completedMinutes(for: course), 30)
+        XCTAssertEqual(try reopened.loadLedger().materialize().completedMinutes(for: course), 30)
+    }
+
     @MainActor func testSplitImmediateRequestSurvivesDiskAndSyncLedgerRoundTrip() throws {
         let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)

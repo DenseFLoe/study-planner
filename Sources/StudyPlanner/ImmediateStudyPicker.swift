@@ -6,7 +6,7 @@ struct ImmediateStudyMenu: View {
     @Bindable var store: PlannerStore
     var didSchedule: () -> Void
 
-    private var entryDisabled: Bool { !store.isReady || store.syncBusy || store.orderSaveBusy }
+    private var entryDisabled: Bool { !store.isReady || store.orderSaveBusy }
 
     var body: some View {
         let courses = store.state.immediateStudyCourses

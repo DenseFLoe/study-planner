@@ -51,7 +51,7 @@ struct MainView: View {
                         ProgressView()
                             .progressViewStyle(.circular)
                             .controlSize(.small)
-                        Text("正在同步中")
+                        Text("正在后台同步，可继续修改")
                             .font(.callout.weight(.medium))
                         Spacer()
                     }
@@ -428,7 +428,7 @@ struct MainView: View {
 
     private var canChangeDayEvents: Bool {
         Calendar.current.startOfDay(for: selectedDay) >= Calendar.current.startOfDay(for: Date()) &&
-        store.isReady && !store.syncBusy
+        store.isReady
     }
 
     private var agenda: some View {
@@ -599,7 +599,7 @@ struct MainView: View {
                         Text("立即学习：\(store.course(request.task.courseID)?.name ?? "课程") · \(request.task.lessonName ?? "下一课节")")
                             .font(.caption).foregroundStyle(.secondary)
                         Button("取消立即学习安排") { store.cancelImmediateStudy() }
-                            .font(.caption).disabled(store.syncBusy || store.orderSaveBusy)
+                            .font(.caption).disabled(store.orderSaveBusy)
                     }
                 }
                 .padding(14).plannerSurface()

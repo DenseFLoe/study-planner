@@ -148,14 +148,18 @@ public struct SyncOutcome: Sendable {
 public enum SyncDatabase {
     public static func snapshot(url: URL? = nil) async throws -> (PlannerState, SyncLedger) {
         try await Task.detached {
-            let db = try LocalRepository(url: url); let state = try db.load(); var ledger = try db.loadLedger()
-            try ledger.capture(state); try db.save(state, ledger: ledger); return (state, ledger)
+            try LocalRepository.withExclusiveAccess {
+                let db = try LocalRepository(url: url); let state = try db.load(); var ledger = try db.loadLedger()
+                try ledger.capture(state); try db.save(state, ledger: ledger); return (state, ledger)
+            }
         }.value
     }
     static func update<T: Sendable>(url: URL? = nil, enqueueCloud: Bool = true, _ block: @escaping @Sendable (inout PlannerState, inout SyncLedger) throws -> T) async throws -> T {
         try await Task.detached {
-            let db = try LocalRepository(url: url); var state = try db.load(); var ledger = try db.loadLedger()
-            let result = try block(&state, &ledger); try db.save(state, ledger: ledger, enqueueCloud: enqueueCloud); return result
+            try LocalRepository.withExclusiveAccess {
+                let db = try LocalRepository(url: url); var state = try db.load(); var ledger = try db.loadLedger()
+                let result = try block(&state, &ledger); try db.save(state, ledger: ledger, enqueueCloud: enqueueCloud); return result
+            }
         }.value
     }
 }

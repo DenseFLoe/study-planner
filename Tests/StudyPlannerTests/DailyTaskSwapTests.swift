@@ -71,7 +71,7 @@ final class DailyTaskSwapTests: XCTestCase {
         XCTAssertNil(store.errorMessage)
     }
 
-    @MainActor func testFailedSaveAndSyncLeaveStateAndCacheUnchanged() async {
+    @MainActor func testFailedSaveRollsBackAndSyncAllowsSwap() async throws {
         let (state, plan, load) = fixture()
         let repo = Repository()
         let store = PlannerStore(state: state, repository: repo, result: plan, studyLoad: load)
@@ -85,9 +85,14 @@ final class DailyTaskSwapTests: XCTestCase {
         XCTAssertNotNil(store.errorMessage)
         repo.fails = false
         store.syncBusy = true
+        store.errorMessage = nil
+        var expected = state
+        try expected.swapDailyTasks(a, b)
         store.swapDailyTasks(a, b)
-        XCTAssertEqual(store.state, state)
-        XCTAssertNil(repo.saved)
+        let savedDuringSync = await store.waitForOrderSave()
+        XCTAssertTrue(savedDuringSync)
+        XCTAssertEqual(store.state, expected)
+        XCTAssertEqual(repo.saved, expected)
     }
 
     @MainActor func testSlowSavePublishesImmediatelyAndGatesOtherWrites() async throws {
