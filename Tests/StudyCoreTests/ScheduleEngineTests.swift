@@ -361,7 +361,9 @@ final class ScheduleEngineTests: XCTestCase {
                                      published: true, durationSeconds: 5400, watchedPercent: 0, markedFinished: false, requiresDuration: true)
         let snapshot = WebCourseSnapshot(packageID: "long", name: "长课", sourceURL: "https://example.com/course",
                                          fetchedAt: date(14, 7), expectedOutlines: 1, fetchedOutlines: 1, lessons: [lesson], issues: [])
-        try s.importWebCourses([snapshot], deadline: date(14), now: date(14, 8))
+        // Use an instant at or after now, valid for import in any host time zone.
+        // It remains September 14 in the scheduling calendar used by this test.
+        try s.importWebCourses([snapshot], deadline: date(14, 8), now: date(14, 8))
         let plan = result(s)
         XCTAssertTrue(plan.tasks.isEmpty)
         XCTAssertEqual(plan.risks.first?.unscheduledMinutes, 90)

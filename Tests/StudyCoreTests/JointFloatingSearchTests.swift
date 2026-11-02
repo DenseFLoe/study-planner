@@ -68,7 +68,8 @@ final class JointFloatingSearchTests: XCTestCase {
         return try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: file)) as? [String: Any])
     }
     func testEngineMatchesAndroidAcrossAllRuleOrders() throws {
-        let rows = try XCTUnwrap(fixtures()["engine"] as? [[String: Any]])
+        let fixture = try fixtures()
+        let rows = try XCTUnwrap(fixture["engine"] as? [[String: Any]])
         XCTAssertEqual(rows.count, 48)
         for row in rows {
             let value = try JSONDecoder().decode(PlannerState.self, from: JSONSerialization.data(withJSONObject: XCTUnwrap(row["state"])))
@@ -108,7 +109,8 @@ final class JointFloatingSearchTests: XCTestCase {
         return visit(lengths.map { _ in 0 }, 0, 0, -10_000)
     }
     func testDirectSearchMatchesAndroidAndIndependentExhaustion() throws {
-        let rows = try XCTUnwrap(fixtures()["direct"] as? [[String: Any]])
+        let fixture = try fixtures()
+        let rows = try XCTUnwrap(fixture["direct"] as? [[String: Any]])
         XCTAssertEqual(rows.count, 74)
         let base = Int(date(0).timeIntervalSinceReferenceDate / 60)
         for row in rows {
