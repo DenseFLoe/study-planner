@@ -33,6 +33,51 @@ final class CloudSyncPresentationTests: XCTestCase {
                             result: ScheduleEngine().generate(state: state, now: Date()))
     }
 
+    @MainActor func testSSHCleanupClearsProgressAndAllowsAnotherSync() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("ssh-sync-test-" + UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false)
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/bin/sleep")
+        process.arguments = ["30"]
+        process.standardInput = FileHandle.nullDevice
+        process.standardOutput = FileHandle.nullDevice
+        process.standardError = FileHandle.nullDevice
+        defer { CloudSSHProcess.stop(process); try? FileManager.default.removeItem(at: directory) }
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+            Thread {
+                do { try process.run(); continuation.resume() }
+                catch { continuation.resume(throwing: error) }
+            }.start()
+        }
+        let tunnel = CloudSSHTunnel(process: process, directory: directory, port: 1)
+        let store = try store()
+        let state = store.state, ledger = SyncLedger()
+        store.beginCloudSync(operation: {
+            defer { tunnel.close() }
+            return SyncOutcome(state: state, ledger: ledger, sent: 1, received: 1)
+        }, snapshot: { (state, ledger) })
+        let firstTask = store.syncTask
+        let finished = expectation(description: "Cloud sync completes after SSH cleanup")
+        Task { await firstTask?.value; finished.fulfill() }
+        await fulfillment(of: [finished], timeout: 3)
+        XCTAssertFalse(store.syncBusy)
+        XCTAssertNil(store.syncTask)
+        XCTAssertFalse(process.isRunning)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: directory.path))
+        XCTAssertTrue(store.cloudStatus.hasPrefix("已同步"))
+        guard !store.syncBusy else { return }
+
+        let nextTransfer = expectation(description: "A later sync is admitted")
+        store.beginCloudSync(operation: {
+            nextTransfer.fulfill()
+            return SyncOutcome(state: state, ledger: ledger, sent: 0, received: 0)
+        }, snapshot: { (state, ledger) })
+        await store.syncTask?.value
+        await fulfillment(of: [nextTransfer], timeout: 1)
+        XCTAssertFalse(store.syncBusy)
+        XCTAssertTrue(store.cloudStatus.hasPrefix("已同步"))
+    }
+
     @MainActor func testBusyIndicatorCoversTransferAndRefreshWhileMainActorResponds() async throws {
         let store = try store()
         let transfer = SyncStage(), refresh = SyncStage()

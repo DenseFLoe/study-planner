@@ -45,22 +45,46 @@ public struct CloudSSHConfiguration: Codable, Sendable {
     }
 }
 
+/// Process.waitUntilExit() can stall in a worker run loop even after the child
+/// exits when launch and cleanup happen on different Swift concurrency threads.
+/// Poll the process state with a monotonic deadline instead, including after SIGKILL.
+enum CloudSSHProcess {
+    static func waitForExit(_ process: Process, timeout: TimeInterval) -> Bool {
+        let deadline = ProcessInfo.processInfo.systemUptime + timeout
+        while process.isRunning {
+            let remaining = deadline - ProcessInfo.processInfo.systemUptime
+            guard remaining > 0 else { return false }
+            Thread.sleep(forTimeInterval: min(0.025, remaining))
+        }
+        return true
+    }
+
+    @discardableResult
+    static func stop(_ process: Process) -> Bool {
+        guard process.isRunning else { return true }
+        process.terminate()
+        if waitForExit(process, timeout: 0.5) { return true }
+        if process.isRunning { Darwin.kill(process.processIdentifier, SIGKILL) }
+        return waitForExit(process, timeout: 0.5)
+    }
+}
+
 /// OpenSSH owns the encrypted connection; the HTTP listener exists only on this device's loopback.
 final class CloudSSHTunnel: @unchecked Sendable {
     let endpoint: String
     private let process: Process
     private let directory: URL
-    private init(process: Process, directory: URL, port: Int) {
+    private let closeLock = NSLock()
+    private var closed = false
+    init(process: Process, directory: URL, port: Int) {
         self.process = process; self.directory = directory; endpoint = "http://127.0.0.1:\(port)"
     }
     deinit { close() }
     func close() {
-        if process.isRunning {
-            process.terminate()
-            for _ in 0..<20 { if !process.isRunning { break }; Thread.sleep(forTimeInterval: 0.025) }
-            if process.isRunning { Darwin.kill(process.processIdentifier, SIGKILL) }
-            process.waitUntilExit()
-        }
+        closeLock.lock(); defer { closeLock.unlock() }
+        guard !closed else { return }
+        closed = true
+        CloudSSHProcess.stop(process)
         try? FileManager.default.removeItem(at: directory)
     }
     static func fingerprint(forKeyLine line: String) -> String? {
@@ -76,10 +100,11 @@ final class CloudSSHTunnel: @unchecked Sendable {
         process.arguments = ["-T", "5", "-p", String(port), "-t", "ed25519,ecdsa,rsa", host]
         process.standardOutput = output; process.standardError = FileHandle.nullDevice; process.standardInput = FileHandle.nullDevice
         try process.run()
-        let deadline = Date().addingTimeInterval(8)
-        while process.isRunning && Date() < deadline { Thread.sleep(forTimeInterval: 0.05) }
-        if process.isRunning { process.terminate(); Darwin.kill(process.processIdentifier, SIGKILL) }
-        process.waitUntilExit()
+        guard CloudSSHProcess.waitForExit(process, timeout: 8) else {
+            CloudSSHProcess.stop(process)
+            // Do not block on pipe EOF if the process did not exit in time.
+            throw ClientError.message("读取 SSH 服务器指纹超时，请检查地址、端口及网络。")
+        }
         let data = output.fileHandleForReading.readDataToEndOfFile()
         guard data.count <= 65536 else { throw ClientError.message("服务器指纹响应过大。") }
         let lines = String(decoding: data, as: UTF8.self).split(separator: "\n").map(String.init).filter { fingerprint(forKeyLine: $0) != nil }
@@ -160,7 +185,7 @@ final class CloudSSHTunnel: @unchecked Sendable {
                 tunnel.close()
                 throw ClientError.message("SSH 连接失败，请检查用户名、私钥、口令及服务器的端口转发权限。")
             } catch {
-                if process.isRunning { process.terminate(); Darwin.kill(process.processIdentifier, SIGKILL); process.waitUntilExit() }
+                CloudSSHProcess.stop(process)
                 try? FileManager.default.removeItem(at: directory)
                 throw error
             }
