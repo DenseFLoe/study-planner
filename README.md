@@ -12,7 +12,7 @@ macOS 14 及以上（Apple Silicon）可使用 macOS 版本；Android 8.0 及以
 
 运行 `./Scripts/build-dmg.sh` 可生成 macOS 安装包 `dist/学习日程-macOS-<短SHA>.dmg` 及同名 `.dmg.sha256` 校验文件；打开 DMG 后把「学习日程」拖入「应用程序」即完成安装。`./Scripts/build-app.sh` 是内部辅助脚本，只生成开发构建 `dist/学习日程.app`，不单独交付，也不提供 `.app` 下载链接或路径。需要含 Android APK 的完整发布包时运行 `./Scripts/release.sh`，脚本会生成 macOS DMG、Android APK、安装说明、SHA-256 校验和及可直接转发的 ZIP。首次打开为空白数据库，可以直接添加课程，或点击「载入示例，体验自动排程」。示例一旦通过正式应用的按钮载入，也会保存在本机。
 
-开发环境需要 Xcode / Swift 6：
+开发环境需要 Xcode 26 或以上（含 macOS 26 SDK）及 Swift 6，应用仍支持 macOS 14 及以上；CI 固定选择 runner 中的 Xcode 26.3：
 
 ```sh
 ./Scripts/test.sh
