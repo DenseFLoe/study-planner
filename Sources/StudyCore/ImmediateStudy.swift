@@ -11,7 +11,7 @@ public enum ImmediateStudyError: Error, LocalizedError, Equatable {
 
     public var errorDescription: String? {
         switch self {
-        case .unavailable: "请选择已启用自动排课、还有未完成课节的不定时录播课程。"
+        case .unavailable: "请选择已启用自动排课、还有未完成课节的分节研习。"
         case .invalidDate: "现在不在这门课程的开始与截止日期内，无法立即学习。"
         case .noSpace: "当前没有可开始学习的空档：现在处于固定事项、可学习时段之外，或已确认学习后的 15 分钟休息内。未更改课表。"
         case .noFeasiblePlan: "未能按立即学习约束生成新课表，未更改原安排。请调整可学习时段或固定事项后重试。"

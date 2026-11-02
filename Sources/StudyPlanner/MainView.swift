@@ -358,7 +358,7 @@ struct MainView: View {
                         .padding(.bottom, 4)
 
                     AddMenuActionRow(
-                        title: "录播 / 可调度课程",
+                        title: "可调度课程",
                         systemImage: "book.closed.fill"
                     ) {
                         showingAddMenu = false
@@ -1474,7 +1474,7 @@ private struct CourseListRow: View {
 
             VStack(alignment: .leading, spacing: 6) {
                 Text(course.name).font(.system(size: 18, weight: .bold))
-                Text("\(course.type.rawValue) · 截止 \(course.deadline.formatted(date: .abbreviated, time: .omitted))")
+                Text("\(course.type.displayName) · 截止 \(course.deadline.formatted(date: .abbreviated, time: .omitted))")
                     .font(.callout)
                     .foregroundStyle(.secondary)
                 Text("已学 \(hours(completed)) / 共 \(hours(course.totalMinutes)) · \(course.type == .lessonBasedRecorded && (course.mergedSources != nil || course.webCourse != nil || course.manualLessons != nil) ? "按课节排程" : "最小时间块 \(minimumBlock) 分钟")")

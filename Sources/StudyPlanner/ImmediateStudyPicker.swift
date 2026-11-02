@@ -12,7 +12,7 @@ struct ImmediateStudyMenu: View {
         let courses = store.state.immediateStudyCourses
         Menu {
             if courses.isEmpty {
-                Button("暂无可立即学习的不定时课程") {}.disabled(true)
+                Button("暂无可立即学习的分节研习") {}.disabled(true)
             } else {
                 ForEach(courses) { course in
                     Menu(course.name) {

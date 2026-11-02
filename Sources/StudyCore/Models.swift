@@ -1,7 +1,18 @@
 import Foundation
 
 public enum CourseType: String, Codable, CaseIterable, Sendable {
+    // Keep the stored values (including legacy labels) compatible with saved plans and older peers.
     case recorded = "录播课程", lessonBasedRecorded = "不定时录播课程", tutoring = "补习回放", other = "其他学习"
+
+    public static let schedulingTypes: [CourseType] = [.recorded, .lessonBasedRecorded]
+
+    public var schedulingType: CourseType {
+        self == .lessonBasedRecorded ? .lessonBasedRecorded : .recorded
+    }
+
+    public var displayName: String {
+        self == .lessonBasedRecorded ? "分节研习" : "自主研习"
+    }
 }
 public enum TaskStatus: String, Codable, Sendable {
     case planned, completed, partial, missed, rescheduled, future

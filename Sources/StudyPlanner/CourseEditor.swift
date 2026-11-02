@@ -200,7 +200,7 @@ struct CourseEditor: View {
                     VStack(alignment: .leading, spacing: 4) {
                         Text(course.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "未命名课程" : course.name)
                             .font(.headline).lineLimit(2)
-                        Text("\(course.type.rawValue) · \(hours(course.totalMinutes))")
+                        Text("\(course.type.displayName) · \(hours(course.totalMinutes))")
                             .font(.caption).foregroundStyle(.secondary)
                     }
                     Spacer()
@@ -249,7 +249,7 @@ struct CourseEditor: View {
         switch destination {
         case .basics:
             course.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                ? "名称、类型、颜色与备注" : "\(course.name) · \(course.type.rawValue)"
+                ? "名称、上课方式、颜色与备注" : "\(course.name) · \(course.type.displayName)"
         case .workload:
             isManualLessonCourse
                 ? "\((course.manualLessons ?? []).count) 节课 · 共 \(hours(course.totalMinutes))"
@@ -283,7 +283,12 @@ struct CourseEditor: View {
     @ViewBuilder private var basicFields: some View {
         Section("课程信息") {
             TextField("课程名称", text: $course.name)
-            Picker("课程类型", selection: $course.type) { ForEach(CourseType.allCases, id: \.self) { Text($0.rawValue).tag($0) } }.disabled(course.mergedSources != nil)
+            Picker("上课方式", selection: Binding(
+                get: { course.type.schedulingType },
+                set: { if $0 != course.type.schedulingType { course.type = $0 } }
+            )) {
+                ForEach(CourseType.schedulingTypes, id: \.self) { Text("\($0.displayName)（\($0 == .lessonBasedRecorded ? "按课节" : "按总时长")）").tag($0) }
+            }.disabled(course.mergedSources != nil)
             ColorPickerRow(selection: $course.color)
             TextField("备注", text: $course.notes, axis: .vertical).lineLimit(2...3)
         }
