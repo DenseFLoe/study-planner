@@ -644,10 +644,12 @@ struct WebCourseImportSheet: View {
         } catch { return nil }
     }
     private func save() {
-        let snapshots = chosen
-        let success = store.change { state in
-            try state.importWebCourses(snapshots, deadline: deadline, now: Date())
+        Task {
+            let snapshots = chosen
+            let success = await store.change { state in
+                try state.importWebCourses(snapshots, deadline: deadline, now: Date())
+            }
+            if success { dismiss() } else { message = store.errorMessage ?? "保存失败" }
         }
-        if success { dismiss() } else { message = store.errorMessage ?? "保存失败" }
     }
 }

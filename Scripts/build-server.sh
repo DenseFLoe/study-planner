@@ -3,7 +3,7 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 source Scripts/version.env
 if [[ "$(uname -s)" == Darwin ]]; then
-  JDK="$(/usr/libexec/java_home -v 11)"
+  JDK="${JAVA_HOME:-$(/usr/libexec/java_home -v 11)}"
 else
   JDK="${JAVA_HOME:-$(dirname "$(dirname "$(readlink -f "$(command -v javac)")")")}"
 fi

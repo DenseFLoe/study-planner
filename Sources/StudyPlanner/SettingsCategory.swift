@@ -11,7 +11,7 @@ enum SettingsCategory: String, CaseIterable, Identifiable {
     case defaults = "默认规则"
     case localSync = "热点局域网同步"
     case cloudSync = "云端同步"
-    case data = "数据保存"
+    case data = "数据与备份"
 
     var id: Self { self }
     var editsSchedule: Bool { self == .availability || self == .priorities || self == .defaults }

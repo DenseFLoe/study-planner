@@ -84,10 +84,12 @@ import StudyPersistence
         supervisor.start(store: store)
         await drain()
         XCTAssertTrue(supervisor.activeTaskIDs.isEmpty)
-        XCTAssertTrue(store.change(replan: false) { $0.tasks[0].start = Date().addingTimeInterval(0.2) })
+        let rescheduled = await store.change(replan: false) { $0.tasks[0].start = Date().addingTimeInterval(0.2) }
+        XCTAssertTrue(rescheduled)
         await fulfillment(of: [checked], timeout: 2)
         XCTAssertTrue(supervisor.isSupervising(store.state.tasks[0]))
-        XCTAssertTrue(store.change(replan: false) { $0.tasks[0].confirmedAt = Date() })
+        let completed = await store.change(replan: false) { $0.tasks[0].confirmedAt = Date() }
+        XCTAssertTrue(completed)
         await drain()
         XCTAssertTrue(supervisor.activeTaskIDs.isEmpty)
         XCTAssertEqual(supervisor.summary, "等待计划学习时段")
@@ -159,7 +161,8 @@ import StudyPersistence
         XCTAssertTrue(supervisor.setApplication(app, for: store.state.courses[0].id))
         supervisor.start(store: store)
         await fulfillment(of: [started], timeout: 2)
-        XCTAssertTrue(store.change(replan: false) { $0.tasks[0].confirmedAt = Date() })
+        let markedComplete = await store.change(replan: false) { $0.tasks[0].confirmedAt = Date() }
+        XCTAssertTrue(markedComplete)
         await drain()
         finishProbe?.resume(returning: .stopped("已暂停"))
         await drain()

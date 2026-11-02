@@ -37,13 +37,14 @@ final class CourseEditingStoreTests: XCTestCase {
                      result: ScheduleEngine().generate(state: state, now: Date()))
     }
 
-    @MainActor func testSavingManualDeletionDoesNotCompleteUntouchedLessons() throws {
+    @MainActor func testSavingManualDeletionDoesNotCompleteUntouchedLessons() async throws {
         let state = try fixture(), repository = Repository()
         let store = store(state, repository: repository)
         var edited = state.courses[0]
         edited.manualLessons!.removeFirst()
         edited.totalMinutes = 120
-        XCTAssertTrue(store.saveCourse(edited))
+        let savedDeletion = await store.saveCourse(edited)
+        XCTAssertTrue(savedDeletion)
         let course = try XCTUnwrap(store.course(edited.id))
         XCTAssertEqual(course.deletedLessonIDs, ["a"])
         XCTAssertEqual(store.state.lessonWorkItems(for: course).map(\.remainingMinutes), [40, 60])
@@ -53,7 +54,7 @@ final class CourseEditingStoreTests: XCTestCase {
         XCTAssertNil(store.errorMessage)
     }
 
-    @MainActor func testDraftDeletionAdjustsBaselineAndMatchesSavedPreview() throws {
+    @MainActor func testDraftDeletionAdjustsBaselineAndMatchesSavedPreview() async throws {
         var state = try fixture()
         state.tasks = []; state.completions = []
         state.courses[0].initialCompletedMinutes = 70
@@ -65,45 +66,49 @@ final class CourseEditingStoreTests: XCTestCase {
         let edited = preview.courses[0]
         XCTAssertEqual(edited.initialCompletedMinutes, 10)
         XCTAssertEqual(store.state, state, "Draft changes must not mutate the original store")
-        XCTAssertTrue(store.saveCourse(edited))
+        let savedDraft = await store.saveCourse(edited)
+        XCTAssertTrue(savedDraft)
         let saved = try XCTUnwrap(store.course(edited.id))
         XCTAssertEqual(saved.initialCompletedMinutes, edited.initialCompletedMinutes)
         XCTAssertEqual(store.state.lessonWorkItems(for: saved), preview.lessonWorkItems(for: edited))
         XCTAssertEqual(store.state.lessonWorkItems(for: saved).map(\.remainingMinutes), [50, 60])
     }
 
-    @MainActor func testFailedSavePreservesCourseAndCompletionRecords() throws {
+    @MainActor func testFailedSavePreservesCourseAndCompletionRecords() async throws {
         let state = try fixture(), repository = Repository()
         repository.fails = true
         let store = store(state, repository: repository)
         var edited = state.courses[0]
         edited.manualLessons!.removeFirst(); edited.totalMinutes = 120
-        XCTAssertFalse(store.saveCourse(edited))
+        let saveFailed = await store.saveCourse(edited)
+        XCTAssertFalse(saveFailed)
         XCTAssertEqual(store.state, state)
         XCTAssertNil(repository.saved)
         XCTAssertNotNil(store.errorMessage)
     }
 
-    @MainActor func testUnidentifiedLegacyCompletionBlocksDeletionWithoutSaving() throws {
+    @MainActor func testUnidentifiedLegacyCompletionBlocksDeletionWithoutSaving() async throws {
         var state = try fixture()
         state.tasks[0].lessonID = nil
         let repository = Repository()
         let savedStore = store(state, repository: repository)
         var edited = state.courses[0]
         edited.manualLessons!.removeFirst(); edited.totalMinutes = 120
-        XCTAssertFalse(savedStore.saveCourse(edited))
+        let legacyDeletionRejected = await savedStore.saveCourse(edited)
+        XCTAssertFalse(legacyDeletionRejected)
         XCTAssertEqual(savedStore.state, state)
         XCTAssertNil(repository.saved)
         XCTAssertTrue(savedStore.errorMessage?.contains("没有课节标识") == true)
     }
 
-    @MainActor func testReplacingOriginalLessonsRetainsNewLessonAndDeletionMarkers() throws {
+    @MainActor func testReplacingOriginalLessonsRetainsNewLessonAndDeletionMarkers() async throws {
         let state = try fixture(), repository = Repository()
         let store = store(state, repository: repository)
         var edited = state.courses[0]
         edited.manualLessons = [.init(id: "new", name: "新课节", durationMinutes: 60)]
         edited.totalMinutes = 60
-        XCTAssertTrue(store.saveCourse(edited))
+        let replacementSaved = await store.saveCourse(edited)
+        XCTAssertTrue(replacementSaved)
         let course = try XCTUnwrap(store.course(edited.id))
         XCTAssertEqual(course.deletedLessonIDs, ["a", "b", "c"])
         XCTAssertEqual(store.state.lessonWorkItems(for: course).map(\.remainingMinutes), [60])

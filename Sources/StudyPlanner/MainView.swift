@@ -35,6 +35,7 @@ struct MainView: View {
     @State private var month = Date()
     @State private var sheet: EditorSheet?
     @State private var showingAddMenu = false
+    @State private var dismissedDeletion: UUID?
     @AppStorage("dailyStudyLoadWarningMinutes") private var dailyLoadWarningMinutes = 480
     @Namespace private var navigationSelection
     @Environment(\.scenePhase) private var scenePhase
@@ -46,6 +47,21 @@ struct MainView: View {
             Rectangle().fill(PlannerTheme.hairline).frame(width: 1)
             VStack(spacing: 0) {
                 header
+                if store.orderSaveBusy {
+                    HStack { ProgressView().controlSize(.small); Text(store.saveStatus); Spacer() }
+                        .padding(.horizontal, 24).padding(.vertical, 8)
+                        .accessibilityIdentifier("localSaveProgress")
+                }
+                if let deleted = store.latestDeletedCourse, deleted.id != dismissedDeletion {
+                    HStack {
+                        Text("已删除「\(deleted.deletedCourseName ?? "课程")」")
+                        Button("撤销删除") { Task { _ = await store.undoCourseDeletion(deleted.id) } }
+                            .disabled(store.orderSaveBusy)
+                        Spacer()
+                        Button("收起", systemImage: "xmark") { dismissedDeletion = deleted.id }
+                            .labelStyle(.iconOnly).help("仍可在“数据与备份”中恢复")
+                    }.padding(.horizontal, 24).padding(.vertical, 8)
+                }
                 if store.syncBusy {
                     HStack(spacing: 8) {
                         ProgressView()
@@ -89,29 +105,34 @@ struct MainView: View {
             }
         }
         .sheet(item: $sheet, onDismiss: { store.showDailyReview = false }) { selection in
-            switch selection {
-            case .scheduleSearch:
-                ScheduleSearchView(tasks: store.state.tasks, courses: store.state.courses) { date in
-                    selectedDay = Calendar.current.startOfDay(for: date)
-                    month = selectedDay
-                    page = .calendar
-                    sheet = nil
+            Group {
+                switch selection {
+                case .scheduleSearch:
+                    ScheduleSearchView(tasks: store.state.tasks, courses: store.state.courses) { date in
+                        selectedDay = Calendar.current.startOfDay(for: date)
+                        month = selectedDay
+                        page = .calendar
+                        sheet = nil
+                    }
+                case .mergeCourses: CourseMergeEditor(store: store)
+                case .webImport: WebCourseImportSheet(store: store)
+                case .netdiskImport: NetdiskImportSheet(store: store)
+                case .course(let course): CourseEditor(store: store, course: course)
+                case .lessonOrder(let course): LessonOrderEditor(store: store, course: course)
+                case .fixed(let event): FixedEventEditor(store: store, event: event)
+                case .completion(let task): CompletionEditor(store: store, task: task)
+                case .review: DailyReviewView(store: store)
+                case .risks:
+                    RiskView(
+                        store: store,
+                        adjustSettings: { sheet = nil; page = .settings },
+                        editCourse: { sheet = .course($0) }
+                    )
                 }
-            case .mergeCourses: CourseMergeEditor(store: store)
-            case .webImport: WebCourseImportSheet(store: store)
-            case .netdiskImport: NetdiskImportSheet(store: store)
-            case .course(let course): CourseEditor(store: store, course: course)
-            case .lessonOrder(let course): LessonOrderEditor(store: store, course: course)
-            case .fixed(let event): FixedEventEditor(store: store, event: event)
-            case .completion(let task): CompletionEditor(store: store, task: task)
-            case .review: DailyReviewView(store: store)
-            case .risks:
-                RiskView(
-                    store: store,
-                    adjustSettings: { sheet = nil; page = .settings },
-                    editCourse: { sheet = .course($0) }
-                )
-            }
+            }.disabled(store.orderSaveBusy)
+                .overlay(alignment: .bottom) {
+                    if store.orderSaveBusy { Text(store.saveStatus).padding(10).background(.regularMaterial, in: Capsule()).padding(8) }
+                }
         }
         .alert(
             "操作提示",
@@ -469,7 +490,7 @@ struct MainView: View {
                         store: store, items: items, canEdit: canChangeDayEvents,
                         editTask: { sheet = .completion($0) },
                         editEvent: { sheet = .fixed($0) },
-                        skipEvent: { store.setEventSkipped($0, on: selectedDay, skipped: true) }
+                        skipEvent: { event in Task { await store.setEventSkipped(event, on: selectedDay, skipped: true) } }
                     )
                     .id(selectedDay)
 
@@ -481,7 +502,7 @@ struct MainView: View {
                                 CompletedTaskRow(
                                     task: task,
                                     course: store.course(task.courseID),
-                                    undo: { _ = store.undoConfirmation(task) }
+                                    undo: { Task { _ = await store.undoConfirmation(task) } }
                                 )
                             }
                         }
@@ -503,7 +524,7 @@ struct MainView: View {
                             }
                             Spacer()
                             Button("恢复本日并重排", systemImage: "arrow.uturn.backward") {
-                                store.setEventSkipped(event, on: selectedDay, skipped: false)
+                                Task { await store.setEventSkipped(event, on: selectedDay, skipped: false) }
                             }
                             .disabled(!canChangeDayEvents)
                         }
@@ -570,7 +591,7 @@ struct MainView: View {
             Button("添加学习课程") { newCourse() }
                 .buttonStyle(SoftButtonStyle(prominent: true))
             if store.state.canLoadExample {
-                Button("载入示例，体验自动排程") { store.loadExample() }.buttonStyle(.link)
+                Button("载入示例，体验自动排程") { Task { await store.loadExample() } }.buttonStyle(.link)
             }
         }
         .frame(maxWidth: .infinity)
@@ -596,7 +617,7 @@ struct MainView: View {
                         store.state.immediateStudyContinuation() != nil {
                         Text("立即学习：\(store.course(request.task.courseID)?.name ?? "课程") · \(request.task.lessonName ?? "下一课节")")
                             .font(.caption).foregroundStyle(.secondary)
-                        Button("取消立即学习安排") { store.cancelImmediateStudy() }
+                        Button("取消立即学习安排") { Task { await store.cancelImmediateStudy() } }
                             .font(.caption).disabled(store.orderSaveBusy)
                     }
                 }
@@ -657,7 +678,7 @@ struct MainView: View {
                             ? store.state.settings.minimumScheduleUnit
                             : course.minimumBlockMinutes,
                         dailyMinutes: store.result.demands[course.id]?.averageMinutesPerDay,
-                        setDailyWeight: { store.setDailyWeight($0, for: course.id) },
+                        setDailyWeight: { weight in Task { await store.setDailyWeight(weight, for: course.id) } },
                         edit: { sheet = .course(course) },
                         reorder: store.state.lessonWorkItems(for: course).count > 1
                             ? { sheet = .lessonOrder(course) } : nil
@@ -886,7 +907,7 @@ private struct DailyTaskTimeline: View {
                     confirm: { task in
                         if Calendar.current.startOfDay(for: task.start) < Calendar.current.startOfDay(for: Date()) {
                             editTask(task)
-                        } else { _ = store.confirm(task, minutes: task.durationMinutes) }
+                        } else { Task { _ = await store.confirm(task, minutes: task.durationMinutes) } }
                     },
                     editTask: editTask, editEvent: editEvent, skipEvent: skipEvent,
                     canSkipEvent: canEdit && !store.orderSaveBusy,

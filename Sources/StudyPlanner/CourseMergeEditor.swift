@@ -66,8 +66,10 @@ struct CourseMergeEditor: View {
                 Spacer()
                 Button("取消") { dismiss() }.keyboardShortcut(.cancelAction)
                 Button("合并并重新排程") {
-                    if store.change({ state in _ = try state.mergeCourses(ids: selected, name: name) }) { dismiss() }
-                    else { message = store.errorMessage ?? "合并失败" }
+                    Task {
+                        if await store.change({ state in _ = try state.mergeCourses(ids: selected, name: name) }) { dismiss() }
+                        else { message = store.errorMessage ?? "合并失败" }
+                    }
                 }.buttonStyle(.borderedProminent).disabled(preview == nil)
             }
         }.padding(24).frame(width: 800, height: 590)

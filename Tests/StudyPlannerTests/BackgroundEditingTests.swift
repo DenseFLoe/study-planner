@@ -1,0 +1,164 @@
+import XCTest
+import StudyCore
+import StudyPersistence
+@testable import StudyPlanner
+
+final class BackgroundEditingTests: XCTestCase {
+    private final class Repository: PlannerRepository {
+        var saved: PlannerState?
+        var fails = false
+        var holds = false
+        @MainActor var resume: CheckedContinuation<Void, Never>?
+        @MainActor var observer: CheckedContinuation<Void, Never>?
+        func load() throws -> PlannerState { saved ?? PlannerState() }
+        func save(_ state: PlannerState) throws {
+            if fails { throw CocoaError(.fileWriteUnknown) }
+            saved = state
+        }
+        @MainActor func saveForInteraction(_ state: PlannerState) async throws {
+            if holds { await withCheckedContinuation { resume = $0; observer?.resume(); observer = nil } }
+            try save(state)
+        }
+        @MainActor func waitForSave() async {
+            if resume == nil { await withCheckedContinuation { observer = $0 } }
+        }
+    }
+    private func fixture() -> PlannerState {
+        var state = PlannerState()
+        let day = Calendar.current.startOfDay(for: Date()).addingTimeInterval(86400)
+        state.courses = [Course(name: "课程 A", totalMinutes: 120, startDate: day, deadline: day.addingTimeInterval(86400 * 3)),
+                         Course(name: "课程 B", totalMinutes: 60, startDate: day, deadline: day.addingTimeInterval(86400 * 3))]
+        _ = state.replan(now: day)
+        return state
+    }
+    @MainActor private func store(_ state: PlannerState, _ repo: Repository, backups: PlannerBackupRepository = .init(inMemory: true)) -> PlannerStore {
+        PlannerStore(state: state, repository: repo, result: ScheduleEngine().assessSavedPlan(state: state, now: Date()), backups: backups)
+    }
+
+    @MainActor func testDisplayOnlyEditPreservesEveryTaskAndSettings() async {
+        let original = fixture(), repo = Repository()
+        let store = store(original, repo)
+        var edited = original.courses[0]
+        edited.name = "改名"; edited.notes = "新备注"; edited.color = "green"
+        let saved = await store.saveCourse(edited)
+        XCTAssertTrue(saved)
+        XCTAssertEqual(store.state.tasks, original.tasks)
+        XCTAssertEqual(store.state.settings, original.settings)
+        XCTAssertEqual(store.state.completions, original.completions)
+        XCTAssertEqual(store.state.courses[0], edited)
+        XCTAssertEqual(repo.saved, store.state)
+        edited.totalMinutes += 60
+        let rescheduled = await store.saveCourse(edited)
+        XCTAssertTrue(rescheduled)
+        XCTAssertEqual(store.result.tasks.filter { $0.courseID == edited.id }.reduce(0) { $0 + $1.durationMinutes }, 180)
+    }
+
+    @MainActor func testSlowFailedSaveKeepsUIResponsiveAndOldStateIntact() async {
+        let original = fixture(), repo = Repository()
+        repo.holds = true; repo.fails = true
+        let store = store(original, repo)
+        var edited = original.courses[0]; edited.name = "未保存的名称"
+        let operation = Task { await store.saveCourse(edited) }
+        await repo.waitForSave()
+        // This main-actor assertion runs while disk work is suspended.
+        XCTAssertTrue(store.orderSaveBusy)
+        XCTAssertEqual(store.state, original)
+        let competing = await store.change { $0.courses.removeAll() }
+        XCTAssertFalse(competing)
+        repo.resume?.resume()
+        let success = await operation.value
+        XCTAssertFalse(success)
+        XCTAssertFalse(store.orderSaveBusy)
+        XCTAssertEqual(store.state, original)
+        XCTAssertNil(repo.saved)
+        XCTAssertNotNil(store.errorMessage)
+        XCTAssertEqual(store.backupEntries.count, 1)
+    }
+
+    @MainActor func testUndoDeletionRestoresHistoryAndKeepsLaterEdits() async throws {
+        var original = fixture()
+        let task = try XCTUnwrap(original.tasks.first { $0.courseID == original.courses[0].id })
+        try original.confirm(taskID: task.id, actualMinutes: task.durationMinutes, now: task.end)
+        let store = store(original, Repository())
+        let deleted = await store.deleteCourse(original.courses[0])
+        XCTAssertTrue(deleted)
+        let backup = try XCTUnwrap(store.latestDeletedCourse)
+        var other = original.courses[1]; other.name = "后来修改 B"
+        let edited = await store.saveCourse(other)
+        XCTAssertTrue(edited)
+        let restored = await store.undoCourseDeletion(backup.id)
+        XCTAssertTrue(restored)
+        XCTAssertEqual(store.course(other.id)?.name, other.name)
+        XCTAssertEqual(store.course(original.courses[0].id), original.courses[0])
+        XCTAssertEqual(store.state.completions, original.completions)
+        XCTAssertEqual(store.state.tasks.first { $0.id == task.id }, original.tasks.first { $0.id == task.id })
+        XCTAssertNil(store.latestDeletedCourse)
+        let repeated = await store.undoCourseDeletion(backup.id)
+        XCTAssertFalse(repeated)
+    }
+
+    @MainActor func testRestorePreservesPreRestoreBackupAndFailedWriteDoesNotReplaceState() async throws {
+        let original = fixture(), repo = Repository()
+        let store = store(original, repo)
+        var replacement = original; replacement.courses[0].name = "备份中的名称"
+        let backup = PlannerBackup(state: replacement, reason: "测试")
+        repo.fails = true
+        let failed = await store.restoreBackup(backup)
+        XCTAssertFalse(failed)
+        XCTAssertEqual(store.state, original)
+        repo.fails = false
+        let success = await store.restoreBackup(backup)
+        XCTAssertTrue(success)
+        XCTAssertEqual(store.state, replacement)
+        let entry = try XCTUnwrap(store.backupEntries.first)
+        let before = try await store.backups.load(entry.id)
+        XCTAssertEqual(before.state, original)
+        var invalid = backup; invalid.format = 99
+        let rejected = await store.restoreBackup(invalid)
+        XCTAssertFalse(rejected)
+        XCTAssertEqual(store.state, replacement)
+    }
+
+    @MainActor func testBackupFailurePreventsDestructiveSave() async throws {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try Data("not a directory".utf8).write(to: url)
+        defer { try? FileManager.default.removeItem(at: url) }
+        let original = fixture(), repo = Repository()
+        let store = store(original, repo, backups: .init(directory: url))
+        let success = await store.deleteCourse(original.courses[0])
+        XCTAssertFalse(success)
+        XCTAssertEqual(store.state, original)
+        XCTAssertNil(repo.saved)
+    }
+
+    @MainActor func testUndoDeletionSurvivesDiskReopeningAndSyncTombstones() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let url = directory.appendingPathComponent("planner.store")
+        var original = fixture()
+        let course = original.courses[0]
+        let task = try XCTUnwrap(original.tasks.first { $0.courseID == course.id })
+        try original.confirm(taskID: task.id, actualMinutes: task.durationMinutes, now: task.end)
+        let repository = try LocalRepository(url: url)
+        try repository.save(original)
+        let backups = PlannerBackupRepository(directory: directory.appendingPathComponent("backups"))
+        let first = PlannerStore(state: original, repository: repository,
+                                 result: ScheduleEngine().assessSavedPlan(state: original, now: Date()), backups: backups)
+        let deleted = await first.deleteCourse(course)
+        XCTAssertTrue(deleted)
+        let reopened = try LocalRepository(url: url)
+        let state = try reopened.load()
+        XCTAssertFalse(state.courses.contains { $0.id == course.id })
+        let store = PlannerStore(state: state, repository: reopened,
+                                 result: ScheduleEngine().assessSavedPlan(state: state, now: Date()), backups: backups)
+        await store.refreshBackups()
+        let entry = try XCTUnwrap(store.latestDeletedCourse)
+        let restored = await store.undoCourseDeletion(entry.id)
+        XCTAssertTrue(restored)
+        let final = try LocalRepository(url: url)
+        XCTAssertEqual(try final.load().completions, original.completions)
+        XCTAssertEqual(try final.loadLedger().materialize().completions, original.completions)
+        XCTAssertTrue(try final.loadLedger().materialize().courses.contains { $0.id == course.id })
+    }
+}

@@ -108,17 +108,19 @@ struct LessonOrderEditor: View {
                 Spacer()
                 Button("取消") { dismiss() }.keyboardShortcut(.cancelAction)
                 Button("保存并重新排程") {
-                    let updatedOrder = order
-                    let followsWebsite = websiteOrder == updatedOrder
-                    if store.change({ state in
-                        if !deleted.isEmpty { try state.removeLessons(courseID: course.id, ids: deleted) }
-                        guard let index = state.courses.firstIndex(where: { $0.id == course.id && !$0.isArchived }) else {
-                            throw WebCourseImportError.invalid("课程已不存在，请重新打开。")
-                        }
-                        state.courses[index].lessonOrder = updatedOrder
-                        state.courses[index].lessonOrderCustomized = !followsWebsite
-                    }) { dismiss() }
-                    else { message = store.errorMessage ?? "保存失败" }
+                    Task {
+                        let updatedOrder = order
+                        let followsWebsite = websiteOrder == updatedOrder
+                        if await store.change({ state in
+                            if !deleted.isEmpty { try state.removeLessons(courseID: course.id, ids: deleted) }
+                            guard let index = state.courses.firstIndex(where: { $0.id == course.id && !$0.isArchived }) else {
+                                throw WebCourseImportError.invalid("课程已不存在，请重新打开。")
+                            }
+                            state.courses[index].lessonOrder = updatedOrder
+                            state.courses[index].lessonOrderCustomized = !followsWebsite
+                        }) { dismiss() }
+                        else { message = store.errorMessage ?? "保存失败" }
+                    }
                 }
                 .buttonStyle(.borderedProminent)
                 .keyboardShortcut(.defaultAction)

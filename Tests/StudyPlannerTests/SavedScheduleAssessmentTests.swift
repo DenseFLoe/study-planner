@@ -34,7 +34,7 @@ final class SavedScheduleAssessmentTests: XCTestCase {
         return (state, now)
     }
 
-    @MainActor func testEarlyFullConfirmationKeepsSavedSlotsAndDoesNotHideUnscheduledWork() throws {
+    @MainActor func testEarlyFullConfirmationKeepsSavedSlotsAndDoesNotHideUnscheduledWork() async throws {
         let (state, now) = try fixture()
         let repository = Repository()
         let first = try XCTUnwrap(state.settings.immediateStudy?.task)
@@ -44,7 +44,8 @@ final class SavedScheduleAssessmentTests: XCTestCase {
         let store = PlannerStore(state: state, repository: repository,
                                  result: ScheduleEngine().assessSavedPlan(state: state, now: now))
         let confirmedAt = now.addingTimeInterval(20)
-        XCTAssertTrue(store.confirm(first, minutes: 60, now: confirmedAt))
+        let confirmationSaved = await store.confirm(first, minutes: 60, now: confirmedAt)
+        XCTAssertTrue(confirmationSaved)
         let alternative = ScheduleEngine().generate(state: store.state, now: confirmedAt)
         XCTAssertEqual(ScheduleHealthAnalyzer().assess(state: store.state, result: alternative, now: confirmedAt)?.unscheduledMinutes, 0)
         XCTAssertEqual(store.state.tasks.filter(\.isUnconfirmed), remaining)
@@ -59,13 +60,15 @@ final class SavedScheduleAssessmentTests: XCTestCase {
         XCTAssertNil(store.errorMessage)
     }
 
-    @MainActor func testFailedConfirmationKeepsProgressTimetableAndWarning() throws {
+    @MainActor func testFailedConfirmationKeepsProgressTimetableAndWarning() async throws {
         let (state, now) = try fixture()
         let repository = Repository()
         repository.fails = true
         let result = ScheduleEngine().assessSavedPlan(state: state, now: now)
         let store = PlannerStore(state: state, repository: repository, result: result)
-        XCTAssertFalse(store.confirm(try XCTUnwrap(state.settings.immediateStudy?.task), minutes: 60, now: now.addingTimeInterval(20)))
+        let task = try XCTUnwrap(state.settings.immediateStudy?.task)
+        let confirmationRejected = await store.confirm(task, minutes: 60, now: now.addingTimeInterval(20))
+        XCTAssertFalse(confirmationRejected)
         XCTAssertEqual(store.state, state)
         XCTAssertEqual(store.result.tasks, result.tasks)
         XCTAssertEqual(store.result.risks, result.risks)

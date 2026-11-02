@@ -9,6 +9,10 @@ final class PlannerStore {
     private(set) var state = PlannerState() {
         didSet { compressedPlan.update(state: state) }
     }
+    let backups: PlannerBackupRepository
+    private(set) var backupEntries: [PlannerBackupEntry] = []
+    var backupMessage: String?
+    private(set) var saveStatus = ""
     let compressedPlan: CompressedScheduleController
     private(set) var result = ScheduleResultPlaceholder.empty
     private(set) var studyLoad: StudyLoadAssessment?
@@ -40,6 +44,7 @@ final class PlannerStore {
     let playbackSupervisor: PlaybackSupervisor
     init() {
         demo = CommandLine.arguments.contains("--demo") || Bundle.main.bundleIdentifier == "local.studyplanner.preview"
+        backups = PlannerBackupRepository(inMemory: demo)
         compressedPlan = CompressedScheduleController(cache: CompressedScheduleRepository(inMemory: demo))
         playbackSupervisor = PlaybackSupervisor(persistent: !demo)
         if !demo {
@@ -52,14 +57,18 @@ final class PlannerStore {
             state = try repo.load()
             syncLedger = try repo.loadLedger()
             isReady = true
-            if demo { loadExample() } else { replan() }
-            checkDay()
+            Task {
+                if demo { await loadExample() } else { await replan() }
+                checkDay()
+                await refreshBackups()
+            }
             compressedPlan.onResolved = { [weak self] in self?.publishCompressedPreview($0) }
             compressedPlan.update(state: state)
         } catch { errorMessage = "无法打开本地数据库：\(error.localizedDescription)\n为保护已有数据，未创建替代数据库。" }
     }
     init(state: PlannerState, repository: any PlannerRepository, result: ScheduleResult,
-         studyLoad: StudyLoadAssessment? = nil) {
+         studyLoad: StudyLoadAssessment? = nil, backups: PlannerBackupRepository = PlannerBackupRepository(inMemory: true)) {
+        self.backups = backups
         self.state = state
         self.repository = repository
         self.result = result
@@ -72,42 +81,81 @@ final class PlannerStore {
     }
     var courses: [Course] { state.courses.filter { !$0.isArchived }.sorted { $0.deadline < $1.deadline } }
     private func publishCompressedPreview(_ preview: CompressedSchedulePreview) {
-        guard !demo, isReady, let repository else { return }
+        guard !demo, isReady else { return }
         guard !orderSaveBusy else { pendingCompressedPreview = preview; return }
         pendingCompressedPreview = nil
         guard state.settings.compressedSchedulePreview != preview else { return }
         guard compressedPlan.sharedPreview == preview, !compressedPlan.calculating else { return }
-        do {
+        Task {
+            guard !orderSaveBusy else { pendingCompressedPreview = preview; return }
+            guard compressedPlan.sharedPreview == preview,
+                  state.settings.compressedSchedulePreview != preview else { return }
             var next = state
             next.settings.compressedSchedulePreview = preview
-            let saved = try repository.saveChanges(next, from: state)
-            state = saved
-            if saved != next {
-                result = ScheduleEngine().assessSavedPlan(state: saved, now: Date())
-                studyLoad = StudyLoadAnalyzer().assess(state: saved, now: Date())
-            }
-            didSaveLocalEdit()
-            requestCloudSync(manual: false)
-        } catch { errorMessage = "极限压缩结果未保存到同步数据：" + error.localizedDescription }
+            if await commit(next, replan: false, backupReason: nil, clearError: false) { requestCloudSync() }
+        }
     }
     func course(_ id: UUID) -> Course? { state.courses.first { $0.id == id } }
+
     @discardableResult
-    func change(replan shouldReplan: Bool = true, now: Date = Date(), _ mutation: (inout PlannerState) throws -> Void) -> Bool {
-        guard !orderSaveBusy else { errorMessage = "正在保存课程顺序，请稍后再试。"; return false }
-        guard let repository, isReady else { return false }
+    func change(replan shouldReplan: Bool = true, now: Date = Date(), _ mutation: (inout PlannerState) throws -> Void) async -> Bool {
+        guard !orderSaveBusy else { errorMessage = "正在保存，请稍后再试。"; return false }
+        guard isReady else { return false }
         do {
             var next = state
             try mutation(&next)
-            next.removeArchivedCourses()
-            let planned = shouldReplan ? next.replan(now: now) : ScheduleEngine().assessSavedPlan(state: next, now: now)
-            let saved = try repository.saveChanges(next, from: state)
-            state = saved
-            result = saved == next ? planned : ScheduleEngine().assessSavedPlan(state: saved, now: now)
-            studyLoad = StudyLoadAnalyzer().assess(state: saved, now: now)
-            didSaveLocalEdit()
-            return true
+            return await commit(next, replan: shouldReplan, now: now)
         } catch { errorMessage = "操作未保存：\(error.localizedDescription)"; return false }
     }
+
+    private func commit(_ next: PlannerState, replan: Bool, now: Date = Date(),
+                        backupReason: String? = "修改前自动备份", deletedCourseID: UUID? = nil,
+                        clearError: Bool = true,
+                        preparation: (@Sendable (inout PlannerState) throws -> ScheduleResult)? = nil) async -> Bool {
+        guard !orderSaveBusy, let repository, isReady else { return false }
+        let previous = state
+        orderSaveBusy = true
+        saveStatus = replan || preparation != nil ? "正在后台保存并更新课表…" : "正在后台保存…"
+        localEditRevision += 1
+        if clearError { errorMessage = nil }
+        let work = Task { @MainActor in
+            defer { finishLocalSave() }
+            do {
+                if let backupReason {
+                    try await backups.save(PlannerBackup(state: previous, reason: backupReason, deletedCourseID: deletedCourseID))
+                    await refreshBackups()
+                }
+                let (plannedState, planned) = try await Task.detached(priority: .userInitiated) {
+                    var value = next
+                    value.removeArchivedCourses()
+                    let plan = try preparation?(&value) ?? (replan ? value.replan(now: now) : ScheduleEngine().assessSavedPlan(state: value, now: now))
+                    return (value, plan)
+                }.value
+                let saved = try await repository.saveChangesForInteraction(plannedState, from: previous)
+                let (assessment, load) = await Task.detached(priority: .userInitiated) {
+                    (saved == plannedState ? planned : ScheduleEngine().assessSavedPlan(state: saved, now: now),
+                     StudyLoadAnalyzer().assess(state: saved, now: now))
+                }.value
+                state = saved; result = assessment; studyLoad = load
+                didSaveLocalEdit()
+                return true
+            } catch let PlannerError.fixedConflict(conflicts) {
+                pendingEventConflicts = conflicts
+                return false
+            } catch {
+                if clearError || errorMessage == nil { errorMessage = "操作未保存：\(error.localizedDescription)" }
+                return false
+            }
+        }
+        orderSaveTask = work
+        return await work.value
+    }
+
+    private func finishLocalSave() {
+        orderSaveBusy = false; orderSaveTask = nil; saveStatus = ""
+        if let preview = pendingCompressedPreview { publishCompressedPreview(preview) }
+    }
+
     func swapDailyTasks(_ source: UUID, _ target: UUID) {
         guard !orderSaveBusy, let repository, isReady else { return }
         do {
@@ -124,17 +172,19 @@ final class PlannerStore {
             result = planned
             localEditRevision += 1
             orderSaveBusy = true
+            saveStatus = "正在后台保存课程顺序…"
             orderSaveTask = Task { @MainActor in
-                defer {
-                    orderSaveBusy = false; orderSaveTask = nil
-                    if let preview = pendingCompressedPreview { publishCompressedPreview(preview) }
-                }
+                defer { finishLocalSave() }
                 do {
+                    try await backups.save(PlannerBackup(state: previous, reason: "调整顺序前"))
+                    await refreshBackups()
                     let saved = try await repository.saveChangesForInteraction(next, from: previous)
                     state = saved
                     if saved != next {
-                        result = ScheduleEngine().assessSavedPlan(state: saved, now: Date())
-                        studyLoad = StudyLoadAnalyzer().assess(state: saved, now: Date())
+                        let (assessment, load) = await Task.detached(priority: .userInitiated) {
+                            (ScheduleEngine().assessSavedPlan(state: saved, now: Date()), StudyLoadAnalyzer().assess(state: saved, now: Date()))
+                        }.value
+                        result = assessment; studyLoad = load
                     }
                     didSaveLocalEdit()
                     return true
@@ -150,93 +200,104 @@ final class PlannerStore {
             }
         } catch { errorMessage = "操作未保存：\(error.localizedDescription)" }
     }
-    func waitForOrderSave() async -> Bool { await orderSaveTask?.value ?? true }
-    func replan() { change { _ in } }
+    func waitForOrderSave() async -> Bool {
+        while let task = orderSaveTask { if !(await task.value) { return false } }
+        return true
+    }
+    func replan() async { await change { _ in } }
     @discardableResult
-    func studyImmediately(courseID: UUID, lessonID: String? = nil, now: Date = Date()) -> Bool {
-        guard !orderSaveBusy else { errorMessage = "正在保存课程顺序，请稍后再试。"; return false }
-        guard let repository, isReady else { return false }
-        do {
-            var next = state
-            let planned = try next.studyImmediately(courseID: courseID, lessonID: lessonID, now: now)
-            let saved = try repository.saveChanges(next, from: state)
-            state = saved
-            result = saved == next ? planned : ScheduleEngine().assessSavedPlan(state: saved, now: now)
-            studyLoad = StudyLoadAnalyzer().assess(state: saved, now: now)
-            didSaveLocalEdit()
-            errorMessage = nil
-            return true
-        } catch { errorMessage = "调换失败：\(error.localizedDescription)"; return false }
+    func studyImmediately(courseID: UUID, lessonID: String? = nil, now: Date = Date()) async -> Bool {
+        await commit(state, replan: true, now: now) {
+            try $0.studyImmediately(courseID: courseID, lessonID: lessonID, now: now)
+        }
     }
-    func cancelImmediateStudy() {
-        change { $0.settings.immediateStudy = nil }
-    }
-    func setDailyWeight(_ weight: Double, for courseID: UUID) {
-        change { state in
+    func cancelImmediateStudy() async { await change { $0.settings.immediateStudy = nil } }
+    func setDailyWeight(_ weight: Double, for courseID: UUID) async {
+        await change { state in
             guard let index = state.courses.firstIndex(where: { $0.id == courseID }) else { return }
             state.courses[index].dailyStudyWeight = weight
         }
     }
-    func saveActualStudyStart(_ time: Date) -> Bool {
+    func saveActualStudyStart(_ time: Date) async -> Bool {
         let calendar = Calendar.current
         let minute = calendar.component(.hour, from: time) * 60 + calendar.component(.minute, from: time)
-        return change { try $0.recordActualStudyStart(minute: minute, now: Date(), calendar: calendar) }
+        return await change { try $0.recordActualStudyStart(minute: minute, now: Date(), calendar: calendar) }
     }
-    func saveCourse(_ course: Course) -> Bool {
-        change { try $0.updateCourse(course) }
+    func saveCourse(_ course: Course) async -> Bool {
+        let needsReplan = self.course(course.id).map { !course.hasSameSchedulingInputs(as: $0) } ?? true
+        return await change(replan: needsReplan) { try $0.updateCourse(course) }
     }
-    func deleteCourse(_ course: Course) -> Bool {
-        change { $0.removeCourse(id: course.id) }
+    func deleteCourse(_ course: Course) async -> Bool {
+        var next = state
+        next.removeCourse(id: course.id)
+        return await commit(next, replan: true, backupReason: "删除课程前", deletedCourseID: course.id)
     }
-    func saveEvent(_ event: FixedEvent) -> Bool {
-        saveEvent(event, skippingDates: [])
+    func saveEvent(_ event: FixedEvent) async -> Bool {
+        await saveEvent(event, skippingDates: [])
     }
     @discardableResult
-    func saveEvent(_ event: FixedEvent, skippingDates: Set<Date>, skippingExistingDates: Set<Date> = []) -> Bool {
-        guard !orderSaveBusy else { errorMessage = "正在保存课程顺序，请稍后再试。"; return false }
-        guard let repository, isReady else { return false }
+    func saveEvent(_ event: FixedEvent, skippingDates: Set<Date>, skippingExistingDates: Set<Date> = []) async -> Bool {
         pendingEventConflicts = nil
-        errorMessage = nil
-        do {
-            var next = state
-            try next.updateFixedEvent(event, now: Date(), skippingDates: skippingDates, skippingExistingDates: skippingExistingDates)
-            let planned = next.replan(now: Date())
-            let saved = try repository.saveChanges(next, from: state)
-            state = saved
-            result = saved == next ? planned : ScheduleEngine().assessSavedPlan(state: saved, now: Date())
-            studyLoad = StudyLoadAnalyzer().assess(state: saved, now: Date())
-            didSaveLocalEdit()
-            pendingEventConflicts = nil
-            errorMessage = nil
-            return true
-        } catch let PlannerError.fixedConflict(conflicts) {
-            pendingEventConflicts = conflicts
-            return false
-        } catch {
-            pendingEventConflicts = nil
-            errorMessage = "操作未保存：\(error.localizedDescription)"
-            return false
+        let now = Date()
+        return await commit(state, replan: true, now: now) {
+            try $0.updateFixedEvent(event, now: now, skippingDates: skippingDates, skippingExistingDates: skippingExistingDates)
+            return $0.replan(now: now)
         }
     }
-    func deleteEvent(_ event: FixedEvent) {
-        change { $0.removeFixedEvent(id: event.id, now: Date()) }
+    func deleteEvent(_ event: FixedEvent) async {
+        await change { $0.removeFixedEvent(id: event.id, now: Date()) }
     }
-    func setEventSkipped(_ event: FixedEvent, on day: Date, skipped: Bool) {
-        change { try $0.setFixedEventSkipped(id: event.id, on: day, skipped: skipped, now: Date()) }
+    func setEventSkipped(_ event: FixedEvent, on day: Date, skipped: Bool) async {
+        await change { try $0.setFixedEventSkipped(id: event.id, on: day, skipped: skipped, now: Date()) }
     }
-    func confirm(_ task: ScheduledTask, minutes: Int, studyDate: Date? = nil, now: Date = Date()) -> Bool {
-        // Preserve active/future full completions; ended tasks may already have
-        // replacement work scheduled, which must shrink when progress is credited.
-        return change(replan: task.confirmationRequiresReplan(actualMinutes: minutes, now: now), now: now) {
+    func confirm(_ task: ScheduledTask, minutes: Int, studyDate: Date? = nil, now: Date = Date()) async -> Bool {
+        await change(replan: task.confirmationRequiresReplan(actualMinutes: minutes, now: now), now: now) {
             try $0.confirm(taskID: task.id, actualMinutes: minutes, now: now, studyDate: studyDate)
         }
     }
-    func undoConfirmation(_ task: ScheduledTask) -> Bool {
-        // Time, settings, or other confirmations may have changed the plan since
-        // completion. Recompute it when restoring the remaining learning amount.
-        change {
-            try $0.undoConfirmation(taskID: task.id, now: Date())
+    func undoConfirmation(_ task: ScheduledTask) async -> Bool {
+        await change { try $0.undoConfirmation(taskID: task.id, now: Date()) }
+    }
+
+    func refreshBackups() async {
+        do {
+            backupEntries = try await backups.entries()
+            let unreadable = await backups.unreadableCount
+            backupMessage = unreadable > 0 ? "有 \(unreadable) 份备份无法读取，已保留原文件，其他备份仍可使用。" : nil
         }
+        catch { backupMessage = "无法读取自动备份：" + error.localizedDescription }
+    }
+    var latestDeletedCourse: PlannerBackupEntry? {
+        backupEntries.first { entry in entry.deletedCourseID.map { course($0) == nil } == true }
+    }
+    func createBackup() async {
+        guard !orderSaveBusy, isReady else { return }
+        let snapshot = PlannerBackup(state: state, reason: "手动备份")
+        orderSaveBusy = true; saveStatus = "正在创建备份…"
+        let work = Task { @MainActor in
+            defer { finishLocalSave() }
+            do {
+                try await backups.save(snapshot)
+                await refreshBackups()
+                return true
+            } catch { backupMessage = "备份失败：" + error.localizedDescription; return false }
+        }
+        orderSaveTask = work
+        _ = await work.value
+    }
+    func restoreBackup(_ backup: PlannerBackup) async -> Bool {
+        guard !syncBusy, !orderSaveBusy else { errorMessage = "请等待当前保存或同步完成后再恢复。"; return false }
+        return await commit(backup.state, replan: false, backupReason: "恢复备份前") { state in
+            _ = try backup.validated()
+            return ScheduleEngine().assessSavedPlan(state: state, now: Date())
+        }
+    }
+    func undoCourseDeletion(_ id: UUID) async -> Bool {
+        guard !orderSaveBusy else { return false }
+        do {
+            let backup = try await backups.load(id)
+            return await change { try $0.restoreDeletedCourse(from: backup) }
+        } catch { errorMessage = "无法撤销删除：" + error.localizedDescription; return false }
     }
     var reviewTasks: [ScheduledTask] {
         state.confirmationCandidates(at: Date())
@@ -244,7 +305,7 @@ final class PlannerStore {
     func checkDay() {
         guard isReady, !orderSaveBusy else { return }
         let today = Calendar.current.startOfDay(for: Date())
-        if today != lastDay { lastDay = today; reviewPrompted = false; replan() }
+        if today != lastDay { lastDay = today; reviewPrompted = false; Task { await replan() } }
         if !reviewTasks.isEmpty && !reviewPrompted { showDailyReview = true; reviewPrompted = true }
     }
     func triggerAutomaticSync() {
@@ -392,9 +453,9 @@ final class PlannerStore {
         if syncLog.count > 200 { syncLog.removeFirst(syncLog.count - 200) }
         await SyncFileLog.shared.append(message)
     }
-    func loadExample() {
+    func loadExample() async {
         guard state.canLoadExample else { return }
-        change { state in
+        await change { state in
             let cal = Calendar.current, today = cal.startOfDay(for: Date())
             func after(_ days: Int) -> Date { cal.date(byAdding: .day, value: days, to: today)! }
             var math = Course(name: "考研数学", totalMinutes: 6000, startDate: today, deadline: after(60))

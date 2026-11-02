@@ -45,7 +45,9 @@ struct ActualStudyStartEntry: View {
 
     private var saveButton: some View {
         Button("生成新课表", systemImage: "arrow.triangle.2.circlepath") {
-            if store.saveActualStudyStart(time) { didSave() }
+            Task {
+                if await store.saveActualStudyStart(time) { didSave() }
+            }
         }
         .buttonStyle(SoftButtonStyle(prominent: true))
         .disabled(!store.isReady)

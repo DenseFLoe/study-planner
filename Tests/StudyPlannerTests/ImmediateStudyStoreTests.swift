@@ -27,11 +27,12 @@ final class ImmediateStudyStoreTests: XCTestCase {
         return (state, result, now)
     }
 
-    @MainActor func testSavesCompletePlanAndUpdatesCachedResult() throws {
+    @MainActor func testSavesCompletePlanAndUpdatesCachedResult() async throws {
         let (state, result, now) = fixture()
         let repository = Repository()
         let store = PlannerStore(state: state, repository: repository, result: result)
-        XCTAssertTrue(store.studyImmediately(courseID: state.courses[0].id, now: now))
+        let started = await store.studyImmediately(courseID: state.courses[0].id, now: now)
+        XCTAssertTrue(started)
         XCTAssertEqual(repository.saved, store.state)
         XCTAssertEqual(store.result.tasks, store.state.tasks)
         XCTAssertEqual(store.result.tasks.first?.id, store.state.settings.immediateStudy?.task.id)
@@ -39,29 +40,32 @@ final class ImmediateStudyStoreTests: XCTestCase {
         XCTAssertNil(store.errorMessage)
     }
 
-    @MainActor func testFailedPersistencePreservesStateAndSyncAllowsImmediateStudy() {
+    @MainActor func testFailedPersistencePreservesStateAndSyncAllowsImmediateStudy() async {
         let (state, result, now) = fixture()
         let repository = Repository()
         repository.fails = true
         let store = PlannerStore(state: state, repository: repository, result: result)
-        XCTAssertFalse(store.studyImmediately(courseID: state.courses[0].id, now: now))
+        let failedStart = await store.studyImmediately(courseID: state.courses[0].id, now: now)
+        XCTAssertFalse(failedStart)
         XCTAssertEqual(store.state, state)
         XCTAssertEqual(store.result.tasks, result.tasks)
         XCTAssertNil(repository.saved)
         XCTAssertNotNil(store.errorMessage)
         repository.fails = false
         store.syncBusy = true
-        XCTAssertTrue(store.studyImmediately(courseID: state.courses[0].id, now: now))
+        let retriedStart = await store.studyImmediately(courseID: state.courses[0].id, now: now)
+        XCTAssertTrue(retriedStart)
         XCTAssertEqual(repository.saved, store.state)
         XCTAssertEqual(store.result.tasks, store.state.tasks)
         XCTAssertNotNil(store.state.settings.immediateStudy)
     }
 
-    @MainActor func testSelectedLessonIsSavedAndDisplayedAheadOfEarlierLesson() throws {
+    @MainActor func testSelectedLessonIsSavedAndDisplayedAheadOfEarlierLesson() async throws {
         let (state, result, now) = fixture()
         let repository = Repository()
         let store = PlannerStore(state: state, repository: repository, result: result)
-        XCTAssertTrue(store.studyImmediately(courseID: state.courses[0].id, lessonID: "2", now: now))
+        let lessonStarted = await store.studyImmediately(courseID: state.courses[0].id, lessonID: "2", now: now)
+        XCTAssertTrue(lessonStarted)
         let saved = try XCTUnwrap(repository.saved)
         XCTAssertEqual(saved, store.state)
         XCTAssertEqual(saved.settings.immediateStudy?.task.lessonID, "2")
@@ -72,13 +76,14 @@ final class ImmediateStudyStoreTests: XCTestCase {
         XCTAssertNil(store.errorMessage)
     }
 
-    @MainActor func testSelectedLessonSaveFailurePreservesPreviousPlanAndRequest() throws {
+    @MainActor func testSelectedLessonSaveFailurePreservesPreviousPlanAndRequest() async throws {
         var (state, result, now) = fixture()
         result = try state.studyImmediately(courseID: state.courses[0].id, now: now)
         let repository = Repository()
         repository.fails = true
         let store = PlannerStore(state: state, repository: repository, result: result)
-        XCTAssertFalse(store.studyImmediately(courseID: state.courses[0].id, lessonID: "2", now: now))
+        let lessonStartFailed = await store.studyImmediately(courseID: state.courses[0].id, lessonID: "2", now: now)
+        XCTAssertFalse(lessonStartFailed)
         XCTAssertEqual(store.state, state)
         XCTAssertEqual(store.result.tasks, result.tasks)
         XCTAssertEqual(store.state.settings.immediateStudy?.task.lessonID, "1")
@@ -86,12 +91,13 @@ final class ImmediateStudyStoreTests: XCTestCase {
         XCTAssertNotNil(store.errorMessage)
     }
 
-    @MainActor func testImpossibleRequestDoesNotWriteRepository() {
+    @MainActor func testImpossibleRequestDoesNotWriteRepository() async {
         var (state, result, now) = fixture()
         state.fixedEvents = [.init(title: "占用", startMinute: 480, endMinute: 600, startDate: now, endDate: now)]
         let repository = Repository()
         let store = PlannerStore(state: state, repository: repository, result: result)
-        XCTAssertFalse(store.studyImmediately(courseID: state.courses[0].id, now: now))
+        let impossibleStart = await store.studyImmediately(courseID: state.courses[0].id, now: now)
+        XCTAssertFalse(impossibleStart)
         XCTAssertEqual(store.state, state)
         XCTAssertEqual(store.result.tasks, result.tasks)
         XCTAssertNil(repository.saved)

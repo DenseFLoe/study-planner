@@ -62,14 +62,16 @@ struct EventConflictReview: View {
         save()
     }
     private func save() {
-        let skipped = Set(choices.filter { $0.value == .skipNew }.map(\.key))
-        let skippedLocal = Set(choices.filter { $0.value == .skipLocal }.map(\.key))
-        if store.saveEvent(event, skippingDates: skipped, skippingExistingDates: skippedLocal) {
-            dismiss()
-            onSaved()
-        } else {
-            if let updated = store.pendingEventConflicts { conflicts = updated }
-            message = store.pendingEventConflicts == nil ? (store.errorMessage ?? "保存失败，请重试。") : "仍有未处理的冲突，列表已更新，请确认后再保存。"
+        Task {
+            let skipped = Set(choices.filter { $0.value == .skipNew }.map(\.key))
+            let skippedLocal = Set(choices.filter { $0.value == .skipLocal }.map(\.key))
+            if await store.saveEvent(event, skippingDates: skipped, skippingExistingDates: skippedLocal) {
+                dismiss()
+                onSaved()
+            } else {
+                if let updated = store.pendingEventConflicts { conflicts = updated }
+                message = store.pendingEventConflicts == nil ? (store.errorMessage ?? "保存失败，请重试。") : "仍有未处理的冲突，列表已更新，请确认后再保存。"
+            }
         }
     }
 }

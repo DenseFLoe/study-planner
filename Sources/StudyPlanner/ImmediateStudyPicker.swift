@@ -22,7 +22,7 @@ struct ImmediateStudyMenu: View {
                         } else {
                             ForEach(lessons) { lesson in
                                 Button {
-                                    if store.studyImmediately(courseID: course.id, lessonID: lesson.id) { didSchedule() }
+                                    Task { if await store.studyImmediately(courseID: course.id, lessonID: lesson.id) { didSchedule() } }
                                 } label: {
                                     Text("\(lesson.name) · 剩余 \(lesson.remainingMinutes) 分钟")
                                 }

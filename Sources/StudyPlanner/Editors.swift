@@ -156,18 +156,20 @@ struct CourseEditor: View {
                 if existing { Button("删除课程", role: .destructive) { deletePrompt = true } }
                 Spacer()
                 Button("取消") { dismiss() }.keyboardShortcut(.cancelAction)
-                Button("保存并重新排程") {
-                    course.name = course.name.trimmingCharacters(in: .whitespacesAndNewlines)
-                    if store.saveCourse(course) {
-                        let supervisor = store.playbackSupervisor
-                        let previous = supervisor.application(for: course.id)
-                        if supervisor.setApplication(supervisedApplication, for: course.id) {
-                            dismiss()
-                            if let app = supervisedApplication, app != previous {
-                                Task { await supervisor.authorize(app) }
-                            }
-                        } else { message = supervisor.storageMessage ?? "软件绑定保存失败" }
-                    } else { message = store.errorMessage ?? "保存失败" }
+                Button("保存") {
+                    Task {
+                        course.name = course.name.trimmingCharacters(in: .whitespacesAndNewlines)
+                        if await store.saveCourse(course) {
+                            let supervisor = store.playbackSupervisor
+                            let previous = supervisor.application(for: course.id)
+                            if supervisor.setApplication(supervisedApplication, for: course.id) {
+                                dismiss()
+                                if let app = supervisedApplication, app != previous {
+                                    Task { await supervisor.authorize(app) }
+                                }
+                            } else { message = supervisor.storageMessage ?? "软件绑定保存失败" }
+                        } else { message = store.errorMessage ?? "保存失败" }
+                    }
                 }.buttonStyle(.borderedProminent).keyboardShortcut(.defaultAction).disabled(validation != nil)
             }.padding(20)
         }.frame(width: 570, height: 740)
@@ -178,12 +180,14 @@ struct CourseEditor: View {
             }
         }
 
-        .confirmationDialog("删除这门课程？所有安排和完成记录都会删除。", isPresented: $deletePrompt) {
+        .confirmationDialog("删除这门课程？所有安排和完成记录都会删除，可从自动备份撤销。", isPresented: $deletePrompt) {
             Button("删除课程", role: .destructive) {
-                if store.deleteCourse(course) {
-                    _ = store.playbackSupervisor.setApplication(nil, for: course.id)
-                    dismiss()
-                } else { message = store.errorMessage ?? "删除失败" }
+                Task {
+                    if await store.deleteCourse(course) {
+                        _ = store.playbackSupervisor.setApplication(nil, for: course.id)
+                        dismiss()
+                    } else { message = store.errorMessage ?? "删除失败" }
+                }
             }
         }
     }
@@ -254,15 +258,17 @@ struct FixedEventEditor: View {
                 if existing { Button("删除事项", role: .destructive) { deletePrompt = true } }
                 Spacer(); Button("取消") { dismiss() }.keyboardShortcut(.cancelAction)
                 Button("保存并重新排程") {
-                    if event.weekdays.isEmpty { event.endDate = event.startDate }
-                    if store.saveEvent(event) { dismiss() }
-                    else if !conflicts.isEmpty { message = ""; conflictPrompt = true }
-                    else { message = store.errorMessage ?? "保存失败" }
+                    Task {
+                        if event.weekdays.isEmpty { event.endDate = event.startDate }
+                        if await store.saveEvent(event) { dismiss() }
+                        else if !conflicts.isEmpty { message = ""; conflictPrompt = true }
+                        else { message = store.errorMessage ?? "保存失败" }
+                    }
                 }.buttonStyle(.borderedProminent).keyboardShortcut(.defaultAction).disabled(validation != nil)
             }.padding(20)
         }.frame(width: 600, height: 740)
         .confirmationDialog("移除未来的固定事项？过去的课表会保留。", isPresented: $deletePrompt) {
-            Button("移除事项", role: .destructive) { store.deleteEvent(event); dismiss() }
+            Button("移除事项", role: .destructive) { Task { await store.deleteEvent(event); dismiss() } }
         }
         .sheet(isPresented: $conflictPrompt) {
             EventConflictReview(store: store, event: event, onSaved: { dismiss() }, conflicts: conflicts)
@@ -323,7 +329,7 @@ struct SettingsView: View {
                     if saved { Label("已保存，未来计划已更新", systemImage: "checkmark.circle.fill").foregroundStyle(.teal) }
                     Spacer()
                     Button("恢复已保存设置") { settings = store.state.settings; saved = false }
-                    Button("保存并重新排程") { saved = store.change { $0.updateStudySettings(settings, now: Date()) } }.buttonStyle(.borderedProminent).disabled(!valid)
+                    Button("保存并重新排程") { Task { saved = await store.change { $0.updateStudySettings(settings, now: Date()) } } }.buttonStyle(.borderedProminent).disabled(!valid || store.orderSaveBusy)
                 }.padding(20)
             }
         }.onAppear {
@@ -461,10 +467,7 @@ struct SettingsView: View {
                 CloudConnectionSettings(store: store)
             }
         case .data:
-            Section("数据保存") {
-                Label("所有数据使用 SwiftData 保存在本机", systemImage: "internaldrive")
-                Text("使用独立日历，不连接系统 Calendar。可使用热点同步，或自行配置私人云同步服务器。").font(.caption).foregroundStyle(.secondary)
-            }
+            DataBackupView(store: store)
         }
     }
 }
@@ -485,7 +488,7 @@ struct CompletionEditor: View {
             DatePicker("实际学习日期", selection: $studyDate, in: ...Date(), displayedComponents: .date)
             Text("只有实际完成的学习量会计入进度；其余部分会自动重新分配。").font(.callout).foregroundStyle(.secondary)
             HStack { Spacer(); Button("取消") { dismiss() }.keyboardShortcut(.cancelAction)
-                Button("确认并重新排程") { if store.confirm(task, minutes: actual, studyDate: studyDate) { dismiss() } }.buttonStyle(.borderedProminent).disabled(actual < 0 || actual > task.durationMinutes)
+                Button("确认并重新排程") { Task { if await store.confirm(task, minutes: actual, studyDate: studyDate) { dismiss() } } }.buttonStyle(.borderedProminent).disabled(actual < 0 || actual > task.durationMinutes)
             }
         }.padding(28).frame(width: 500).onAppear { actual = task.durationMinutes; studyDate = min(task.start, Date()) }
     }
@@ -520,12 +523,14 @@ struct DailyReviewView: View {
                 Spacer()
                 Button("稍后确认") { dismiss() }.keyboardShortcut(.cancelAction)
                 Button("保存并重新排程") {
-                    let now = Date()
-                    let needsReplan = tasks.contains { $0.confirmationRequiresReplan(actualMinutes: values[$0.id] ?? 0, now: now) }
-                    let success = store.change(replan: needsReplan, now: now) { state in
-                        for task in tasks { try state.confirm(taskID: task.id, actualMinutes: values[task.id] ?? 0, now: now, studyDate: studyDates[task.id] ?? min(task.start, now)) }
+                    Task {
+                        let now = Date()
+                        let needsReplan = tasks.contains { $0.confirmationRequiresReplan(actualMinutes: values[$0.id] ?? 0, now: now) }
+                        let success = await store.change(replan: needsReplan, now: now) { state in
+                            for task in tasks { try state.confirm(taskID: task.id, actualMinutes: values[task.id] ?? 0, now: now, studyDate: studyDates[task.id] ?? min(task.start, now)) }
+                        }
+                        if success { dismiss() }
                     }
-                    if success { dismiss() }
                 }.buttonStyle(.borderedProminent).disabled(tasks.isEmpty || reviewed.count != tasks.count || tasks.contains { !(0...$0.durationMinutes).contains(values[$0.id] ?? -1) })
             }.padding(24)
         }.frame(width: 740, height: 620)

@@ -120,7 +120,8 @@ final class CloudSyncPresentationTests: XCTestCase {
         XCTAssertTrue(store.isReady)
         XCTAssertNil(store.errorMessage)
         XCTAssertEqual(store.state.courses.map(\.name), ["远端新增"])
-        XCTAssertTrue(store.change(replan: false) { $0.courses[0].name = "同步后编辑" })
+        let editedAfterSync = await store.change(replan: false) { $0.courses[0].name = "同步后编辑" }
+        XCTAssertTrue(editedAfterSync)
         let saved = try LocalRepository(url: database).load()
         XCTAssertEqual(saved.courses.map(\.name), ["同步后编辑"])
     }
@@ -152,14 +153,16 @@ final class CloudSyncPresentationTests: XCTestCase {
         })
         let syncTask = store.syncTask
         await transfer.waitUntilStarted()
-        XCTAssertTrue(store.change(replan: false) { $0.courses[0].name = "传输期间编辑" })
+        let editDuringTransfer = await store.change(replan: false) { $0.courses[0].name = "传输期间编辑" }
+        XCTAssertTrue(editDuringTransfer)
         XCTAssertEqual(try LocalRepository(url: database).load().courses[0].name, "传输期间编辑")
         await transfer.release()
         await refresh.waitUntilStarted()
         XCTAssertTrue(store.syncBusy)
         // The displayed state has not seen the newly committed remote course.
         XCTAssertEqual(store.state.courses.count, 1)
-        XCTAssertTrue(store.change(replan: false) { $0.courses[0].name = "刷新期间编辑" })
+        let editDuringRefresh = await store.change(replan: false) { $0.courses[0].name = "刷新期间编辑" }
+        XCTAssertTrue(editDuringRefresh)
         XCTAssertEqual(Set(store.state.courses.map(\.name)), ["刷新期间编辑", "远端新增"])
         await refresh.release()
         await syncTask?.value
@@ -184,9 +187,10 @@ final class CloudSyncPresentationTests: XCTestCase {
         }, snapshot: { await snapshot.value() })
         let task = store.syncTask
         await transfer.waitUntilStarted()
-        XCTAssertTrue(store.change(replan: false) {
+        let offlineAddition = await store.change(replan: false) {
             $0.courses.append(Course(name: "断网期间新增", totalMinutes: 60, startDate: Date(), deadline: Date()))
-        })
+        }
+        XCTAssertTrue(offlineAddition)
         await snapshot.set(state: try repository.load(), ledger: try repository.loadLedger())
         await transfer.release()
         await task?.value

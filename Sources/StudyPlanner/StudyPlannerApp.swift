@@ -39,7 +39,7 @@ struct StudyPlannerApp: App {
         .commands {
             CommandGroup(replacing: .newItem) {}
             CommandMenu("学习计划") {
-                Button("重新计算未来计划") { store.replan() }.keyboardShortcut("r")
+                Button("重新计算未来计划") { Task { await store.replan() } }.keyboardShortcut("r")
                 Button("确认学习完成情况") { store.showDailyReview = true }.keyboardShortcut("d", modifiers: [.command, .shift])
             }
         }

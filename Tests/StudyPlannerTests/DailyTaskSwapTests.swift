@@ -109,7 +109,8 @@ final class DailyTaskSwapTests: XCTestCase {
         XCTAssertNil(repo.saved)
         await repo.waitUntilSaving()
         // The main actor is responsive while the repository remains suspended.
-        XCTAssertFalse(store.change(replan: false) { $0.tasks.removeAll() })
+        let blockedChange = await store.change(replan: false) { $0.tasks.removeAll() }
+        XCTAssertFalse(blockedChange)
         store.swapDailyTasks(a, b)
         XCTAssertEqual(store.state, expected)
         repo.resumeSave?.resume()

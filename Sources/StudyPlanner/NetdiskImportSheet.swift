@@ -350,17 +350,19 @@ struct NetdiskImportSheet: View {
     }
 
     private func save() {
-        guard let result = reader.result else { return }
-        let courses = importCandidates
-        guard !courses.isEmpty else {
-            message = mergeSelected ? "请至少勾选两门课程并填写有效的合并名称。" : "请勾选要导入的课程。"
-            return
+        Task {
+            guard let result = reader.result else { return }
+            let courses = importCandidates
+            guard !courses.isEmpty else {
+                message = mergeSelected ? "请至少勾选两门课程并填写有效的合并名称。" : "请勾选要导入的课程。"
+                return
+            }
+            let success = await store.change { state in
+                try state.importNetdiskCourses(courses, scan: result.scan, duplicates: result.duplicates,
+                                               deadline: deadline, now: Date())
+            }
+            if success { dismiss() } else { message = store.errorMessage ?? "保存失败" }
         }
-        let success = store.change { state in
-            try state.importNetdiskCourses(courses, scan: result.scan, duplicates: result.duplicates,
-                                           deadline: deadline, now: Date())
-        }
-        if success { dismiss() } else { message = store.errorMessage ?? "保存失败" }
     }
 }
 
