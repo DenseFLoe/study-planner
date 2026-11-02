@@ -16,7 +16,7 @@ enum PlaybackStateReader {
         }.value
     }
 
-    private static func permission(pid: pid_t, askUser: Bool) -> PlaybackAutomationPermission {
+    static func permission(pid: pid_t, askUser: Bool) -> PlaybackAutomationPermission {
         let target = NSAppleEventDescriptor(processIdentifier: pid)
         return PlaybackAutomationPermission(status:
             AEDeterminePermissionToAutomateTarget(target.aeDesc, typeWildCard, typeWildCard, askUser))
@@ -44,13 +44,14 @@ enum PlaybackStateReader {
         return specifier
     }
 
-    private static func send(pid: pid_t, eventClass: String = "core", eventID: String = "getd",
-                             direct: NSAppleEventDescriptor, parameter: (String, NSAppleEventDescriptor)? = nil) throws -> NSAppleEventDescriptor {
+    static func send(pid: pid_t, eventClass: String = "core", eventID: String = "getd",
+                     direct: NSAppleEventDescriptor, parameter: (String, NSAppleEventDescriptor)? = nil,
+                     timeout: TimeInterval = 1) throws -> NSAppleEventDescriptor {
         let event = NSAppleEventDescriptor(eventClass: code(eventClass), eventID: code(eventID),
             targetDescriptor: .init(processIdentifier: pid), returnID: AEReturnID(kAutoGenerateReturnID), transactionID: AETransactionID(kAnyTransactionID))
         event.setParam(direct, forKeyword: keyDirectObject)
         if let parameter { event.setParam(parameter.1, forKeyword: code(parameter.0)) }
-        let reply = try event.sendEvent(options: [.waitForReply, .neverInteract, .dontRecord], timeout: 1)
+        let reply = try event.sendEvent(options: [.waitForReply, .neverInteract, .dontRecord], timeout: timeout)
         if let number = reply.paramDescriptor(forKeyword: keyErrorNumber), number.int32Value != 0 {
             throw NSError(domain: NSOSStatusErrorDomain, code: Int(number.int32Value))
         }

@@ -26,7 +26,7 @@ final class WebLessonReaderTests: XCTestCase {
     }
     @MainActor
     func testAllPagesSubjectsStagesAndProgress() async throws {
-        let reader = WebLessonReader(); defer { reader.stop() }
+        let reader = WebLessonReader(useExternalBrowser: false); defer { reader.stop() }
         try await ready(reader)
         let script = #"""
         const request = async (path, params) => {
@@ -57,7 +57,7 @@ final class WebLessonReaderTests: XCTestCase {
     }
     @MainActor
     func testAddressBarKeepsTheTargetWhenTheAddressIsNotHTTPS() {
-        let reader = WebLessonReader(); defer { reader.stop() }
+        let reader = WebLessonReader(useExternalBrowser: false); defer { reader.stop() }
         XCTAssertEqual(reader.address, WebLessonReader.defaultAddress)
         XCTAssertEqual(reader.targetURL, WebLessonReader.defaultURL)
         reader.address = "http://example.com/appmanage/my/mycourse"
@@ -67,7 +67,7 @@ final class WebLessonReaderTests: XCTestCase {
     }
     @MainActor
     func testFailedSubjectIsNotComplete() async throws {
-        let reader = WebLessonReader(); defer { reader.stop() }
+        let reader = WebLessonReader(useExternalBrowser: false); defer { reader.stop() }
         try await ready(reader)
         let result = try await reader.webView.callAsyncJavaScript(#"""
         const request = async (path, params) => {
@@ -85,7 +85,7 @@ final class WebLessonReaderTests: XCTestCase {
 
     @MainActor
     func testXuechengCatalogExpandsGroupsAndKeepsReplayRows() async throws {
-        let reader = WebLessonReader(); defer { reader.stop() }
+        let reader = WebLessonReader(useExternalBrowser: false); defer { reader.stop() }
         reader.webView.loadHTMLString(#"""
         <html><body>
           <div>2027学丞考研英语</div><div>课程有效期：2026-12-31</div>
@@ -113,7 +113,7 @@ final class WebLessonReaderTests: XCTestCase {
 
     @MainActor
     func testXuechengExpansionIgnoresHiddenLabelsAndDoesNotToggleOpenGroups() async throws {
-        let reader = WebLessonReader(); defer { reader.stop() }
+        let reader = WebLessonReader(useExternalBrowser: false); defer { reader.stop() }
         reader.webView.loadHTMLString(#"""
         <html><body>
           <div>测试课程</div><div>课程有效期：2026-12-31</div>
@@ -150,7 +150,7 @@ final class WebLessonReaderTests: XCTestCase {
 
     @MainActor
     func testXuechengTraversesNestedExclusiveAccordionOnceAndReopensCorrectReplay() async throws {
-        let reader = WebLessonReader(); defer { reader.stop() }
+        let reader = WebLessonReader(useExternalBrowser: false); defer { reader.stop() }
         reader.webView.loadHTMLString(#"""
         <html><body><div>互斥目录测试</div><div>课程有效期：2026-12-31</div>
         <div id="catalog" class="ant-collapse" role="tablist"></div>
@@ -218,7 +218,7 @@ final class WebLessonReaderTests: XCTestCase {
 
     @MainActor
     func testXuechengEmptyBranchContinuesAndWaitsForPendingLessons() async throws {
-        let reader = WebLessonReader(); defer { reader.stop() }
+        let reader = WebLessonReader(useExternalBrowser: false); defer { reader.stop() }
         reader.webView.loadHTMLString(#"""
         <html><body><div>空目录测试</div><div>课程有效期：2026-12-31</div>
         <div id="catalog" class="ant-collapse" role="tablist"></div>
@@ -272,7 +272,7 @@ final class WebLessonReaderTests: XCTestCase {
 
     @MainActor
     func testGenericActivityTracksEmptyResponsesAndFailures() async throws {
-        let reader = WebLessonReader(); defer { reader.stop() }
+        let reader = WebLessonReader(useExternalBrowser: false); defer { reader.stop() }
         try await ready(reader)
         _ = try await reader.webView.evaluateJavaScript(#"""
         delete window.studyGenericCrawler;

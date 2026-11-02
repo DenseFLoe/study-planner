@@ -33,7 +33,7 @@ final class TempSiteForensics: XCTestCase {
         guard ProcessInfo.processInfo.environment["STUDYPLANNER_LIVE_SITE_FORENSICS"] == "1" else {
             throw XCTSkip("Live-site diagnostics are opt-in: set STUDYPLANNER_LIVE_SITE_FORENSICS=1.")
         }
-        let reader = WebLessonReader(); defer { reader.stop() }
+        let reader = WebLessonReader(useExternalBrowser: false); defer { reader.stop() }
         reader.address = "https://www.ixuecheng.cn/list"
         reader.loadAddress()
         for _ in 0..<60 {

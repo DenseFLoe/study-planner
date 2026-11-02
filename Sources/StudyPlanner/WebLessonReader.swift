@@ -48,10 +48,16 @@ final class WebLessonReader: NSObject, WKScriptMessageHandler, WKNavigationDeleg
     static let defaultAddress = "https://www.kaoyanvip.cn/appmanage/my/mycourse"
     static let defaultURL = URL(string: WebLessonReader.defaultAddress)!
     var result: WebCourseAccount?
-    var status = "登录网站并进入“我的课程”后，会自动抓取账号下全部课程包。"
+    var status = "在默认浏览器登录并进入课程页面后，点击“读取浏览器当前课程”。"
     var busy = false
     var lastRefresh: Date?
     var webView: WKWebView!
+    private let browser: BrowserCourseSession?
+    private var browserConnected = false
+    private var browserTicking = false
+    private var browserApplication: SupervisedApplication?
+    private var browserCleanup: Task<Void, Never>?
+    var browserName = "默认浏览器"
     /// Address bar text; `targetURL` is the address the reader currently reads.
     var address = WebLessonReader.defaultAddress
     private(set) var targetURL = WebLessonReader.defaultURL
@@ -72,12 +78,12 @@ final class WebLessonReader: NSObject, WKScriptMessageHandler, WKNavigationDeleg
         return value == "ixuecheng.cn" || value == "www.ixuecheng.cn"
     }
     /// Sites without a dedicated adapter are read from the JSON the page itself loaded.
-    var isGenericSite: Bool { targetURL.host?.lowercased().hasSuffix("kaoyanvip.cn") != true }
+    var isGenericSite: Bool { !["kaoyanvip.cn", "www.kaoyanvip.cn"].contains(targetURL.host?.lowercased() ?? "") }
     var isXuechengSite: Bool { Self.isXuechengHost(targetURL.host) }
     private(set) var capturedResponses = 0
     private var capturedRevision = -1
     static var script: String { resource("CourseCrawler") }
-    /// Injected before any page script runs, so the sniffer can wrap fetch and XMLHttpRequest in time.
+    /// External browsers install this on explicit connection; test WebViews inject at document start.
     static var genericScript: String { resource("GenericCrawler") }
     static var xuechengScript: String { resource("XuechengCrawler") }
     static var replayScript: String { resource("XuechengReplay") }
@@ -86,8 +92,10 @@ final class WebLessonReader: NSObject, WKScriptMessageHandler, WKNavigationDeleg
               let source = try? String(contentsOf: url, encoding: .utf8) else { return "" }
         return source
     }
-    override init() {
+    init(useExternalBrowser: Bool = true) {
+        browser = useExternalBrowser ? BrowserCourseSession() : nil
         super.init()
+        if useExternalBrowser { return }
         let configuration = WKWebViewConfiguration()
         configuration.websiteDataStore = .nonPersistent()
         configuration.preferences.javaScriptCanOpenWindowsAutomatically = true
@@ -141,16 +149,32 @@ final class WebLessonReader: NSObject, WKScriptMessageHandler, WKNavigationDeleg
     private func load(_ url: URL) {
         attemptedURL = nil
         redirectAttempts = 0
+        if let browser {
+            generation = UUID(); browserConnected = false; busy = false
+            browserCleanup = Task { await browser.stop() }
+            guard let appURL = NSWorkspace.shared.urlForApplication(toOpen: url),
+                  let bundleID = Bundle(url: appURL)?.bundleIdentifier else {
+                status = "没有找到可打开此网址的默认浏览器。"; return
+            }
+            browserApplication = SupervisedApplication(bundleID: bundleID, name: appURL.deletingPathExtension().lastPathComponent, path: appURL.path)
+            browserName = browserApplication!.name
+            if NSWorkspace.shared.open(url) {
+                status = "已在\(browserName)打开网站。登录并选中课程标签页后，回到这里点击“读取浏览器当前课程”。"
+            } else { status = "未能打开默认浏览器，请检查系统默认浏览器设置后重试。" }
+            return
+        }
         webView.load(URLRequest(url: url))
     }
     func stop() {
         stopped = true; generation = UUID(); busy = false
         finishReplayURL(nil)
         finishReplayMetadata(nil)
+        if let browser { browserConnected = false; Task { await browser.stop() }; return }
         webView.configuration.userContentController.removeScriptMessageHandler(forName: "courseStatus")
         webView.stopLoading(); webView.loadHTMLString("", baseURL: nil)
     }
     func refresh(forceCatalog: Bool = true) {
+        if browser != nil { refreshBrowser(forceCatalog: forceCatalog, reconnect: true); return }
         guard !busy, !stopped, let page = webView.url,
               WebLessonTiming.isSameWebsite(current: page, target: targetURL) else {
             if !busy { status = "请先登录并进入“我的课程”，登录成功后会自动抓取。" }
@@ -168,9 +192,78 @@ final class WebLessonReader: NSObject, WKScriptMessageHandler, WKNavigationDeleg
             Task { @MainActor in await readAdapted(generation: current) }
         }
     }
+    private func evaluate(_ body: String, arguments: [String: Any]) async throws -> Any? {
+        if let browser {
+            let argumentsJSON = String(data: try JSONSerialization.data(withJSONObject: arguments), encoding: .utf8)!
+            let data = try await browser.evaluate(body, argumentsJSON: argumentsJSON)
+            return try JSONSerialization.jsonObject(with: data, options: .fragmentsAllowed)
+        }
+        return try await webView.callAsyncJavaScript(body, arguments: arguments, in: nil, contentWorld: .page)
+    }
+
+    private func refreshBrowser(forceCatalog: Bool, reconnect: Bool) {
+        guard let browser, !stopped, !busy else { return }
+        busy = true; generation = UUID()
+        let current = generation
+        Task { @MainActor in
+            do {
+                let page: URL
+                if reconnect {
+                    await browserCleanup?.value
+                    guard !stopped, generation == current else { return }
+                    guard let app = browserApplication,
+                          let running = NSRunningApplication.runningApplications(withBundleIdentifier: app.bundleID).first else {
+                        throw BrowserCourseError.message("请先点击“在默认浏览器打开”。")
+                    }
+                    page = try await browser.connect(application: app, pid: running.processIdentifier, target: targetURL)
+                    try await browser.install(Self.genericScript + "\n" + Self.script + "\n" + Self.xuechengScript)
+                    browserConnected = true
+                } else { page = try await browser.currentPage() }
+                guard !stopped, generation == current else { return }
+                if forceCatalog { replayAttempts.removeAll() }
+                status = "正在读取\(browserName)中的课程数据…"
+                if isGenericSite { await readGeneric(generation: current, page: page, forceCatalog: forceCatalog) }
+                else { result = nil; await readAdapted(generation: current) }
+            } catch {
+                guard !stopped, generation == current else { return }
+                browserConnected = false; busy = false
+                status = error.localizedDescription
+            }
+        }
+    }
+
+    private func tickBrowser(autoRefresh: Bool) {
+        guard let browser, browserConnected, !stopped, !busy, !browserTicking else { return }
+        browserTicking = true
+        let current = generation
+        Task { @MainActor in
+            defer { browserTicking = false }
+            do {
+                _ = try await browser.currentPage()
+                guard !stopped, current == generation, !busy else { return }
+                if autoRefresh, let lastRefresh, Date().timeIntervalSince(lastRefresh) >= 300 {
+                    refreshBrowser(forceCatalog: true, reconnect: false)
+                } else if isGenericSite {
+                    let value = try await evaluate("return String(window.studyGenericCrawler?.revision() ?? -1);", arguments: [:])
+                    guard !stopped, current == generation, !busy, let text = value as? String,
+                          let revision = Int(text), revision > 0, revision != capturedRevision else { return }
+                    refreshBrowser(forceCatalog: false, reconnect: false)
+                }
+            } catch {
+                guard !stopped, current == generation else { return }
+                browserConnected = false; status = error.localizedDescription
+            }
+        }
+    }
+
+    private func browserReplayMetadata(_ browser: BrowserCourseSession, url: URL) async -> XuechengReplayMetadata? {
+        guard let data = try? await browser.readReplay(url: url, script: Self.replayScript) else { return nil }
+        return try? JSONDecoder().decode(XuechengReplayMetadata.self, from: data)
+    }
+
     private func readAdapted(generation current: UUID) async {
         do {
-            let value = try await webView.callAsyncJavaScript("return JSON.stringify(await window.studyCourseCrawler.crawl(null));", arguments: [:], in: nil, contentWorld: .page)
+            let value = try await evaluate("return JSON.stringify(await window.studyCourseCrawler.crawl(null));", arguments: [:])
             guard !stopped, generation == current else { return }
             guard let json = value as? String, let data = json.data(using: .utf8) else { throw CocoaError(.coderReadCorrupt) }
             let decoder = JSONDecoder(); decoder.dateDecodingStrategy = .secondsSince1970
@@ -191,12 +284,12 @@ final class WebLessonReader: NSObject, WKScriptMessageHandler, WKNavigationDeleg
                 status = "正在按顺序读取各层课程目录，请等待自动读取完成…"
             }
             if Self.isXuechengHost(page.host), page.path == "/detail",
-               let value = try await webView.callAsyncJavaScript("return JSON.stringify(await window.studyXuechengCrawler?.catalog(force));", arguments: ["force": forceCatalog], in: nil, contentWorld: .page) as? String,
+               let value = try await evaluate("return JSON.stringify(await window.studyXuechengCrawler?.catalog(force));", arguments: ["force": forceCatalog]) as? String,
                let data = value.data(using: .utf8) {
                 catalog = try? JSONDecoder().decode(XuechengCatalog.self, from: data)
             }
             guard !stopped, generation == current else { return }
-            guard let value = try await webView.callAsyncJavaScript("return JSON.stringify({title: document.title || '', payloads: window.studyGenericCrawler ? window.studyGenericCrawler.snapshot() : [], revision: window.studyGenericCrawler?.revision() ?? -1});", arguments: [:], in: nil, contentWorld: .page) as? String,
+            guard let value = try await evaluate("return JSON.stringify({title: document.title || '', payloads: window.studyGenericCrawler ? window.studyGenericCrawler.snapshot() : [], revision: window.studyGenericCrawler?.revision() ?? -1});", arguments: [:]) as? String,
                   let data = value.data(using: .utf8) else { throw CocoaError(.coderReadCorrupt) }
             let sniffed = try JSONDecoder().decode(SniffedPage.self, from: data)
             let payloads = sniffed.payloads
@@ -223,7 +316,7 @@ final class WebLessonReader: NSObject, WKScriptMessageHandler, WKNavigationDeleg
                     status = "「\(catalog.name)」目录暂无可读取课节；可继续打开其他课程。"
                     lastRefresh = Date()
                 } else {
-                    status = "已捕获 \(payloads.count) 个数据接口，但没有识别到课程结构。请在该网站里打开「我的课程」或课程详情页，等课节列表出现后再点「重新识别课程」。"
+                    status = "已捕获 \(payloads.count) 个数据接口，但没有识别到课程结构。请在该网站里打开「我的课程」或课程详情页，等课节列表出现后再读取。若页面数据已在连接前加载，请在浏览器内返回列表后重新点开课程。"
                 }
             } else {
                 // Courses read from earlier pages are kept: a site usually needs one visit per course.
@@ -361,12 +454,38 @@ final class WebLessonReader: NSObject, WKScriptMessageHandler, WKNavigationDeleg
         continuation?.resume(returning: url)
     }
     private func replayURL(for index: Int) async -> URL? {
-        await withCheckedContinuation { continuation in
+        if browser != nil {
+            let source = """
+            const previous = window.open;
+            let captured = null;
+            const bridge = window.__studyCourseBridge;
+            const intercept = (value) => {
+              try { const u = new URL(value, location.href);
+                if (u.origin === location.origin && u.pathname === '/backWindow') { captured = u.href; return null; }
+              } catch {}
+              return null;
+            };
+            window.open = intercept;
+            const restore = () => { if (window.open === intercept) window.open = previous; };
+            bridge.restoreReplayOpen = restore;
+            try {
+              await window.studyXuechengCrawler?.open(index);
+              for (let i = 0; i < 80 && !captured; i++) await new Promise(r => setTimeout(r, 100));
+              return captured;
+            } finally {
+              restore();
+              if (bridge.restoreReplayOpen === restore) delete bridge.restoreReplayOpen;
+            }
+            """
+            guard let value = try? await evaluate(source, arguments: ["index": index]) as? String else { return nil }
+            return URL(string: value)
+        }
+        return await withCheckedContinuation { continuation in
             let requestID = UUID()
             replayURLRequestID = requestID
             replayURLContinuation = continuation
             Task { @MainActor in
-                let clicked = try? await webView.callAsyncJavaScript("return (await window.studyXuechengCrawler?.open(index)) === true;", arguments: ["index": index], in: nil, contentWorld: .page) as? Bool
+                let clicked = try? await evaluate("return (await window.studyXuechengCrawler?.open(index)) === true;", arguments: ["index": index]) as? Bool
                 if clicked != true, replayURLRequestID == requestID { finishReplayURL(nil); return }
                 try? await Task.sleep(for: .seconds(8))
                 if replayURLRequestID == requestID { finishReplayURL(nil) }
@@ -385,6 +504,7 @@ final class WebLessonReader: NSObject, WKScriptMessageHandler, WKNavigationDeleg
     private func readReplayMetadata(at url: URL) async -> XuechengReplayMetadata? {
         guard url.scheme == "https", Self.isXuechengHost(url.host),
               url.path == "/backWindow" else { return nil }
+        if let browser { return await browserReplayMetadata(browser, url: url) }
         let configuration = WKWebViewConfiguration()
         configuration.websiteDataStore = webView.configuration.websiteDataStore
         configuration.userContentController.add(self, name: "replayMetadata")
@@ -403,6 +523,7 @@ final class WebLessonReader: NSObject, WKScriptMessageHandler, WKNavigationDeleg
         }
     }
     func tick(autoRefresh: Bool) {
+        if browser != nil { tickBrowser(autoRefresh: autoRefresh); return }
         guard !stopped, !busy, let url = webView.url,
               WebLessonTiming.isSameWebsite(current: url, target: targetURL),
               (isGenericSite || WebLessonTiming.isOnTargetPage(current: url, target: targetURL)) else { return }
@@ -419,7 +540,7 @@ final class WebLessonReader: NSObject, WKScriptMessageHandler, WKNavigationDeleg
     private func scanIfChanged() {
         Task { @MainActor in
             guard !stopped, !busy else { return }
-            let value = try? await webView.callAsyncJavaScript("return String(window.studyGenericCrawler ? window.studyGenericCrawler.revision() : -1);", arguments: [:], in: nil, contentWorld: .page)
+            let value = try? await evaluate("return String(window.studyGenericCrawler ? window.studyGenericCrawler.revision() : -1);", arguments: [:])
             guard !stopped, !busy, let text = value as? String, let revision = Int(text),
                   revision > 0, revision != capturedRevision else { return }
             capturedRevision = revision
@@ -461,12 +582,6 @@ final class WebLessonReader: NSObject, WKScriptMessageHandler, WKNavigationDeleg
     }
 }
 
-private struct LessonWebsite: NSViewRepresentable {
-    let reader: WebLessonReader
-    func makeNSView(context: Context) -> WKWebView { reader.webView }
-    func updateNSView(_ view: WKWebView, context: Context) {}
-}
-
 /// The import sheet follows the display it opens on instead of a fixed 1120×820 frame.
 private enum WebImportLayout {
     static var size: CGSize {
@@ -482,7 +597,6 @@ struct WebCourseImportSheet: View {
     @State private var reader = WebLessonReader()
     @State private var selected = Set<String>()
     @State private var autoRefresh = true
-    @State private var showWebsite = true
     @State private var lastOffered = Set<String>()
     @State private var deadline = Calendar.current.date(byAdding: .day, value: 90, to: Date())!
     @State private var message = ""
@@ -494,7 +608,7 @@ struct WebCourseImportSheet: View {
             HStack {
                 VStack(alignment: .leading, spacing: 3) {
                     Text("从网站导入课程").font(.title2.bold())
-                    Text("登录、读取课节、核对编排，再保存计划").font(.caption).foregroundStyle(.secondary)
+                    Text("在默认浏览器登录，在这里核对课节并保存计划").font(.caption).foregroundStyle(.secondary)
                 }
                 Spacer()
                 Button("关闭") { dismiss() }
@@ -504,22 +618,19 @@ struct WebCourseImportSheet: View {
                 TextField("网站地址（仅 HTTPS）", text: $reader.address)
                     .textFieldStyle(.roundedBorder)
                     .onSubmit { reader.loadAddress() }
-                Button("打开") { reader.loadAddress() }
+                Button("在默认浏览器打开") { reader.loadAddress() }
                 Button("恢复默认地址") { reader.useDefaultAddress() }
                     .disabled(reader.address == WebLessonReader.defaultAddress)
             }
             HStack {
                 if reader.busy { ProgressView().controlSize(.small) }
-                Text(reader.status).font(.callout).foregroundStyle(.secondary).lineLimit(2)
+                Text(reader.status).font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                 Spacer()
-                Button(reader.isGenericSite ? "重新识别课程" : "重新抓取全部课程") { reader.refresh() }.disabled(reader.busy)
+                Button("读取浏览器当前课程") { reader.refresh() }.disabled(reader.busy)
                 Toggle("每 5 分钟刷新", isOn: $autoRefresh).toggleStyle(.checkbox)
             }
-            HStack(alignment: .top, spacing: 14) {
-                courseSidebar.frame(width: min(415, layout.width * 0.35))
-                websitePane
-            }
-            .frame(maxHeight: .infinity)
+            browserInstructions
+            courseSidebar.frame(maxWidth: .infinity, maxHeight: .infinity)
             HStack {
                 Text(message).foregroundStyle(.red).font(.caption)
                 Spacer()
@@ -567,34 +678,28 @@ struct WebCourseImportSheet: View {
                     .font(.caption2).foregroundStyle(.tertiary)
             } else {
                 ContentUnavailableView("等待课程数据", systemImage: "square.stack.3d.up",
-                    description: Text("在右侧登录并打开课程目录。直播回放课程还需进入回放读取时长。"))
+                    description: Text("在默认浏览器登录，选中课程标签页，再点击上方“读取浏览器当前课程”。"))
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }
         .padding(14)
         .background(.quaternary.opacity(0.35), in: RoundedRectangle(cornerRadius: 14))
     }
-    private var websitePane: some View {
-        VStack(alignment: .leading, spacing: 9) {
-            HStack {
-                Label("网站页面", systemImage: "globe").font(.headline)
-                Spacer()
-                Toggle("显示网页", isOn: $showWebsite).toggleStyle(.checkbox)
+    private var browserInstructions: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Label("网页在\(reader.browserName)中打开", systemImage: "arrow.up.forward.app").font(.headline)
+            Text("1. 在浏览器登录并选中课程页面。  2. 回到这里读取课程。  3. 核对结果后导入。")
+            Text("首次读取请允许系统自动化授权，并在浏览器开发者设置中开启“允许来自 Apple 事件的 JavaScript”。支持 Safari 和提供该接口的 Chrome 系浏览器。")
+            if reader.isGenericSite {
+                Text("通用网站请先读取一次以开始识别，再在同一标签页进入课程目录。若没有结果，请在网站内返回列表后重新点开课程；完整刷新网页后需重新连接。已识别课程会累加。")
             }
-            Text(reader.isXuechengSite
-                 ? "打开一门课程后会自动逐层读取章节和回放；请等待读取完成后再切换课程。"
-                 : reader.isGenericSite
-                    ? "登录后进入“我的课程”，逐门打开课程目录；识别结果会累加到左侧。"
-                    : "登录后自动遍历课程包、科目与课节。网站进度可能延迟约 5 分钟。")
-                .font(.caption).foregroundStyle(.secondary)
-            // Keep the WebView mounted so login and captured responses survive a collapse.
-            LessonWebsite(reader: reader)
-                .frame(minHeight: showWebsite ? 300 : 1, maxHeight: showWebsite ? .infinity : 1)
-                .opacity(showWebsite ? 1 : 0)
-                .clipShape(RoundedRectangle(cornerRadius: 12))
-                .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(.quaternary))
+            if reader.isXuechengSite {
+                Text("学丞直播回放会临时打开浏览器标签页读取时长，完成后自动关闭；请等待读取完成。")
+            }
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .font(.caption).foregroundStyle(.secondary)
+        .padding(12).frame(maxWidth: .infinity, alignment: .leading)
+        .background(.quaternary.opacity(0.25), in: RoundedRectangle(cornerRadius: 12))
     }
     private func courseCard(_ snapshot: WebCourseSnapshot) -> some View {
         let existing = store.state.courses.first { $0.webCourse?.packageID == snapshot.packageID }
