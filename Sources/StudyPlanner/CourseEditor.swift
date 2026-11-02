@@ -13,6 +13,8 @@ struct CourseEditor: View {
     @State private var backHistory: [CourseEditorPage] = []
     @State private var forwardHistory: [CourseEditorPage] = []
     @State private var saving = false
+    @State private var importSheet: CourseContentImport?
+    @State private var appeared = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     private var existing: Bool { store.course(course.id) != nil }
     private var logged: Int { previewState.completions.filter { $0.courseID == course.id }.reduce(0) { $0 + $1.minutes } }
@@ -69,24 +71,33 @@ struct CourseEditor: View {
         VStack(spacing: 0) {
             navigationBar
             Divider()
-            pageHeading
-            ZStack {
-                // Keep editable forms alive across navigation, including incomplete field input.
-                ForEach(CourseEditorPage.editingPages) { destination in
-                    Form { fields(for: destination) }
-                        .formStyle(.grouped)
-                        .opacity(page == destination ? 1 : 0)
-                        .allowsHitTesting(page == destination)
-                        .disabled(page != destination)
-                        .accessibilityHidden(page != destination)
+            VStack(spacing: 0) {
+                pageHeading
+                ZStack {
+                    // Keep editable forms alive across navigation, including incomplete field input.
+                    ForEach(CourseEditorPage.editingPages) { destination in
+                        Form { fields(for: destination) }
+                            .formStyle(.grouped)
+                            .opacity(page == destination ? 1 : 0)
+                            .offset(x: pageOffset(for: destination))
+                            .allowsHitTesting(page == destination)
+                            .disabled(page != destination)
+                            .accessibilityHidden(page != destination)
+                    }
+                    if page == .overview {
+                        overview.transition(pageTransition(offset: -18))
+                    } else if page == .review {
+                        review.transition(pageTransition(offset: 18))
+                    }
                 }
-                if page == .overview {
-                    overview
-                } else if page == .review {
-                    review
-                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .clipped()
+                // Animate only the content, keeping the navigation and footer steady.
+                .animation(pageAnimation, value: page)
             }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .opacity(appeared || reduceMotion ? 1 : 0)
+            .offset(y: appeared || reduceMotion ? 0 : 8)
+            .animation(reduceMotion ? nil : .easeOut(duration: 0.24), value: appeared)
             if !message.isEmpty {
                 Text(message).font(.caption).foregroundStyle(.red)
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -99,7 +110,20 @@ struct CourseEditor: View {
         .background(Color(nsColor: .windowBackgroundColor))
         .disabled(saving)
         .interactiveDismissDisabled(saving)
-        .onAppear { supervisedApplication = store.playbackSupervisor.application(for: course.id) }
+        .onAppear {
+            supervisedApplication = store.playbackSupervisor.application(for: course.id)
+            appeared = true
+        }
+        .sheet(item: $importSheet) { source in
+            Group {
+                switch source {
+                case .website: WebCourseImportSheet(store: store)
+                case .netdisk: NetdiskImportSheet(store: store)
+                }
+            }
+            .disabled(store.orderSaveBusy)
+            .interactiveDismissDisabled(store.orderSaveBusy)
+        }
         .onChange(of: course.type) { _, newType in
             if newType == .lessonBasedRecorded && course.webCourse == nil && course.manualLessons == nil {
                 setManualLessons([])
@@ -215,6 +239,7 @@ struct CourseEditor: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .focusEffectDisabled()
         .accessibilityLabel(destination.title)
         .accessibilityValue(detail)
         .accessibilityHint("打开设置，保留当前输入")
@@ -273,6 +298,14 @@ struct CourseEditor: View {
     }
 
     @ViewBuilder private var workloadFields: some View {
+        Section("导入学习内容") {
+            Button("从网站导入课程", systemImage: "globe") { openImport(.website) }
+                .focusEffectDisabled()
+            Button("从夸克网盘导入", systemImage: "externaldrive") { openImport(.netdisk) }
+                .focusEffectDisabled()
+            Text("导入窗口可单独添加或更新来源课程；关闭后会保留这里尚未保存的填写内容。")
+                .font(.caption).foregroundStyle(.secondary)
+        }
         if isManualLessonCourse {
             Section("逐节录入") {
                 ForEach(Array((course.manualLessons ?? []).enumerated()), id: \.element.id) { index, lesson in
@@ -410,26 +443,44 @@ struct CourseEditor: View {
         NSApp.keyWindow?.makeFirstResponder(nil)
     }
 
+    private func openImport(_ source: CourseContentImport) {
+        finishEditing()
+        importSheet = source
+    }
+
+    private var pageAnimation: Animation? {
+        reduceMotion ? nil : .timingCurve(0.22, 0.8, 0.25, 1, duration: 0.24)
+    }
+
+    private func pageOffset(for destination: CourseEditorPage) -> CGFloat {
+        guard !reduceMotion, page != destination else { return 0 }
+        return destination.rawValue < page.rawValue ? -18 : 18
+    }
+
+    private func pageTransition(offset: CGFloat) -> AnyTransition {
+        reduceMotion ? .identity : .opacity.combined(with: .offset(x: offset))
+    }
+
     private func navigate(to destination: CourseEditorPage) {
         guard page != destination else { return }
         finishEditing()
         backHistory.append(page)
         forwardHistory.removeAll()
-        withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.16)) { page = destination }
+        page = destination
     }
 
     private func goBack() {
         guard let destination = backHistory.popLast() else { return }
         finishEditing()
         forwardHistory.append(page)
-        withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.16)) { page = destination }
+        page = destination
     }
 
     private func goForward() {
         guard let destination = forwardHistory.popLast() else { return }
         finishEditing()
         backHistory.append(page)
-        withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.16)) { page = destination }
+        page = destination
     }
 
     private func save() {
@@ -452,6 +503,11 @@ struct CourseEditor: View {
             } else { message = store.errorMessage ?? "保存失败" }
         }
     }
+}
+
+private enum CourseContentImport: String, Identifiable {
+    case website, netdisk
+    var id: Self { self }
 }
 
 private enum CourseEditorPage: Int, Identifiable {

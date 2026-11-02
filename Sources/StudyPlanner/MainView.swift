@@ -10,7 +10,7 @@ enum Page: String, CaseIterable {
 }
 enum EditorSheet: Identifiable {
     case scheduleSearch
-    case course(Course), lessonOrder(Course), fixed(FixedEvent), completion(ScheduledTask), review, risks, webImport, netdiskImport, mergeCourses
+    case course(Course), lessonOrder(Course), fixed(FixedEvent), completion(ScheduledTask), review, risks, mergeCourses
 
     var id: String {
         switch self {
@@ -21,8 +21,6 @@ enum EditorSheet: Identifiable {
         case .completion(let task): "task\(task.id)"
         case .review: "review"
         case .risks: "risks"
-        case .webImport: "webImport"
-        case .netdiskImport: "netdiskImport"
         case .mergeCourses: "mergeCourses"
         }
     }
@@ -116,8 +114,6 @@ struct MainView: View {
                         sheet = nil
                     }
                 case .mergeCourses: CourseMergeEditor(store: store)
-                case .webImport: WebCourseImportSheet(store: store)
-                case .netdiskImport: NetdiskImportSheet(store: store)
                 case .course(let course): CourseEditor(store: store, course: course)
                 case .lessonOrder(let course): LessonOrderEditor(store: store, course: course)
                 case .fixed(let event): FixedEventEditor(store: store, event: event)
@@ -367,22 +363,6 @@ struct MainView: View {
                     ) {
                         showingAddMenu = false
                         newCourse()
-                    }
-
-                    AddMenuActionRow(
-                        title: "从网站导入课程",
-                        systemImage: "globe"
-                    ) {
-                        showingAddMenu = false
-                        sheet = .webImport
-                    }
-
-                    AddMenuActionRow(
-                        title: "从夸克网盘导入课程",
-                        systemImage: "externaldrive"
-                    ) {
-                        showingAddMenu = false
-                        sheet = .netdiskImport
                     }
 
                     AddMenuActionRow(
@@ -662,8 +642,6 @@ struct MainView: View {
                 HStack {
                     Button("合并课程", systemImage: "arrow.triangle.merge") { sheet = .mergeCourses }
                         .disabled(store.courses.count < 2)
-                    Button("从网站抓取全部课程", systemImage: "globe") { sheet = .webImport }
-                    Button("从夸克网盘导入", systemImage: "externaldrive") { sheet = .netdiskImport }
                     Button("添加课程", systemImage: "plus") { newCourse() }
                         .buttonStyle(SoftButtonStyle(prominent: true))
                 }
