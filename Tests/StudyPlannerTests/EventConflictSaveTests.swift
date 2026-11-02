@@ -14,6 +14,30 @@ final class EventConflictSaveTests: XCTestCase {
         }
     }
 
+    @MainActor func testDeleteCompletedEventPersistsAndFailedDeletionKeepsState() async throws {
+        let day = Calendar.current.startOfDay(for: Date())
+        let event = FixedEvent(title: "已结束的课表", startMinute: 480, endMinute: 600,
+                               startDate: day.addingTimeInterval(-7 * 86400),
+                               endDate: day.addingTimeInterval(-86400), weekdays: Set(1...7))
+        var original = PlannerState()
+        original.fixedEvents = [event]
+        let plan = original.replan(now: Date())
+        let repo = Repository()
+        let store = PlannerStore(state: original, repository: repo, result: plan)
+        repo.fails = true
+        let failed = await store.deleteEvent(event)
+        XCTAssertFalse(failed)
+        XCTAssertEqual(store.state, original)
+        XCTAssertNotNil(store.errorMessage)
+        XCTAssertNil(repo.saved)
+        repo.fails = false
+        let deleted = await store.deleteEvent(event)
+        XCTAssertTrue(deleted)
+        XCTAssertTrue(store.state.fixedEvents.isEmpty)
+        XCTAssertEqual(repo.saved, store.state)
+        XCTAssertNil(store.errorMessage)
+    }
+
     @MainActor func testLocalSkipPersistsAndFailedWriteLeavesStateAndPlanUnchanged() async throws {
         let cal = Calendar.current
         let day = cal.date(byAdding: .day, value: 1, to: cal.startOfDay(for: Date()))!

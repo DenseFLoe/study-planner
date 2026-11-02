@@ -244,8 +244,9 @@ final class PlannerStore {
             return $0.replan(now: now)
         }
     }
-    func deleteEvent(_ event: FixedEvent) async {
-        await change { $0.removeFixedEvent(id: event.id, now: Date()) }
+    @discardableResult
+    func deleteEvent(_ event: FixedEvent) async -> Bool {
+        await change { $0.removeFixedEvent(id: event.id) }
     }
     func setEventSkipped(_ event: FixedEvent, on day: Date, skipped: Bool) async {
         await change { try $0.setFixedEventSkipped(id: event.id, on: day, skipped: skipped, now: Date()) }

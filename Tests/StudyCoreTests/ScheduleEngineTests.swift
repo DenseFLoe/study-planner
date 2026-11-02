@@ -708,7 +708,7 @@ final class ScheduleEngineTests: XCTestCase {
         XCTAssertEqual(r.risks.first?.availableMinutes,600)
         XCTAssertEqual(r.risks.first?.capacityDeficit,600)
     }
-    func testFixedRuleEditsAndDeletionPreserveStartedOccurrence() throws {
+    func testFixedRuleEditPreservesStartedOccurrenceButExplicitDeletionRemovesIt() throws {
         var s = state()
         let e = FixedEvent(title:"学校",startMinute:480,endMinute:600,startDate:date(7),endDate:date(28),weekdays:[2])
         s.fixedEvents = [e]
@@ -717,8 +717,10 @@ final class ScheduleEngineTests: XCTestCase {
         XCTAssertEqual(s.fixedEvents.count,2)
         XCTAssertEqual(s.fixedEvents.first { $0.occurs(on:date(14),calendar:cal) }?.startMinute,480)
         XCTAssertEqual(s.fixedEvents.first { $0.occurs(on:date(21),calendar:cal) }?.startMinute,600)
-        s.removeFixedEvent(id:e.id,now:date(14,9),calendar:cal)
-        XCTAssertTrue(s.fixedEvents.contains { $0.occurs(on:date(14),calendar:cal) && $0.startMinute == 480 })
+        s.removeFixedEvent(id:e.id)
+        XCTAssertFalse(s.fixedEvents.contains { $0.occurs(on:date(14),calendar:cal) })
+        XCTAssertEqual(s.fixedEvents.count, 1)
+        XCTAssertEqual(s.fixedEvents.first { $0.occurs(on:date(21),calendar:cal) }?.startMinute,600)
     }
     func testFixedEventReplacesActivePlanToday() throws {
         var s = state(); _ = s.replan(now:date(14,8),calendar:cal)

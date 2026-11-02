@@ -4,6 +4,35 @@ import SwiftData
 @testable import StudyPersistence
 
 final class LocalRepositoryTests: XCTestCase {
+    @MainActor func testDeletedFixedEventStaysAbsentAfterDiskReopenAndStaleSync() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let url = directory.appendingPathComponent("fixed-deletion.store")
+        let repository = try LocalRepository(url: url)
+        let day = Calendar.current.startOfDay(for: Date())
+        let event = FixedEvent(title: "删除整条课表", startMinute: 480, endMinute: 600,
+                               startDate: day.addingTimeInterval(-7 * 86400),
+                               endDate: day.addingTimeInterval(7 * 86400), weekdays: Set(1...7))
+        var baseline = PlannerState()
+        baseline.fixedEvents = [event]
+        try repository.save(baseline)
+        let staleRows = try repository.loadLedger().changes(after: 0)
+        var edited = baseline
+        edited.removeFixedEvent(id: event.id)
+        XCTAssertTrue(try repository.saveChanges(edited, from: baseline).fixedEvents.isEmpty)
+        let reopened = try LocalRepository(url: url)
+        XCTAssertTrue(try reopened.load().fixedEvents.isEmpty)
+        var ledger = try reopened.loadLedger()
+        XCTAssertEqual(ledger.records["fixedEvents/" + event.id.uuidString]?.deleted, true)
+        try ledger.merge(staleRows)
+        XCTAssertTrue(try ledger.materialize().fixedEvents.isEmpty)
+        var peer = SyncLedger()
+        try peer.merge(staleRows)
+        try peer.merge(ledger.changes(after: 0))
+        XCTAssertTrue(try peer.materialize().fixedEvents.isEmpty)
+    }
+
     @MainActor func testSavingWithoutRemoteChangesKeepsDisplayedOrder() throws {
         let repository = try LocalRepository(inMemory: true)
         let day = Date()

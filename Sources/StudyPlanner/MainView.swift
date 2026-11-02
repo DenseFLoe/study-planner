@@ -36,6 +36,7 @@ struct MainView: View {
     @State private var sheet: EditorSheet?
     @State private var showingAddMenu = false
     @State private var dismissedDeletion: UUID?
+    @State private var showingCompletedFixedEvents = false
     @AppStorage("dailyStudyLoadWarningMinutes") private var dailyLoadWarningMinutes = 480
     @Namespace private var navigationSelection
     @Environment(\.scenePhase) private var scenePhase
@@ -702,10 +703,22 @@ struct MainView: View {
     }
 
     private var fixedList: some View {
-        ScrollView {
+        TimelineView(.periodic(from: .now, by: 30)) { context in
+            fixedList(at: context.date)
+        }
+    }
+
+    private func fixedList(at now: Date) -> some View {
+        let events = store.state.fixedEvents.sorted {
+            $0.startDate == $1.startDate ? $0.id.uuidString < $1.id.uuidString : $0.startDate < $1.startDate
+        }
+        let completed = events.filter { $0.hasEnded(at: now) }
+        let completedIDs = Set(completed.map(\.id))
+        let active = events.filter { !completedIDs.contains($0.id) }
+        return ScrollView {
             VStack(alignment: .leading, spacing: 16) {
                 HStack {
-                    PlannerSectionTitle(title: "周期课表与固定事项", detail: "\(store.state.fixedEvents.count) 项")
+                    PlannerSectionTitle(title: "周期课表与固定事项", detail: "未完成 \(active.count) 项 · 已完成 \(completed.count) 项")
                     Button("添加固定事项", systemImage: "plus") { newFixed() }
                         .buttonStyle(SoftButtonStyle(prominent: true))
                 }
@@ -714,13 +727,32 @@ struct MainView: View {
                     sheet = .fixed(event)
                 }
 
-                ForEach(store.state.fixedEvents.sorted { $0.startDate < $1.startDate }) { event in
+                ForEach(active) { event in
                     FixedEventListRow(
                         event: event,
-                        edit: event.endDate < Calendar.current.startOfDay(for: Date())
-                            ? nil
-                            : { sheet = .fixed(event) }
+                        edit: { sheet = .fixed(event) },
+                        delete: { Task { await store.deleteEvent(event) } }
                     )
+                }
+
+                if !completed.isEmpty {
+                    DisclosureGroup(isExpanded: $showingCompletedFixedEvents) {
+                        VStack(spacing: 12) {
+                            ForEach(completed.reversed()) { event in
+                                FixedEventListRow(
+                                    event: event,
+                                    edit: nil,
+                                    delete: { Task { await store.deleteEvent(event) } }
+                                )
+                            }
+                        }.padding(.top, 12)
+                    } label: {
+                        Label("已完成（\(completed.count)）", systemImage: "checkmark.circle")
+                            .font(.headline)
+                    }
+                    .padding(18)
+                    .plannerSurface(radius: 18, material: .thinMaterial, shadow: false)
+                    .accessibilityIdentifier("completedFixedEvents")
                 }
 
                 if store.state.fixedEvents.isEmpty {
@@ -736,6 +768,7 @@ struct MainView: View {
             .padding(PlannerTheme.pagePadding)
         }
         .scrollIndicators(.hidden)
+        .disabled(store.orderSaveBusy)
     }
 
     private var timelineItems: [TimelineItem] {
@@ -1507,6 +1540,8 @@ private struct CourseListRow: View {
 private struct FixedEventListRow: View {
     var event: FixedEvent
     var edit: (() -> Void)?
+    var delete: () -> Void
+    @State private var deletePrompt = false
 
     var body: some View {
         HStack(spacing: 17) {
@@ -1540,11 +1575,19 @@ private struct FixedEventListRow: View {
             if let edit {
                 Button("编辑", action: edit).buttonStyle(SoftButtonStyle())
             } else {
-                Text("历史课表").font(.caption).foregroundStyle(.secondary)
+                Text("已完成").font(.caption).foregroundStyle(.secondary)
             }
+            Button("删除", systemImage: "trash", role: .destructive) { deletePrompt = true }
+                .buttonStyle(SoftButtonStyle())
+                .help("删除这条事项的全部过去和未来课表")
         }
         .padding(18)
         .plannerSurface(radius: 18, material: .thinMaterial, shadow: false)
+        .confirmationDialog("删除「\(event.title)」？", isPresented: $deletePrompt, titleVisibility: .visible) {
+            Button("删除事项", role: .destructive, action: delete)
+        } message: {
+            Text("将移除这条事项的全部过去和未来课表，并重新排程。")
+        }
     }
 }
 

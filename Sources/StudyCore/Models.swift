@@ -352,14 +352,9 @@ public struct PlannerState: Codable, Equatable, Sendable {
             } else { fixedEvents[index] = updated }
         } else { fixedEvents.append(updated) }
     }
-    public mutating func removeFixedEvent(id: UUID, now: Date, calendar: Calendar = .current) {
-        guard let index = fixedEvents.firstIndex(where: { $0.id == id }) else { return }
-        let event = fixedEvents[index], today = calendar.startOfDay(for: now)
-        let startedToday = event.occurs(on: today, calendar: calendar) && ScheduleEngine(calendar: calendar).instant(day: today, minute: event.startMinute) <= now
-        let boundary = startedToday ? calendar.date(byAdding: .day, value: 1, to: today)! : today
-        if calendar.startOfDay(for: event.startDate) < boundary {
-            fixedEvents[index].endDate = min(event.endDate, calendar.date(byAdding: .day, value: -1, to: boundary)!)
-        } else { fixedEvents.remove(at: index) }
+    /// Explicit deletion removes the entire selected rule, including its history.
+    public mutating func removeFixedEvent(id: UUID) {
+        fixedEvents.removeAll { $0.id == id }
     }
 
     /// Change only one occurrence, including an already-started occurrence today.

@@ -267,8 +267,12 @@ struct FixedEventEditor: View {
                 }.buttonStyle(.borderedProminent).keyboardShortcut(.defaultAction).disabled(validation != nil)
             }.padding(20)
         }.frame(width: 600, height: 740)
-        .confirmationDialog("移除未来的固定事项？过去的课表会保留。", isPresented: $deletePrompt) {
-            Button("移除事项", role: .destructive) { Task { await store.deleteEvent(event); dismiss() } }
+        .confirmationDialog("删除「\(event.title)」？", isPresented: $deletePrompt, titleVisibility: .visible) {
+            Button("删除事项", role: .destructive) {
+                Task { if await store.deleteEvent(event) { dismiss() } }
+            }
+        } message: {
+            Text("将移除这条事项的全部过去和未来课表，并重新排程。")
         }
         .sheet(isPresented: $conflictPrompt) {
             EventConflictReview(store: store, event: event, onSaved: { dismiss() }, conflicts: conflicts)
