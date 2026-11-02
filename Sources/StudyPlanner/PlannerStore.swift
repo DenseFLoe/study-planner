@@ -42,11 +42,13 @@ final class PlannerStore {
     private var reviewPrompted = false
     let demo: Bool
     let playbackSupervisor: PlaybackSupervisor
+    let websiteUpdater: WebsiteCourseUpdater
     init() {
         demo = CommandLine.arguments.contains("--demo") || Bundle.main.bundleIdentifier == "local.studyplanner.preview"
         backups = PlannerBackupRepository(inMemory: demo)
         compressedPlan = CompressedScheduleController(cache: CompressedScheduleRepository(inMemory: demo))
         playbackSupervisor = PlaybackSupervisor(persistent: !demo)
+        websiteUpdater = WebsiteCourseUpdater(defaults: demo ? nil : .standard)
         if !demo {
             cloudEndpoint = (try? CloudVault.load(method: CloudVault.selectedMethod))?.endpoint ?? ""
             cloudEnabled = UserDefaults.standard.bool(forKey: CloudOutbox.enabledKey)
@@ -76,6 +78,7 @@ final class PlannerStore {
         self.demo = true
         self.compressedPlan = CompressedScheduleController()
         self.playbackSupervisor = PlaybackSupervisor(persistent: false)
+        self.websiteUpdater = WebsiteCourseUpdater()
         self.isReady = true
         compressedPlan.update(state: state)
     }

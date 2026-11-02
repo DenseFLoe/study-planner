@@ -107,6 +107,50 @@ final class WebLessonReader: NSObject, WKScriptMessageHandler, WKNavigationDeleg
         webView.navigationDelegate = self
         webView.uiDelegate = self
     }
+    /// One complete read for a saved binding. No other packages are imported or updated.
+    func managedSnapshot(url: URL, packageID: String, interactive: Bool) async throws -> WebCourseSnapshot {
+        guard let browser, let site = CourseWebsite.identify(url),
+              let appURL = NSWorkspace.shared.urlForApplication(toOpen: url),
+              let bundleID = Bundle(url: appURL)?.bundleIdentifier else {
+            throw WebsiteUpdateError.message("无法找到受支持的默认浏览器。")
+        }
+        let app = SupervisedApplication(bundleID: bundleID, name: appURL.deletingPathExtension().lastPathComponent, path: appURL.path)
+        let configuration = NSWorkspace.OpenConfiguration()
+        configuration.activates = false
+        let running: NSRunningApplication
+        if let existing = NSRunningApplication.runningApplications(withBundleIdentifier: bundleID).first { running = existing }
+        else { running = try await NSWorkspace.shared.openApplication(at: appURL, configuration: configuration) }
+        do {
+            let page = try await browser.openManaged(application: app, pid: running.processIdentifier, target: url,
+                credentials: { try WebsiteCredentialVault.load(site, interactive: interactive) }, allowPermissionPrompt: interactive)
+            targetURL = page
+            try await browser.install(Self.genericScript + "\n" + Self.script + "\n" + Self.xuechengScript)
+            let snapshot: WebCourseSnapshot
+            if site == .yantu {
+                let body = "return await window.studyCourseCrawler.crawl(\(BrowserCourseSession.literal(packageID)));"
+                let data = try await browser.evaluate(body)
+                let decoder = JSONDecoder(); decoder.dateDecodingStrategy = .secondsSince1970
+                snapshot = try decoder.decode(WebCourseSnapshot.self, from: data)
+            } else {
+                busy = true
+                await readGeneric(generation: generation, page: page, forceCatalog: true)
+                guard let result, result.issues.isEmpty,
+                      let found = result.snapshots.first(where: { $0.packageID == packageID }) else {
+                    throw WebsiteUpdateError.message("未取得完整的学丞课程，请在更新窗口检查登录和课程目录后重试。")
+                }
+                snapshot = found
+            }
+            guard snapshot.packageID == packageID, snapshot.importProblem == nil else {
+                throw WebsiteUpdateError.message("网站返回的课程不匹配或课节不完整，保留原课程，请检查后重试。")
+            }
+            await browser.stop()
+            return snapshot
+        } catch {
+            // Keep the dedicated page available for a captcha or manual login; never loop login attempts.
+            await browser.stop(closeManaged: error is CancellationError || Task.isCancelled)
+            throw error
+        }
+    }
     func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
         if message.name == "replayMetadata" {
             guard message.webView === replayWebView,

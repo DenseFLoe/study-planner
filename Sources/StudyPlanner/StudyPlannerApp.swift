@@ -14,16 +14,25 @@ import UserNotifications
     func connect(_ store: PlannerStore) {
         self.store = store
         store.playbackSupervisor.start(store: store)
+        store.websiteUpdater.start(store: store)
     }
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        store?.websiteUpdater.stop()
         guard let store, store.orderSaveBusy else { return .terminateNow }
-        Task { sender.reply(toApplicationShouldTerminate: await store.waitForOrderSave()) }
+        Task {
+            let saved = await store.waitForOrderSave()
+            if !saved { store.websiteUpdater.start(store: store) }
+            sender.reply(toApplicationShouldTerminate: saved)
+        }
         return .terminateLater
     }
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
-        store?.playbackSupervisor.hasBindings != true
+        store?.playbackSupervisor.hasBindings != true && store?.websiteUpdater.hasEnabledSources != true
     }
-    func applicationWillTerminate(_ notification: Notification) { store?.playbackSupervisor.stop() }
+    func applicationWillTerminate(_ notification: Notification) {
+        store?.websiteUpdater.stop()
+        store?.playbackSupervisor.stop()
+    }
     nonisolated func userNotificationCenter(_ center: UNUserNotificationCenter,
         willPresent notification: UNNotification) async -> UNNotificationPresentationOptions { [.banner, .list, .sound] }
 }
@@ -50,7 +59,10 @@ struct StudyPlannerApp: App {
                 NSApp.activate(ignoringOtherApps: true)
             }
             Divider()
-            Text("绑定课程后，关闭窗口仍在后台监督")
+            if store.websiteUpdater.hasEnabledSources {
+                Text("网站课程自动更新已开启，关闭窗口仍会检查")
+            }
+            Text("绑定监督或开启自动更新后，关闭窗口继续运行")
             Button("退出学习日程") { NSApp.terminate(nil) }.keyboardShortcut("q")
         }
     }

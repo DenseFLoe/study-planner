@@ -111,9 +111,11 @@ struct CourseEditor: View {
         .disabled(saving)
         .interactiveDismissDisabled(saving)
         .onAppear {
+            store.websiteUpdater.beginEditing(course.id)
             supervisedApplication = store.playbackSupervisor.application(for: course.id)
             appeared = true
         }
+        .onDisappear { store.websiteUpdater.endEditing(course.id) }
         .sheet(item: $importSheet) { source in
             Group {
                 switch source {

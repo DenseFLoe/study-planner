@@ -10,11 +10,13 @@ enum Page: String, CaseIterable {
 }
 enum EditorSheet: Identifiable {
     case scheduleSearch
+    case websiteSource(UUID)
     case course(Course), lessonOrder(Course), fixed(FixedEvent), completion(ScheduledTask), review, risks, mergeCourses
 
     var id: String {
         switch self {
         case .scheduleSearch: "scheduleSearch"
+        case .websiteSource(let id): "websiteSource\(id)"
         case .course(let course): "course\(course.id)"
         case .lessonOrder(let course): "lessonOrder\(course.id)"
         case .fixed(let event): "fixed\(event.id)"
@@ -106,6 +108,7 @@ struct MainView: View {
         .sheet(item: $sheet, onDismiss: { store.showDailyReview = false }) { selection in
             Group {
                 switch selection {
+                case .websiteSource(let id): WebsiteCourseSourceSheet(store: store, courseID: id)
                 case .scheduleSearch:
                     ScheduleSearchView(tasks: store.state.tasks, courses: store.state.courses) { date in
                         selectedDay = Calendar.current.startOfDay(for: date)
@@ -660,7 +663,10 @@ struct MainView: View {
                         setDailyWeight: { weight in Task { await store.setDailyWeight(weight, for: course.id) } },
                         edit: { sheet = .course(course) },
                         reorder: store.state.lessonWorkItems(for: course).count > 1
-                            ? { sheet = .lessonOrder(course) } : nil
+                            ? { sheet = .lessonOrder(course) } : nil,
+                        websiteSource: CourseWebsite.identify(course.webCourse) != nil && course.mergedSources == nil
+                            ? { sheet = .websiteSource(course.id) } : nil,
+                        websiteStatus: store.websiteUpdater.sources[course.id].map { $0.needsAttention ? "网站更新待处理" : ($0.enabled ? "网站自动更新已开启" : "") }
                     )
                 }
 
@@ -1459,6 +1465,8 @@ private struct CourseListRow: View {
     var setDailyWeight: (Double) -> Void
     var edit: () -> Void
     var reorder: (() -> Void)?
+    var websiteSource: (() -> Void)?
+    var websiteStatus: String?
     private var progress: Double { min(1, Double(completed) / Double(max(1, course.totalMinutes))) }
 
     var body: some View {
@@ -1506,6 +1514,10 @@ private struct CourseListRow: View {
             }
 
             VStack(spacing: 6) {
+                if let websiteSource { Button("网站来源与更新", action: websiteSource).buttonStyle(SoftButtonStyle()) }
+                if let websiteStatus, !websiteStatus.isEmpty {
+                    Text(websiteStatus).font(.caption2).foregroundStyle(.secondary)
+                }
                 if let reorder { Button("调整课节顺序", action: reorder).buttonStyle(SoftButtonStyle()) }
                 Button("编辑", action: edit).buttonStyle(SoftButtonStyle())
             }

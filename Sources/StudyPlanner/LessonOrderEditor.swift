@@ -145,6 +145,8 @@ struct LessonOrderEditor: View {
         }
         .padding(22)
         .frame(width: 940, height: 690)
+        .onAppear { store.websiteUpdater.beginEditing(course.id) }
+        .onDisappear { store.websiteUpdater.endEditing(course.id) }
     }
 
     private func lessonRow(_ lesson: LessonWorkItem, number: Int) -> some View {
