@@ -225,6 +225,33 @@ public final class CloudServerTests {
             check(before.equals(SyncLedger.canonical(server.loadLedger().materialize())),"invalid manual lesson container changed cloud state");
         }
     }
+    static void fixedEventWindowRegression(CloudSyncServer server,String token)throws Exception{
+        long revision=server.revision;String before=SyncLedger.canonical(server.loadLedger().materialize());
+        JSONObject base=new JSONObject().put("id",Planner.id()).put("title","Synthetic fixed window")
+            .put("startMinute",480).put("endMinute",600).put("startDate",Planner.now()).put("endDate",Planner.now()+86400)
+            .put("weekdays",new JSONArray()).put("excludedDates",new JSONArray()).put("color","blue").put("notes","");
+        List<JSONObject> samples=new ArrayList<>();
+        for(String field:new String[]{"startMinute","endMinute"}){
+            int ordinary=base.getInt(field);
+            for(Object value:new Object[]{4294967296L+ordinary,ordinary+0.5,String.valueOf(ordinary),true,JSONObject.NULL,null}){
+                JSONObject event=CourseTools.copy(base);if(value==null)event.remove(field);else event.put(field,value);samples.add(event);
+            }
+        }
+        for(Object value:new Object[]{4294967356L,60.5,"60",true,0,-1,121,Integer.MAX_VALUE})samples.add(CourseTools.copy(base).put("floatingDurationMinutes",value));
+        for(int[] bounds:new int[][]{{-1,60},{0,1441},{60,60},{60,0},{Integer.MIN_VALUE,Integer.MAX_VALUE}}){
+            samples.add(CourseTools.copy(base).put("startMinute",bounds[0]).put("endMinute",bounds[1]));
+        }
+        samples.add(CourseTools.copy(base).put("startMinute",Integer.MIN_VALUE).put("endMinute",Integer.MAX_VALUE).put("floatingDurationMinutes",60));
+        for(JSONObject event:samples){
+            SyncLedger invalid=copy(server.loadLedger());JSONObject state=invalid.materialize();state.getJSONArray("fixedEvents").put(CourseTools.copy(base));invalid.capture(state);
+            JSONObject row=invalid.records().getJSONObject("fixedEvents/"+base.getString("id"));
+            row.put("payload",Base64.getEncoder().encodeToString(event.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8)))
+                .put("version",row.getLong("version")+1).put("modifiedAt",row.optLong("modifiedAt")+1);
+            request(server,token,"/cloud/snapshot",packed(invalid),400);
+            check(server.revision==revision,"invalid fixed-event window committed");
+            check(before.equals(SyncLedger.canonical(server.loadLedger().materialize())),"invalid fixed-event window changed cloud state");
+        }
+    }
     static void taskNumberRegression(CloudSyncServer server,String token)throws Exception{
         long revision=server.revision;String before=SyncLedger.canonical(server.loadLedger().materialize());
         for(String field:new String[]{"durationMinutes","completedMinutes"})for(String kind:new String[]{"live","draftTombstone","confirmedTombstone"}){
@@ -310,6 +337,7 @@ public final class CloudServerTests {
             completionTotalRegression(server,token);
             courseNumberRegression(server,token);
             manualLessonNumberRegression(server,token);
+            fixedEventWindowRegression(server,token);
             taskNumberRegression(server,token);
             legacyConfirmationRegression(server,token);
             malformedTombstoneWireRegression(server,token);

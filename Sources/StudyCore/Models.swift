@@ -91,6 +91,12 @@ public struct FixedEvent: Identifiable, Codable, Equatable, Sendable {
     public var isFloating: Bool { floatingDurationMinutes != nil }
     public var occupiedMinutes: Int { floatingDurationMinutes ?? (endMinute - startMinute) }
     public var validDuration: Bool { occupiedMinutes > 0 && occupiedMinutes <= endMinute - startMinute }
+    var hasValidTimeWindow: Bool {
+        // Check day bounds before subtracting potentially untrusted endpoints.
+        guard startMinute >= 0, endMinute <= 1440, startMinute < endMinute else { return false }
+        guard let duration = floatingDurationMinutes else { return true }
+        return duration > 0 && duration <= endMinute - startMinute
+    }
     public var color = "orange"
     public var notes = ""
     private enum CodingKeys: String, CodingKey {

@@ -93,7 +93,8 @@ public struct SyncLedger: Codable, Sendable {
             archived.contains(record.courseID) || (taskCourses[record.taskID].map { $0 == record.courseID } ?? true)
         }) else { throw SyncFailure.invalidData }
         state.removeArchivedCourses()
-        guard state.tasks.allSatisfy(\.hasValidPlanningInterval) else { throw SyncFailure.invalidData }
+        guard state.tasks.allSatisfy(\.hasValidPlanningInterval),
+              state.fixedEvents.allSatisfy(\.hasValidTimeWindow) else { throw SyncFailure.invalidData }
         // Canonical IDs must not silently collapse conflicting progress records.
         guard Set(state.completions.map(\.taskID)).count == state.completions.count else {
             throw SyncFailure.invalidData
@@ -157,7 +158,7 @@ public struct SyncLedger: Codable, Sendable {
         for row in records.values.sorted(by: { $0.key < $1.key }) where !row.deleted {
             switch row.kind {
             case "courses": let v = try decoder.decode(Course.self, from: row.payload); guard v.id.uuidString == row.id else { throw SyncFailure.invalidData }; state.courses.append(v)
-            case "fixedEvents": let v = try decoder.decode(FixedEvent.self, from: row.payload); guard v.id.uuidString == row.id else { throw SyncFailure.invalidData }; state.fixedEvents.append(v)
+            case "fixedEvents": let v = try decoder.decode(FixedEvent.self, from: row.payload); guard v.id.uuidString == row.id, v.hasValidTimeWindow else { throw SyncFailure.invalidData }; state.fixedEvents.append(v)
             case "tasks": let v = try decoder.decode(ScheduledTask.self, from: row.payload); guard v.id.uuidString == row.id else { throw SyncFailure.invalidData }; state.tasks.append(v)
             case "completions": let v = try decoder.decode(CompletionRecord.self, from: row.payload); guard v.id.uuidString == row.id else { throw SyncFailure.invalidData }; state.completions.append(v)
             case "settings": state.settings = try decoder.decode(AppSettings.self, from: row.payload)
