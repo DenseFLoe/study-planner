@@ -2,6 +2,48 @@ import XCTest
 @testable import StudyCore
 
 final class CourseMergingTests: XCTestCase {
+    private func arithmeticFixture(totals: [Int], baselines: [Int]) throws -> PlannerState {
+        let now = Date(timeIntervalSinceReferenceDate: 800_000_000)
+        var state = PlannerState()
+        state.courses = totals.enumerated().map { index, total in
+            var course = Course(name: "Course \(index)", totalMinutes: total, startDate: now, deadline: now)
+            course.initialCompletedMinutes = baselines[index]
+            return course
+        }
+        let task = ScheduledTask(courseID: state.courses.last!.id, start: now, durationMinutes: 60)
+        state.tasks = [task]
+        try state.confirm(taskID: task.id, actualMinutes: 20, now: now)
+        return state
+    }
+
+    func testMergeRejectsArithmeticOverflowBeforeChangingAnyRecords() throws {
+        for (totals, baselines) in [([Int.max, Int.max, 122], [0, 0, 0]),
+                                    ([60, 60], [Int.max, 1]), ([60, 60], [Int.min, -1])] {
+            var state = try arithmeticFixture(totals: totals, baselines: baselines)
+            let before = state
+            XCTAssertThrowsError(try state.mergeCourses(ids: Set(state.courses.map(\.id)), name: "Merged")) {
+                XCTAssertTrue($0 is WebCourseImportError)
+            }
+            XCTAssertEqual(state, before)
+        }
+    }
+
+    func testMergeKeepsExistingTotalLimitAndProgressAtBoundary() throws {
+        var state = try arithmeticFixture(totals: [300_000, 300_000], baselines: [10, 20])
+        let taskID = state.tasks[0].id
+        let merged = try state.mergeCourses(ids: Set(state.courses.map(\.id)), name: "At limit")
+        XCTAssertEqual(merged.totalMinutes, 600_000)
+        XCTAssertEqual(merged.initialCompletedMinutes, 30)
+        XCTAssertEqual(state.completedMinutes(for: merged), 50)
+        XCTAssertEqual(state.tasks[0].id, taskID)
+        XCTAssertEqual(state.tasks[0].courseID, merged.id)
+        XCTAssertEqual(state.completions[0].courseID, merged.id)
+        state = try arithmeticFixture(totals: [300_000, 300_001], baselines: [0, 0])
+        let before = state
+        XCTAssertThrowsError(try state.mergeCourses(ids: Set(state.courses.map(\.id)), name: "Over limit"))
+        XCTAssertEqual(state, before)
+    }
+
     func testUndoMergedWebsiteCompletionKeepsVerifiedWebsiteProgress() throws {
         for nested in [false, true] {
             let now = Date()
