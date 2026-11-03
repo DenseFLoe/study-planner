@@ -101,6 +101,27 @@ public final class CloudServerTests {
         }
         check(before.equals(SyncLedger.canonical(server.loadLedger().materialize())),"malformed wire changed cloud state");
     }
+    static void mergedHistoryRestRegression(Path parent)throws Exception{
+        double now=Planner.now();JSONObject state=SyncScheduleIntegrityTests.confirmedHistoryAndDraft(now,5,60);
+        String completion=SyncLedger.canonical(state.getJSONArray("completions").getJSONObject(0));
+        SyncLedger ledger=new SyncLedger();ledger.capture(state);
+        Path archive=Files.createTempFile(parent,"rest-fixture-",".gz");
+        try{
+            Files.write(archive,packed(ledger));
+            try(DiskSnapshot disk=new DiskSnapshot(parent)){
+                disk.read(archive);
+                // Inputs are unchanged: only the merged task/history rest boundary needs repair.
+                disk.normalize(ledger.value.getString("device"),state);
+                disk.write(archive,CloudSnapshot.header(ledger));
+            }
+            JSONObject normalized;try(InputStream in=Files.newInputStream(archive)){normalized=CloudSnapshot.read(in).ledger.materialize();}
+            int pending=0;for(JSONObject task:Planner.list(normalized.getJSONArray("tasks")))if(Planner.pending(task)&&Planner.end(task)>now){
+                pending++;check(task.getDouble("start")>=now+Planner.BREAK_SECONDS,"cloud normalization overlapped confirmed history/rest");
+            }
+            check(pending>0,"cloud rest repair removed all feasible work");
+            check(completion.equals(SyncLedger.canonical(normalized.getJSONArray("completions").getJSONObject(0))),"cloud rest repair changed confirmed progress");
+        }finally{Files.deleteIfExists(archive);}
+    }
     public static void main(String[] args)throws Exception{
         Path directory=Files.createTempDirectory("planner-cloud-server-");String token=UUID.randomUUID().toString()+UUID.randomUUID();
         CloudSyncServer server=new CloudSyncServer(directory,"127.0.0.1",0,token);server.start();
@@ -109,6 +130,7 @@ public final class CloudServerTests {
             server.uploadLock.lock();
             try{request(server,token,"/cloud/snapshot",packed(initial()),503);}finally{server.uploadLock.unlock();}
             diskRegression(server,token,directory);
+            mergedHistoryRestRegression(directory);
             SyncLedger base=initial(),mac=copy(base),phone=copy(base);server.accept(snapshot(base));long first=server.revision;
             server.accept(snapshot(base));check(server.revision==first,"retry created a version");
             JSONObject left=mac.materialize(),right=phone.materialize();

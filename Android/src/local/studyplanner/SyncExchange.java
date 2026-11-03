@@ -79,9 +79,26 @@ final class SyncExchange {
         return invalidPending(state,now);
     }
     static boolean invalidPending(JSONObject state,double now)throws Exception {
-        java.util.List<JSONObject> pending=new java.util.ArrayList<>();java.util.Map<String,Integer> totals=new java.util.HashMap<>();
-        for(JSONObject t:Planner.list(state.getJSONArray("tasks")))if(Planner.pending(t)&&Planner.end(t)>now){pending.add(t);String id=t.getString("courseID");totals.put(id,totals.getOrDefault(id,0)+t.getInt("durationMinutes"));}
-        pending.sort(java.util.Comparator.comparingDouble(t->t.optDouble("start")));for(int i=1;i<pending.size();i++)if(Planner.end(pending.get(i-1))>pending.get(i).getDouble("start"))return true;
+        List<JSONObject> pending=new ArrayList<>();Map<String,Integer> totals=new HashMap<>();
+        List<Planner.Span> history=new ArrayList<>();Double actualStart=Planner.actualStudyStart(state,now);
+        for(JSONObject task:Planner.list(state.getJSONArray("tasks"))){
+            if(Planner.pending(task)&&Planner.end(task)>now){
+                pending.add(task);String id=task.getString("courseID");totals.put(id,totals.getOrDefault(id,0)+task.getInt("durationMinutes"));
+            }
+            // Use the same retained-history and early-confirmation boundaries as replan.
+            boolean retained=!Planner.pending(task)||(Planner.planningEnd(task)<=now&&!(actualStart!=null&&Planner.day(task.getDouble("start")).equals(Planner.day(now))));
+            if(retained&&Planner.planningStart(task)<now&&(Planner.pending(task)||task.optInt("completedMinutes")>0))
+                history.add(Planner.buffered(Planner.retainedHistoryStart(task),Planner.retainedHistoryEnd(task)));
+        }
+        pending.sort(Comparator.comparingDouble(t->t.optDouble("start")));
+        for(int i=1;i<pending.size();i++)if(Planner.end(pending.get(i-1))+Planner.BREAK_SECONDS>pending.get(i).getDouble("start"))return true;
+        // Sweep merged history intervals instead of comparing every task with every record.
+        List<Planner.Span> blocked=Planner.merge(history);int index=0;
+        for(JSONObject task:pending){
+            double start=task.getDouble("start");
+            while(index<blocked.size()&&blocked.get(index).b<=start)index++;
+            if(index<blocked.size()&&blocked.get(index).a<Planner.end(task))return true;
+        }
         for(JSONObject c:Planner.list(state.getJSONArray("courses")))if(totals.getOrDefault(c.getString("id"),0)>Planner.remaining(state,c))return true;
         return false;
     }

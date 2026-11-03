@@ -32,6 +32,8 @@ mkdir -p Android/build/tests
 "$JDK/bin/java" -cp Android/tools/json.jar:Android/build/tests local.studyplanner.SyncExchangeTests
 "$JDK/bin/javac" -cp Android/tools/json.jar:Android/build/tests -d Android/build/tests Android/tests/SyncRecordValidationTests.java
 "$JDK/bin/java" -cp Android/tools/json.jar:Android/build/tests local.studyplanner.SyncRecordValidationTests
+"$JDK/bin/javac" -cp Android/tools/json.jar:Android/build/tests -d Android/build/tests Android/tests/SyncScheduleIntegrityTests.java
+"$JDK/bin/java" -cp Android/tools/json.jar:Android/build/tests local.studyplanner.SyncScheduleIntegrityTests
 "$JDK/bin/java" -Xmx256m -XX:-CompactStrings -cp Android/tools/json.jar:Android/build/tests local.studyplanner.SyncMemoryTests
 
 "$JDK/bin/java" -cp Android/tools/json.jar:Android/build/tests local.studyplanner.MigrationTests
