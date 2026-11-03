@@ -47,6 +47,7 @@ public final class SyncLedger {
     public void capture(JSONObject state,long nowMillis)throws Exception{
         Set<String> archived=new HashSet<>(),desired=new HashSet<>(),confirmationTasks=new HashSet<>();
         for(JSONObject course:Planner.list(state.getJSONArray("courses")))if(course.optBoolean("isArchived"))archived.add(course.getString("id"));
+        Planner.validateCourseTotals(state.getJSONArray("courses"),archived);
         // Check retained progress before archived task ownership is discarded.
         Map<String,String> taskCourses=new HashMap<>();
         for(JSONObject task:Planner.list(state.getJSONArray("tasks")))taskCourses.put(task.getString("id"),task.getString("courseID"));
@@ -103,6 +104,7 @@ public final class SyncLedger {
         JSONObject s=new JSONObject().put("schemaVersion",1);for(String kind:KINDS)if(!kind.equals("settings"))s.put(kind,new JSONArray());
         List<String> keys=new ArrayList<>();Iterator<String> it=records().keys();while(it.hasNext())keys.add(it.next());Collections.sort(keys);
         for(String k:keys){JSONObject r=records().getJSONObject(k);if(r.getBoolean("deleted"))continue;String kind=r.getString("kind");JSONObject p=payload(r);if(kind.equals("settings"))s.put(kind,p);else{if(!r.getString("id").equals(p.getString("id")))throw new IllegalArgumentException("记录 ID 不匹配");s.getJSONArray(kind).put(p);}}
+        Planner.validateCourseTotals(s.getJSONArray("courses"),Collections.emptySet());
         Set<String> deletedIDs=new HashSet<>();for(String k:keys){JSONObject r=records().getJSONObject(k);if(r.getString("kind").equals("courses")&&r.getBoolean("deleted"))deletedIDs.add(r.getString("id"));}
         for(JSONObject course:Planner.list(s.getJSONArray("courses")))if(course.optBoolean("isArchived"))deletedIDs.add(course.getString("id"));
         // Validate original numbers before merged-course recovery or task reconciliation

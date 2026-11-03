@@ -177,6 +177,24 @@ public final class CloudServerTests {
             check(before.equals(SyncLedger.canonical(server.loadLedger().materialize())),"overflowing completion total changed cloud progress");
         }
     }
+    static void courseNumberRegression(CloudSyncServer server,String token)throws Exception{
+        long revision=server.revision;String before=SyncLedger.canonical(server.loadLedger().materialize());
+        for(boolean nested:new boolean[]{false,true})for(Object total:new Object[]{4294967416L,120.5,"120",true,JSONObject.NULL,null}){
+            SyncLedger invalid=copy(server.loadLedger());JSONObject state=invalid.materialize(),course;
+            if(nested){
+                Set<String> ids=new HashSet<>();for(JSONObject source:Planner.list(state.getJSONArray("courses")))ids.add(source.getString("id"));
+                course=CourseTools.merge(state,ids,"Synthetic merged course");invalid.capture(state);
+            }else course=CourseTools.copy(state.getJSONArray("courses").getJSONObject(0));
+            JSONObject target=nested?course.getJSONArray("mergedSources").getJSONObject(0):course;
+            if(total==null)target.remove("totalMinutes");else target.put("totalMinutes",total);
+            JSONObject row=invalid.records().getJSONObject("courses/"+course.getString("id"));
+            row.put("payload",Base64.getEncoder().encodeToString(course.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8)))
+                .put("version",row.getLong("version")+1).put("modifiedAt",row.optLong("modifiedAt")+1);
+            request(server,token,"/cloud/snapshot",packed(invalid),400);
+            check(server.revision==revision,"invalid course number committed, nested="+nested);
+            check(before.equals(SyncLedger.canonical(server.loadLedger().materialize())),"invalid course number changed cloud state");
+        }
+    }
     static void malformedTombstoneWireRegression(CloudSyncServer server,String token)throws Exception{
         long revision=server.revision;String before=SyncLedger.canonical(server.loadLedger().materialize());
         for(Map.Entry<String,JSONObject> sample:SyncRecordValidationTests.invalidRows().entrySet()){
@@ -230,6 +248,7 @@ public final class CloudServerTests {
             taskIntervalRegression(server,token);
             completionNumberRegression(server,token);
             completionTotalRegression(server,token);
+            courseNumberRegression(server,token);
             malformedTombstoneWireRegression(server,token);
             long tombstoneRevision=server.revision;String beforeTombstone=SyncLedger.canonical(server.loadLedger().materialize());
             request(server,token,"/cloud/snapshot",packed(SyncExchangeTests.mismatchedTaskTombstoneFixture()),400);
