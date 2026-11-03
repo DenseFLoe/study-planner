@@ -12,7 +12,7 @@ final class DailyConsequenceRepositoryTests: XCTestCase {
         state.courses = [.init(name: "模拟课程", totalMinutes: 120, startDate: now, deadline: now.addingTimeInterval(86400))]
         let plan = state.replan(now: now)
         try state.confirm(taskID: plan.tasks[0].id, actualMinutes: 30, now: now)
-        let entry = DailyConsequenceAnalyzer().capture(state: state, result: state.replan(now: now), now: now, warningMinutes: 480)
+        let entry = try DailyConsequenceAnalyzer().capture(state: state, result: state.replan(now: now), now: now, warningMinutes: 480)
         var journal = DailyConsequenceJournal(); journal.days = [entry]
         let writer = DailyConsequenceRepository(url: url)
         try await writer.save(journal, sequence: 1)
@@ -26,7 +26,7 @@ final class DailyConsequenceRepositoryTests: XCTestCase {
     func testOlderSaveCannotOverwriteNewerJournal() async throws {
         let repository = DailyConsequenceRepository(inMemory: true)
         var newer = DailyConsequenceJournal()
-        newer.days = [DailyConsequenceAnalyzer().capture(state: PlannerState(), result: ScheduleEngine().generate(state: PlannerState(), now: Date()), now: Date(), warningMinutes: 480)]
+        newer.days = [try DailyConsequenceAnalyzer().capture(state: PlannerState(), result: ScheduleEngine().generate(state: PlannerState(), now: Date()), now: Date(), warningMinutes: 480)]
         try await repository.save(newer, sequence: 2)
         try await repository.save(DailyConsequenceJournal(), sequence: 1)
         let saved = try await repository.load()

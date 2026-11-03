@@ -20,7 +20,9 @@ struct DailyConsequencesView: View {
             Label("昨日结果 · 今日后果预报", systemImage: "calendar.badge.clock").font(.headline)
             yesterdaySection
             Divider()
-            if let day = controller.today {
+            if let message = controller.todayError {
+                Text(message).font(.caption).foregroundStyle(.orange)
+            } else if let day = controller.today {
                 Text("今天 \(day.date.formatted(.dateTime.month().day()))").font(.subheadline.bold())
                 Text("已确认有效学习 \(hours(controller.confirmedToday)) / 今日目标 \(hours(day.goalMinutes))")
                     .font(.caption.weight(.medium))
@@ -53,7 +55,9 @@ struct DailyConsequencesView: View {
         .onDisappear { controller.cancel() }
     }
     @ViewBuilder private var yesterdaySection: some View {
-        if let reality = controller.yesterday {
+        if let message = controller.yesterdayError {
+            Text(message).font(.caption).foregroundStyle(.orange)
+        } else if let reality = controller.yesterday {
             VStack(alignment: .leading, spacing: 7) {
                 Text("昨日 \(reality.date.formatted(.dateTime.month().day()))").font(.subheadline.bold())
                 Text("已确认 \(hours(reality.confirmedMinutes)) / 当日目标 \(hours(reality.goalMinutes))").font(.caption)

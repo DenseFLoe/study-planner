@@ -15,8 +15,8 @@ final class AndroidParityTests: XCTestCase {
         XCTAssertTrue(state.completions.allSatisfy { $0.studyDate == actualDay })
         XCTAssertTrue(state.completions.allSatisfy { calendar.isDate($0.recordedAt, inSameDayAs: recordedDay) })
         let analyzer = DailyConsequenceAnalyzer(calendar: calendar)
-        XCTAssertEqual(analyzer.confirmed(on: actualDay, state: state), 30)
-        XCTAssertEqual(analyzer.confirmed(on: recordedDay, state: state), 0)
+        XCTAssertEqual(try analyzer.confirmed(on: actualDay, state: state), 30)
+        XCTAssertEqual(try analyzer.confirmed(on: recordedDay, state: state), 0)
     }
     private func fixture() throws -> PlannerState {
         let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()

@@ -17,7 +17,8 @@ final class DailyConsequencesView {
     void content(LinearLayout panel)throws Exception{
         LinearLayout box=app.card(panel);box.addView(app.title("昨日结果 · 今日后果预报"));
         JSONObject past=controller.yesterday;
-        if(past==null)box.addView(app.text("尚无昨日预报记录，从今天开始保留每日对照。",15,app.muted));
+        if(controller.yesterdayError!=null)box.addView(app.text("昨日结果无法计算："+controller.yesterdayError,15,0xff874b00));
+        else if(past==null)box.addView(app.text("尚无昨日预报记录，从今天开始保留每日对照。",15,app.muted));
         else{
             box.addView(app.text("昨日 "+Planner.date(past.optDouble("date"))+" · 已确认 "+duration(past.optInt("confirmedMinutes"))+" / 目标 "+duration(past.optInt("goalMinutes")),15,app.ink));
             box.addView(app.text(past.optBoolean("isReviewed")?"✓ 昨日已核对":"昨日尚未全部核对；未确认记录不会直接算作没学。",15,past.optBoolean("isReviewed")?0xff126346:0xff874b00));
@@ -29,7 +30,8 @@ final class DailyConsequencesView {
                 if(!past.optBoolean("pending")&&past.optInt("ambiguousRecords")==0)box.addView(app.pill("昨日已核对，没有其他学习",controller::markYesterdayReviewed));}
         }
         JSONObject day=controller.today;
-        if(day==null)box.addView(app.text(controller.calculating?"正在准备今日预报…":"今日预报尚未就绪。",15,app.muted));
+        if(controller.todayError!=null)box.addView(app.text("今日预报无法计算："+controller.todayError,15,0xff874b00));
+        else if(day==null)box.addView(app.text(controller.calculating?"正在准备今日预报…":"今日预报尚未就绪。",15,app.muted));
         else{
             box.addView(app.title("今天 "+Planner.date(day.optDouble("date"))));
             box.addView(app.text("已确认有效学习 "+duration(controller.confirmed)+" / 今日目标 "+duration(day.optInt("goalMinutes")),16,app.ink));
@@ -43,7 +45,8 @@ final class DailyConsequencesView {
                 box.addView(app.text("推演假设之后每天也只完成当天预排量的同一比例，最多查看未来90天；未找到排法不当作无解。达标表示今天已超过这一档少学量，整体压力仍以实时预警为准。",15,app.muted));
             }
         }
-        if(controller.message!=null){box.addView(app.text(controller.message,15,0xff874b00));box.addView(app.pill("重新核算",()->{controller.lastState=null;app.render();}));}
+        if(controller.message!=null)box.addView(app.text(controller.message,15,0xff874b00));
+        if(controller.message!=null||controller.todayError!=null||controller.yesterdayError!=null)box.addView(app.pill("重新核算",()->{controller.lastState=null;app.render();}));
     }
     void scenario(LinearLayout parent,JSONObject day,int fraction)throws Exception{
         boolean passed=DailyConsequences.achieved(day,fraction,controller.confirmed);LinearLayout row=app.card(parent);

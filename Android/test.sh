@@ -39,6 +39,12 @@ mkdir -p Android/build/tests
 "$JDK/bin/java" -cp Android/tools/json.jar:Android/build/tests local.studyplanner.DailyConsequenceTests
 "$JDK/bin/javac" -cp Android/tools/json.jar:Android/build/tests -d Android/build/tests Android/tests/DailyConsequenceTargetTests.java
 "$JDK/bin/java" -cp Android/tools/json.jar:Android/build/tests local.studyplanner.DailyConsequenceTargetTests
+"$JDK/bin/javac" -cp Android/tools/json.jar:Android/build/tests -d Android/build/tests Android/tests/DailyConsequenceSumTests.java
+"$JDK/bin/java" -Xmx128m -cp Android/tools/json.jar:Android/build/tests local.studyplanner.DailyConsequenceSumTests
+# Compile the real controller against test-only UI boundaries; this is not an Android UI test.
+mkdir -p Android/build/controller-tests
+"$JDK/bin/javac" -cp Android/tools/json.jar:Android/build/tests -d Android/build/controller-tests Android/tests/dailycontroller/*.java Android/src/local/studyplanner/DailyConsequenceController.java
+"$JDK/bin/java" -Xmx128m -cp Android/build/controller-tests:Android/tools/json.jar:Android/build/tests local.studyplanner.DailyConsequenceControllerTests
 
 "$JDK/bin/java" -cp Android/tools/json.jar:Android/build/tests local.studyplanner.SyncTransferTests
 
