@@ -92,6 +92,53 @@ final class DailyConsequenceControllerTests: XCTestCase {
         XCTAssertNotEqual(controller.today?.date, original.date)
         XCTAssertTrue(controller.celebrationEvents.isEmpty)
     }
+    @MainActor func testDuplicateBaselineJournalUsesTemporaryCurrentForecastAndPreservesOriginalFile() async throws {
+        let (state, result, now) = fixture(), original = state
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let url = directory.appendingPathComponent("journal.json")
+        var damaged = try DailyConsequenceAnalyzer().capture(state: state, result: result, now: now, warningMinutes: 120)
+        damaged.baseline.courses.append(damaged.baseline.courses[0])
+        var journal = DailyConsequenceJournal(); journal.days = [damaged]
+        let bytes = try JSONEncoder().encode(journal); try bytes.write(to: url)
+        for _ in 0..<2 {
+            let controller = DailyConsequenceController(repository: DailyConsequenceRepository(url: url))
+            await controller.refresh(state: state, result: result, now: now, warningMinutes: 120)
+            await controller.waitForForecasts(); await controller.waitForYesterday(); await controller.waitForPersistence()
+            let temporary = try XCTUnwrap(controller.today)
+            XCTAssertNotEqual(temporary.id, damaged.id)
+            XCTAssertEqual(temporary.baseline.courses.count, 1)
+            XCTAssertEqual(temporary.baseline.courses[0].id, state.courses[0].id)
+            XCTAssertEqual(temporary.goalMinutes, damaged.goalMinutes)
+            XCTAssertEqual(temporary.forecasts.count, temporary.fractions.count)
+            XCTAssertNil(controller.todayError)
+            XCTAssertNotNil(controller.storageMessage)
+            XCTAssertTrue(controller.celebrationEvents.isEmpty)
+            XCTAssertFalse(controller.calculating)
+            XCTAssertEqual(try Data(contentsOf: url), bytes)
+            XCTAssertEqual(state, original)
+            controller.cancel()
+        }
+        // Only the test replaces the file. A new instance may use that valid
+        // history; failed-read instances never re-enable their own writes.
+        let replacement = try JSONEncoder().encode(DailyConsequenceJournal())
+        try replacement.write(to: url)
+        let reopened = DailyConsequenceController(repository: DailyConsequenceRepository(url: url))
+        await reopened.refresh(state: state, result: result, now: now, warningMinutes: 120)
+        await reopened.waitForForecasts(); await reopened.waitForPersistence()
+        XCTAssertNotNil(reopened.today)
+        XCTAssertNil(reopened.storageMessage)
+        XCTAssertNil(reopened.todayError)
+        let saved = try JSONDecoder().decode(DailyConsequenceJournal.self, from: Data(contentsOf: url))
+        XCTAssertEqual(saved.days.count, 1)
+        XCTAssertEqual(saved.days[0].id, reopened.today?.id)
+        XCTAssertEqual(saved.days[0].baseline.courses.count, 1)
+        XCTAssertNotEqual(try Data(contentsOf: url), replacement)
+        XCTAssertEqual(state, original)
+        reopened.cancel()
+    }
+
     private var emptyPlan: ScheduleResult { .init(tasks: [], risks: [], demands: [:], diagnostics: []) }
     private func progress(_ values: [Int], on date: Date) -> PlannerState {
         var state = PlannerState()
