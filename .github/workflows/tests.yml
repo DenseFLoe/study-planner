@@ -32,3 +32,36 @@ jobs:
           node-version: '22'
       - name: Run tests
         run: bash Scripts/test-ci.sh
+      - name: Summarize test crash
+        if: failure()
+        run: |
+          python3 - <<'PYTHON'
+          import json
+          import time
+          from pathlib import Path
+
+          directory = Path.home() / "Library/Logs/DiagnosticReports"
+          # CrashReporter can finish writing shortly after the test process exits.
+          time.sleep(5)
+          reports = list(directory.glob("xctest*.ips")) + list(directory.glob("StudyPlanner*.ips"))
+          reports.sort(key=lambda path: path.stat().st_mtime, reverse=True)
+          if not reports:
+              print("No test crash reports found")
+          for report in reports[:3]:
+              try:
+                  metadata, body = report.read_text().split("\n", 1)
+                  json.loads(metadata)
+                  data = json.loads(body)
+                  exception = data.get("exception", {})
+                  print(report.name, exception.get("type"), exception.get("signal"))
+                  # Only symbolic frames: never dump register values or arbitrary report data.
+                  for thread in data.get("threads", []):
+                      if not thread.get("triggered"):
+                          continue
+                      print("queue:", thread.get("queue", "unknown"))
+                      for frame in thread.get("frames", [])[:30]:
+                          source = Path(frame.get("sourceFile", "unknown")).name
+                          print(frame.get("symbol", "?"), source, frame.get("sourceLine", ""))
+              except (OSError, ValueError, TypeError, AttributeError) as error:
+                  print(report.name, type(error).__name__)
+          PYTHON
