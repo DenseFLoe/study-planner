@@ -47,8 +47,10 @@ extension PlannerState {
         let day = calendar.startOfDay(for: source.start)
         let original = tasks.filter { $0.isUnconfirmed && calendar.isDate($0.start, inSameDayAs: day) }
             .sorted { $0.start < $1.start }
-        let a = original.firstIndex { $0.id == sourceID }!
-        let b = original.firstIndex { $0.id == targetID }!
+        guard let a = original.firstIndex(where: { $0.id == sourceID }),
+              let b = original.firstIndex(where: { $0.id == targetID }) else {
+            throw DailyTaskOrderError.unavailable
+        }
         var keys = DailyTaskOrder.keys(for: original)
         keys.swapAt(a, b)
         var reordered = original

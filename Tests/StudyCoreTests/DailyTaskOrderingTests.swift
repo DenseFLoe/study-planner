@@ -71,6 +71,30 @@ final class DailyTaskOrderingTests: XCTestCase {
         state.tasks[1].confirmedAt = date(7)
         XCTAssertThrowsError(try state.swapDailyTasks(state.tasks[0].id, state.tasks[1].id, now: date(7), calendar: calendar))
     }
+    func testExtremeImportedDatesRejectSwapWithoutChangingState() throws {
+        var utc = Calendar(identifier: .gregorian)
+        utc.timeZone = TimeZone(secondsFromGMT: 0)!
+        let now = Date(timeIntervalSinceReferenceDate: 800_000_000)
+        var state = PlannerState()
+        state.settings.availability = []
+        let course = Course(name: "Extreme date fixture", totalMinutes: 120, startDate: now, deadline: now)
+        state.courses = [course]
+        state.tasks = (0..<2).map {
+            ScheduledTask(courseID: course.id, start: Date(timeIntervalSinceReferenceDate: 1e300),
+                          durationMinutes: 60, lessonID: "lesson-\($0)")
+        }
+        let data = try JSONEncoder().encode(PlannerBackup(state: state, reason: "Extreme dates"))
+        let backup = try JSONDecoder().decode(PlannerBackup.self, from: data).validated()
+        var ledger = SyncLedger()
+        try ledger.capture(backup.state)
+        state = try ledger.materialize()
+        XCTAssertEqual(state.tasks.count, 2)
+        let before = state
+        XCTAssertThrowsError(try state.swapDailyTasks(state.tasks[0].id, state.tasks[1].id, now: now, calendar: utc)) {
+            XCTAssertTrue($0 is DailyTaskOrderError)
+        }
+        XCTAssertEqual(state, before)
+    }
     func testFloatingWindowAndRepeatedSwaps() throws {
         var state = fixture()
         state.fixedEvents = [.init(title: "浮动事项", startMinute: 480, endMinute: 720,
