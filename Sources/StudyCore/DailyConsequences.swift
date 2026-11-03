@@ -46,7 +46,11 @@ public struct DailyConsequenceDay: Codable, Equatable, Sendable, Identifiable {
             fraction == 1000 || seen.insert(target(for: fraction)).inserted
         }
     }
-    public func target(for fraction: Int) -> Int { goalMinutes * fraction / 1000 }
+    public func target(for fraction: Int) -> Int {
+        // Divide first so every Int goal fits at fractions 0...1000. Both
+        // contributions retain integer truncation toward zero, without clamping.
+        (goalMinutes / 1000) * fraction + (goalMinutes % 1000) * fraction / 1000
+    }
     public func threshold(for fraction: Int) -> Int { fraction == 1000 ? goalMinutes : target(for: fraction) + 1 }
     public func achieved(_ fraction: Int, confirmed: Int) -> Bool { goalMinutes > 0 && confirmed >= threshold(for: fraction) }
 }
