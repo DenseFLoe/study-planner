@@ -80,10 +80,17 @@ final class SyncExchange {
     }
     static boolean invalidPending(JSONObject state,double now)throws Exception {
         List<JSONObject> pending=new ArrayList<>();Map<String,Integer> totals=new HashMap<>();
+        Map<String,JSONObject> courses=new HashMap<>();
+        for(JSONObject course:Planner.list(state.getJSONArray("courses")))courses.put(course.getString("id"),course);
         List<Planner.Span> history=new ArrayList<>();Double actualStart=Planner.actualStudyStart(state,now);
         for(JSONObject task:Planner.list(state.getJSONArray("tasks"))){
             if(Planner.pending(task)&&Planner.end(task)>now){
-                pending.add(task);String id=task.getString("courseID");totals.put(id,totals.getOrDefault(id,0)+task.getInt("durationMinutes"));
+                String id=task.getString("courseID");JSONObject course=courses.get(id);
+                // A peer can generate new task IDs from old inputs after our newer
+                // course row has already won. Input signatures alone miss those drafts.
+                if(course==null||!course.optBoolean("autoScheduleEnabled",true)
+                    ||!Planner.eligible(course,Planner.day(task.getDouble("start"))))return true;
+                pending.add(task);totals.put(id,totals.getOrDefault(id,0)+task.getInt("durationMinutes"));
             }
             // Use the same retained-history and early-confirmation boundaries as replan.
             boolean retained=!Planner.pending(task)||(Planner.planningEnd(task)<=now&&!(actualStart!=null&&Planner.day(task.getDouble("start")).equals(Planner.day(now))));
@@ -99,7 +106,7 @@ final class SyncExchange {
             while(index<blocked.size()&&blocked.get(index).b<=start)index++;
             if(index<blocked.size()&&blocked.get(index).a<Planner.end(task))return true;
         }
-        for(JSONObject c:Planner.list(state.getJSONArray("courses")))if(totals.getOrDefault(c.getString("id"),0)>Planner.remaining(state,c))return true;
+        for(JSONObject course:courses.values())if(totals.getOrDefault(course.getString("id"),0)>Planner.remaining(state,course))return true;
         return false;
     }
 }

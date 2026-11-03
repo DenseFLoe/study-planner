@@ -3,7 +3,7 @@ package local.studyplanner;
 import org.json.*;
 import java.time.*;
 
-/** Merging offline confirmations must preserve the scheduler's existing rest rules. */
+/** Merged drafts must obey the current course constraints and retained-history rest. */
 public final class SyncScheduleIntegrityTests {
     static int checks;
     static void check(boolean value,String message){checks++;if(!value)throw new AssertionError(message);}
@@ -75,8 +75,38 @@ public final class SyncScheduleIntegrityTests {
             return new JSONObject().put("protocol",1).put("cursor",0).put("automatic",false).put("date",day.toString());
         },now);
     }
+    static void offlineScheduleAfterCourseEdit()throws Exception{
+        LocalDate monday=LocalDate.of(2026,11,2),tuesday=monday.plusDays(1),wednesday=monday.plusDays(2);
+        double syncTime=Planner.at(tuesday,495);
+        JSONObject initial=state(Planner.at(monday,420));
+        initial.getJSONArray("courses").getJSONObject(0).put("totalMinutes",60)
+            .put("startDate",Planner.at(monday,0)).put("deadline",Planner.at(wednesday,0));
+        initial.getJSONObject("settings").put("availability",new JSONArray().put(new JSONObject().put("id",Planner.id())
+            .put("weekday",Planner.weekday(tuesday)).put("startMinute",480).put("endMinute",600)));
+        Planner.replan(initial,Planner.at(monday,420));SyncLedger base=new SyncLedger();base.capture(initial,1000);
+        for(String edit:new String[]{"pause","start","deadline"}){
+            SyncLedger local=new SyncLedger(CourseTools.copy(base.value)),offline=new SyncLedger(CourseTools.copy(base.value));
+            JSONObject changed=local.materialize(),course=changed.getJSONArray("courses").getJSONObject(0);
+            if(edit.equals("pause"))course.put("autoScheduleEnabled",false);
+            else course.put(edit.equals("start")?"startDate":"deadline",Planner.at(edit.equals("start")?wednesday:monday,0));
+            Planner.replan(changed,Planner.at(monday,480));local.capture(changed,2000);
+            check(changed.getJSONArray("tasks").length()==0,"course edit fixture still has a feasible task");
+            JSONObject stale=offline.materialize();Planner.replan(stale,syncTime);offline.capture(stale,3000);
+            check(stale.getJSONArray("tasks").length()==1,"offline fixture did not create a later draft");
+            exchange(local,offline,tuesday,syncTime);JSONObject merged=local.materialize();
+            check(SyncLedger.equivalent(merged.getJSONArray("courses").getJSONObject(0),course),"stale course row replaced newer "+edit);
+            check(merged.getJSONArray("tasks").length()==0,"offline task bypassed newer course "+edit);
+            check(Planner.remaining(merged,merged.getJSONArray("courses").getJSONObject(0))==60,"course constraint repair discarded unfinished work");
+            long sequence=local.sequence();exchange(local,offline,tuesday,syncTime);
+            check(local.sequence()==sequence,"retry recreated rejected stale course task");
+        }
+        JSONObject history=confirmedHistoryAndDraft(syncTime,15,60);
+        history.getJSONArray("courses").getJSONObject(0).put("autoScheduleEnabled",false);
+        history.getJSONArray("tasks").remove(1);
+        check(!SyncExchange.invalidPending(history,syncTime),"paused course invalidated confirmed history");
+    }
     public static void main(String[] args)throws Exception{
-        restBoundaries();offlineConfirmationReplan();
-        System.out.println("PASS "+checks+" sync schedule checks: offline confirmations, retained history, floating windows and cross-day rest");
+        restBoundaries();offlineConfirmationReplan();offlineScheduleAfterCourseEdit();
+        System.out.println("PASS "+checks+" sync schedule checks: offline confirmations, stale course drafts, retained history, floating windows and cross-day rest");
     }
 }
