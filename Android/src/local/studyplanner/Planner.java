@@ -46,6 +46,15 @@ public final class Planner {
     public static double planningStart(JSONObject t){return t.optDouble("floatingWindowStart",t.optDouble("start"));}
     public static double planningEnd(JSONObject t){return t.optDouble("floatingWindowEnd",end(t));}
     static boolean hasValidPlanningInterval(JSONObject t){double lower=planningStart(t),upper=planningEnd(t);return Double.isFinite(lower)&&Double.isFinite(upper)&&lower<=upper;}
+    static int completionMinutes(JSONObject record){
+        Object value=record.opt("minutes");
+        if(!(value instanceof Number))throw new IllegalArgumentException("完成时长必须是整数");
+        try{
+            int minutes=new java.math.BigDecimal(value.toString()).intValueExact();
+            if(minutes<0)throw new IllegalArgumentException("完成时长不能为负数");
+            return minutes;
+        }catch(NumberFormatException|ArithmeticException error){throw new IllegalArgumentException("完成时长超出整数范围或含小数",error);}
+    }
     public static double retainedHistoryStart(JSONObject t){return Math.min(planningStart(t),t.optDouble("confirmedAt",planningStart(t)));}
     public static double retainedHistoryEnd(JSONObject t){return Math.min(planningEnd(t),t.optDouble("confirmedAt",planningEnd(t)));}
     public static boolean floatingTask(JSONObject t){return t.has("floatingWindowStart")&&t.has("floatingWindowEnd");}
@@ -236,7 +245,7 @@ public final class Planner {
         if(deadline.isBefore(start)||deadline.isAfter(day(now).plusYears(10)))throw new IllegalArgumentException("截止日期须晚于或等于开始日期，且在未来十年以内");
         if(course.optInt("minimumBlockMinutes")<0||course.optInt("minimumBlockMinutes")>1440)throw new IllegalArgumentException("最小时间块无效");
     }
-    public static void validate(JSONObject s)throws Exception{if(s.getInt("schemaVersion")!=1)throw new IllegalArgumentException("不支持此备份版本");for(String key:new String[]{"courses","fixedEvents","tasks","completions"}){Set<String> ids=new HashSet<>();for(JSONObject o:list(s.getJSONArray(key)))if(o==null||!ids.add(o.getString("id")))throw new IllegalArgumentException("数据缺少 ID 或重复");}JSONObject settings=s.getJSONObject("settings");if(settings.getInt("minimumScheduleUnit")<1)throw new IllegalArgumentException("最小时间块无效");migrateLegacyAvailabilityIDs(s);Set<String> availabilityIDs=new HashSet<>();for(JSONObject a:list(settings.getJSONArray("availability")))if(a==null||!canonicalID(a.optString("id"))||!availabilityIDs.add(a.getString("id"))||a.getInt("weekday")<1||a.getInt("weekday")>7||a.getInt("startMinute")<0||a.getInt("endMinute")>1440||a.getInt("startMinute")>=a.getInt("endMinute"))throw new IllegalArgumentException("可学习时段数据无效");for(JSONObject t:list(s.getJSONArray("tasks")))if(course(s,t.getString("courseID"))==null||t.getInt("durationMinutes")<=0||!hasValidPlanningInterval(t))throw new IllegalArgumentException("任务数据不完整或时间区间无效");}
+    public static void validate(JSONObject s)throws Exception{if(s.getInt("schemaVersion")!=1)throw new IllegalArgumentException("不支持此备份版本");for(String key:new String[]{"courses","fixedEvents","tasks","completions"}){Set<String> ids=new HashSet<>();for(JSONObject o:list(s.getJSONArray(key)))if(o==null||!ids.add(o.getString("id")))throw new IllegalArgumentException("数据缺少 ID 或重复");}for(JSONObject record:list(s.getJSONArray("completions")))completionMinutes(record);JSONObject settings=s.getJSONObject("settings");if(settings.getInt("minimumScheduleUnit")<1)throw new IllegalArgumentException("最小时间块无效");migrateLegacyAvailabilityIDs(s);Set<String> availabilityIDs=new HashSet<>();for(JSONObject a:list(settings.getJSONArray("availability")))if(a==null||!canonicalID(a.optString("id"))||!availabilityIDs.add(a.getString("id"))||a.getInt("weekday")<1||a.getInt("weekday")>7||a.getInt("startMinute")<0||a.getInt("endMinute")>1440||a.getInt("startMinute")>=a.getInt("endMinute"))throw new IllegalArgumentException("可学习时段数据无效");for(JSONObject t:list(s.getJSONArray("tasks")))if(course(s,t.getString("courseID"))==null||t.getInt("durationMinutes")<=0||!hasValidPlanningInterval(t))throw new IllegalArgumentException("任务数据不完整或时间区间无效");}
     public static final class EventConflict {
         public final String eventID,title,reason;
         public final LocalDate date;

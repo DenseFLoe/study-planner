@@ -52,7 +52,9 @@ public final class SyncLedger {
         for(JSONObject task:Planner.list(state.getJSONArray("tasks")))taskCourses.put(task.getString("id"),task.getString("courseID"));
         for(JSONObject record:Planner.list(state.getJSONArray("completions"))){
             String course=record.getString("courseID"),owner=taskCourses.get(record.getString("taskID"));
-            if(!archived.contains(course)&&owner!=null&&!owner.equals(course))throw new IllegalArgumentException("完成记录与关联任务的课程不一致");
+            if(archived.contains(course))continue;
+            Planner.completionMinutes(record);
+            if(owner!=null&&!owner.equals(course))throw new IllegalArgumentException("完成记录与关联任务的课程不一致");
         }
         JSONObject records=records();List<JSONObject> changes=new ArrayList<>();
         for(String kind:KINDS){List<JSONObject> values=kind.equals("settings")?Collections.singletonList(state.getJSONObject(kind)):Planner.list(state.getJSONArray(kind));
@@ -102,7 +104,9 @@ public final class SyncLedger {
         for(String k:keys){JSONObject r=records().getJSONObject(k);if(r.getBoolean("deleted"))continue;String kind=r.getString("kind");JSONObject p=payload(r);if(kind.equals("settings"))s.put(kind,p);else{if(!r.getString("id").equals(p.getString("id")))throw new IllegalArgumentException("记录 ID 不匹配");s.getJSONArray(kind).put(p);}}
         Set<String> deletedIDs=new HashSet<>();for(String k:keys){JSONObject r=records().getJSONObject(k);if(r.getString("kind").equals("courses")&&r.getBoolean("deleted"))deletedIDs.add(r.getString("id"));}
         for(JSONObject course:Planner.list(s.getJSONArray("courses")))if(course.optBoolean("isArchived"))deletedIDs.add(course.getString("id"));
-        Set<String> confirmationTasks=new HashSet<>();for(JSONObject record:Planner.list(s.getJSONArray("completions")))confirmationTasks.add(record.getString("taskID"));
+        // Validate original numbers before merged-course recovery or task reconciliation
+        // reads them through JSONObject's truncating integer getters.
+        Set<String> confirmationTasks=new HashSet<>();for(JSONObject record:Planner.list(s.getJSONArray("completions"))){Planner.completionMinutes(record);confirmationTasks.add(record.getString("taskID"));}
         Map<String,JSONObject> deletedTasks=new HashMap<>();
         for(String k:keys){
             JSONObject row=records().getJSONObject(k);
