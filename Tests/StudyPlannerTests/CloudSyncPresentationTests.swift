@@ -26,6 +26,17 @@ private actor SyncStage {
 }
 
 final class CloudSyncPresentationTests: XCTestCase {
+    // Build the Thread callback outside the @MainActor test. Older toolchains
+    // otherwise retain main-actor isolation even with an explicit @Sendable closure.
+    private nonisolated static func launchOnTemporaryThread(_ process: Process) async throws {
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+            Thread { @Sendable in
+                do { try process.run(); continuation.resume() }
+                catch { continuation.resume(throwing: error) }
+            }.start()
+        }
+    }
+
     @MainActor private func store(state: PlannerState = PlannerState()) throws -> PlannerStore {
         let repository = try LocalRepository(inMemory: true)
         try repository.save(state)
@@ -43,14 +54,7 @@ final class CloudSyncPresentationTests: XCTestCase {
         process.standardOutput = FileHandle.nullDevice
         process.standardError = FileHandle.nullDevice
         defer { CloudSSHProcess.stop(process); try? FileManager.default.removeItem(at: directory) }
-        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
-            // Older Foundation SDKs let this callback inherit the test's MainActor.
-            // It runs on a temporary thread, so explicitly make the closure Sendable.
-            Thread { @Sendable in
-                do { try process.run(); continuation.resume() }
-                catch { continuation.resume(throwing: error) }
-            }.start()
-        }
+        try await Self.launchOnTemporaryThread(process)
         let tunnel = CloudSSHTunnel(process: process, directory: directory, port: 1)
         let store = try store()
         let state = store.state, ledger = SyncLedger()
