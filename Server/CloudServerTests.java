@@ -150,6 +150,33 @@ public final class CloudServerTests {
             check(before.equals(SyncLedger.canonical(server.loadLedger().materialize())),"invalid completion number changed cloud progress");
         }
     }
+    static void completionTotalRegression(CloudSyncServer server,String token)throws Exception{
+        long revision=server.revision;String before=SyncLedger.canonical(server.loadLedger().materialize());
+        for(boolean baselineOverflow:new boolean[]{false,true}){
+            SyncLedger invalid=copy(server.loadLedger());JSONObject record=CourseTools.copy(invalid.materialize().getJSONArray("completions").getJSONObject(0));
+            JSONObject row=invalid.records().getJSONObject("completions/"+record.getString("id"));
+            record.put("minutes",baselineOverflow?1:Integer.MAX_VALUE);
+            row.put("payload",Base64.getEncoder().encodeToString(record.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8)))
+                .put("version",row.getLong("version")+1).put("modifiedAt",row.optLong("modifiedAt")+1);
+            JSONObject task=invalid.records().getJSONObject("tasks/"+record.getString("taskID"));
+            task.put("deleted",true).put("version",task.getLong("version")+1).put("modifiedAt",task.optLong("modifiedAt")+1);
+            if(baselineOverflow){
+                JSONObject courseRow=invalid.records().getJSONObject("courses/"+record.getString("courseID"));
+                JSONObject course=SyncLedger.payload(courseRow).put("initialCompletedMinutes",Integer.MAX_VALUE);
+                courseRow.put("payload",Base64.getEncoder().encodeToString(course.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8)))
+                    .put("version",courseRow.getLong("version")+1).put("modifiedAt",courseRow.optLong("modifiedAt")+1);
+            }else{
+                JSONObject extra=CourseTools.copy(record).put("taskID",Planner.id()).put("minutes",1);
+                extra.put("id",Planner.stableID("completion|"+extra.getString("taskID")));
+                JSONObject extraRow=CourseTools.copy(row).put("id",extra.getString("id"))
+                    .put("payload",Base64.getEncoder().encodeToString(extra.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8)));
+                invalid.records().put(SyncLedger.key(extraRow),extraRow);
+            }
+            request(server,token,"/cloud/snapshot",packed(invalid),400);
+            check(server.revision==revision,"overflowing completion total committed");
+            check(before.equals(SyncLedger.canonical(server.loadLedger().materialize())),"overflowing completion total changed cloud progress");
+        }
+    }
     static void malformedTombstoneWireRegression(CloudSyncServer server,String token)throws Exception{
         long revision=server.revision;String before=SyncLedger.canonical(server.loadLedger().materialize());
         for(Map.Entry<String,JSONObject> sample:SyncRecordValidationTests.invalidRows().entrySet()){
@@ -202,6 +229,7 @@ public final class CloudServerTests {
             completionCourseRegression(server,token);
             taskIntervalRegression(server,token);
             completionNumberRegression(server,token);
+            completionTotalRegression(server,token);
             malformedTombstoneWireRegression(server,token);
             long tombstoneRevision=server.revision;String beforeTombstone=SyncLedger.canonical(server.loadLedger().materialize());
             request(server,token,"/cloud/snapshot",packed(SyncExchangeTests.mismatchedTaskTombstoneFixture()),400);

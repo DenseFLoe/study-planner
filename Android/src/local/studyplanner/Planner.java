@@ -46,14 +46,44 @@ public final class Planner {
     public static double planningStart(JSONObject t){return t.optDouble("floatingWindowStart",t.optDouble("start"));}
     public static double planningEnd(JSONObject t){return t.optDouble("floatingWindowEnd",end(t));}
     static boolean hasValidPlanningInterval(JSONObject t){double lower=planningStart(t),upper=planningEnd(t);return Double.isFinite(lower)&&Double.isFinite(upper)&&lower<=upper;}
+    static int exactProgressInteger(Object value){
+        if(!(value instanceof Number))throw new IllegalArgumentException("学习进度必须是整数");
+        try{return new java.math.BigDecimal(value.toString()).intValueExact();}
+        catch(NumberFormatException|ArithmeticException error){throw new IllegalArgumentException("学习进度超出整数范围或含小数",error);}
+    }
     static int completionMinutes(JSONObject record){
-        Object value=record.opt("minutes");
-        if(!(value instanceof Number))throw new IllegalArgumentException("完成时长必须是整数");
-        try{
-            int minutes=new java.math.BigDecimal(value.toString()).intValueExact();
-            if(minutes<0)throw new IllegalArgumentException("完成时长不能为负数");
-            return minutes;
-        }catch(NumberFormatException|ArithmeticException error){throw new IllegalArgumentException("完成时长超出整数范围或含小数",error);}
+        int minutes=exactProgressInteger(record.opt("minutes"));
+        if(minutes<0)throw new IllegalArgumentException("完成时长不能为负数");
+        return minutes;
+    }
+    static final class ProgressNode {
+        final JSONObject course;final String prefix;final List<JSONObject> tasks,records;
+        ProgressNode(JSONObject c,String p,List<JSONObject> t,List<JSONObject> r){course=c;prefix=p;tasks=t;records=r;}
+    }
+    static void validateRecordedProgress(JSONObject state,Set<String> ignoredCourses)throws Exception{
+        Map<String,List<JSONObject>> tasks=new HashMap<>(),records=new HashMap<>();
+        for(JSONObject task:list(state.getJSONArray("tasks"))){String course=task.getString("courseID");if(!ignoredCourses.contains(course))tasks.computeIfAbsent(course,k->new ArrayList<>()).add(task);}
+        for(JSONObject record:list(state.getJSONArray("completions"))){
+            String course=record.getString("courseID");if(ignoredCourses.contains(course))continue;
+            completionMinutes(record);records.computeIfAbsent(course,k->new ArrayList<>()).add(record);
+        }
+        Deque<ProgressNode> pending=new ArrayDeque<>();
+        for(JSONObject course:list(state.getJSONArray("courses"))){String id=course.getString("id");if(!ignoredCourses.contains(id))pending.push(new ProgressNode(course,"",tasks.getOrDefault(id,Collections.emptyList()),records.getOrDefault(id,Collections.emptyList())));}
+        while(!pending.isEmpty()){
+            ProgressNode node=pending.pop();
+            int total=Math.max(0,node.course.has("initialCompletedMinutes")?exactProgressInteger(node.course.opt("initialCompletedMinutes")):0);
+            try{for(JSONObject record:node.records)total=Math.addExact(total,completionMinutes(record));}
+            catch(ArithmeticException error){throw new IllegalArgumentException("累计学习进度超出整数范围",error);}
+            JSONArray sources=node.course.optJSONArray("mergedSources");if(sources==null)continue;
+            // Match mergedSourceState: descendants inherit only records whose task
+            // belongs to the full source prefix, not every record on the parent.
+            for(JSONObject source:list(sources)){
+                String prefix=node.prefix+source.getString("id")+"/";Set<String> ids=new HashSet<>();List<JSONObject> childTasks=new ArrayList<>(),childRecords=new ArrayList<>();
+                for(JSONObject task:node.tasks)if(task.optString("lessonID").startsWith(prefix)){childTasks.add(task);ids.add(task.getString("id"));}
+                for(JSONObject record:node.records)if(ids.contains(record.getString("taskID")))childRecords.add(record);
+                pending.push(new ProgressNode(source,prefix,childTasks,childRecords));
+            }
+        }
     }
     public static double retainedHistoryStart(JSONObject t){return Math.min(planningStart(t),t.optDouble("confirmedAt",planningStart(t)));}
     public static double retainedHistoryEnd(JSONObject t){return Math.min(planningEnd(t),t.optDouble("confirmedAt",planningEnd(t)));}
@@ -245,7 +275,7 @@ public final class Planner {
         if(deadline.isBefore(start)||deadline.isAfter(day(now).plusYears(10)))throw new IllegalArgumentException("截止日期须晚于或等于开始日期，且在未来十年以内");
         if(course.optInt("minimumBlockMinutes")<0||course.optInt("minimumBlockMinutes")>1440)throw new IllegalArgumentException("最小时间块无效");
     }
-    public static void validate(JSONObject s)throws Exception{if(s.getInt("schemaVersion")!=1)throw new IllegalArgumentException("不支持此备份版本");for(String key:new String[]{"courses","fixedEvents","tasks","completions"}){Set<String> ids=new HashSet<>();for(JSONObject o:list(s.getJSONArray(key)))if(o==null||!ids.add(o.getString("id")))throw new IllegalArgumentException("数据缺少 ID 或重复");}for(JSONObject record:list(s.getJSONArray("completions")))completionMinutes(record);JSONObject settings=s.getJSONObject("settings");if(settings.getInt("minimumScheduleUnit")<1)throw new IllegalArgumentException("最小时间块无效");migrateLegacyAvailabilityIDs(s);Set<String> availabilityIDs=new HashSet<>();for(JSONObject a:list(settings.getJSONArray("availability")))if(a==null||!canonicalID(a.optString("id"))||!availabilityIDs.add(a.getString("id"))||a.getInt("weekday")<1||a.getInt("weekday")>7||a.getInt("startMinute")<0||a.getInt("endMinute")>1440||a.getInt("startMinute")>=a.getInt("endMinute"))throw new IllegalArgumentException("可学习时段数据无效");for(JSONObject t:list(s.getJSONArray("tasks")))if(course(s,t.getString("courseID"))==null||t.getInt("durationMinutes")<=0||!hasValidPlanningInterval(t))throw new IllegalArgumentException("任务数据不完整或时间区间无效");}
+    public static void validate(JSONObject s)throws Exception{if(s.getInt("schemaVersion")!=1)throw new IllegalArgumentException("不支持此备份版本");for(String key:new String[]{"courses","fixedEvents","tasks","completions"}){Set<String> ids=new HashSet<>();for(JSONObject o:list(s.getJSONArray(key)))if(o==null||!ids.add(o.getString("id")))throw new IllegalArgumentException("数据缺少 ID 或重复");}validateRecordedProgress(s,Collections.emptySet());JSONObject settings=s.getJSONObject("settings");if(settings.getInt("minimumScheduleUnit")<1)throw new IllegalArgumentException("最小时间块无效");migrateLegacyAvailabilityIDs(s);Set<String> availabilityIDs=new HashSet<>();for(JSONObject a:list(settings.getJSONArray("availability")))if(a==null||!canonicalID(a.optString("id"))||!availabilityIDs.add(a.getString("id"))||a.getInt("weekday")<1||a.getInt("weekday")>7||a.getInt("startMinute")<0||a.getInt("endMinute")>1440||a.getInt("startMinute")>=a.getInt("endMinute"))throw new IllegalArgumentException("可学习时段数据无效");for(JSONObject t:list(s.getJSONArray("tasks")))if(course(s,t.getString("courseID"))==null||t.getInt("durationMinutes")<=0||!hasValidPlanningInterval(t))throw new IllegalArgumentException("任务数据不完整或时间区间无效");}
     public static final class EventConflict {
         public final String eventID,title,reason;
         public final LocalDate date;

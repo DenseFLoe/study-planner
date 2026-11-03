@@ -56,6 +56,7 @@ public final class SyncLedger {
             Planner.completionMinutes(record);
             if(owner!=null&&!owner.equals(course))throw new IllegalArgumentException("完成记录与关联任务的课程不一致");
         }
+        Planner.validateRecordedProgress(state,archived);
         JSONObject records=records();List<JSONObject> changes=new ArrayList<>();
         for(String kind:KINDS){List<JSONObject> values=kind.equals("settings")?Collections.singletonList(state.getJSONObject(kind)):Planner.list(state.getJSONArray(kind));
             for(JSONObject source:values){

@@ -98,6 +98,7 @@ public struct SyncLedger: Codable, Sendable {
         guard Set(state.completions.map(\.taskID)).count == state.completions.count else {
             throw SyncFailure.invalidData
         }
+        try state.validateRecordedProgress()
         let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys]
         var desired: [String: SyncRecord] = [:]
         func add<T: Encodable>(_ kind: String, _ id: String, _ value: T) throws {
@@ -185,6 +186,7 @@ public struct SyncLedger: Codable, Sendable {
         guard state.settings.minimumScheduleUnit > 0,
               state.tasks.allSatisfy({ ids.contains($0.courseID) && $0.durationMinutes > 0 && $0.hasValidPlanningInterval }),
               state.completions.allSatisfy({ ids.contains($0.courseID) && $0.minutes >= 0 }) else { throw SyncFailure.invalidData }
+        try state.validateRecordedProgress()
         state.tasks.sort { $0.start == $1.start ? $0.id.uuidString < $1.id.uuidString : $0.start < $1.start }
         return state
     }
