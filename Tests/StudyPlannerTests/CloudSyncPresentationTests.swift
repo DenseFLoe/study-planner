@@ -44,7 +44,9 @@ final class CloudSyncPresentationTests: XCTestCase {
         process.standardError = FileHandle.nullDevice
         defer { CloudSSHProcess.stop(process); try? FileManager.default.removeItem(at: directory) }
         try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
-            Thread {
+            // Older Foundation SDKs let this callback inherit the test's MainActor.
+            // It runs on a temporary thread, so explicitly make the closure Sendable.
+            Thread { @Sendable in
                 do { try process.run(); continuation.resume() }
                 catch { continuation.resume(throwing: error) }
             }.start()

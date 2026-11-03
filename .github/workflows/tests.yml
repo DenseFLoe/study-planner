@@ -32,16 +32,3 @@ jobs:
           node-version: '22'
       - name: Run tests
         run: bash Scripts/test-ci.sh
-      - name: Capture failing test backtrace
-        if: failure()
-        timeout-minutes: 5
-        run: |
-          test_bin="$(swift build --show-bin-path)"
-          test_runner="$(xcrun --find xctest)"
-          for bundle in "$test_bin"/*.xctest; do
-            [[ -d "$bundle" ]] || continue
-            xcrun lldb --batch \
-              -o 'settings set frame-format "frame #${frame.index}: ${module.file.basename} ${function.name-without-args} ${line.file.basename}:${line.number}\n"' \
-              -o run -k 'thread backtrace all' \
-              -- "$test_runner" -XCTest 'StudyPlannerTests.BrowserCourseSessionTests,StudyPlannerTests.CloudSyncPresentationTests,StudySyncTests.CloudSSHTests' "$bundle"
-          done
