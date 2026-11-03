@@ -112,6 +112,10 @@ public final class CloudServerTests {
             a.get();b.get();clients.shutdown();
             JSONObject merged=server.loadLedger().materialize();check(merged.getJSONArray("courses").length()==2,"offline addition lost");check(merged.getJSONArray("completions").length()==1,"offline confirmation lost");
             duplicateCompletionRegression(server,token);
+            long tombstoneRevision=server.revision;String beforeTombstone=SyncLedger.canonical(server.loadLedger().materialize());
+            request(server,token,"/cloud/snapshot",packed(SyncExchangeTests.mismatchedTaskTombstoneFixture()),400);
+            check(server.revision==tombstoneRevision,"mismatched task tombstone committed a cloud version");
+            check(beforeTombstone.equals(SyncLedger.canonical(server.loadLedger().materialize())),"rejected task recovery changed cloud progress");
             long before=server.revision;request(server,token,"/cloud/snapshot",Arrays.copyOf(packed(mac),12),400);check(server.revision==before,"truncated upload committed");
             JSONObject corruptHeader=CloudSnapshot.header(base);ByteArrayOutputStream duplicate=new ByteArrayOutputStream();
             SyncLedger invalid=copy(base);invalid.records().remove("settings/settings");CloudSnapshot.write(duplicate,invalid,corruptHeader);

@@ -81,7 +81,15 @@ public final class SyncLedger {
         Set<String> deletedIDs=new HashSet<>();for(String k:keys){JSONObject r=records().getJSONObject(k);if(r.getString("kind").equals("courses")&&r.getBoolean("deleted"))deletedIDs.add(r.getString("id"));}
         for(JSONObject course:Planner.list(s.getJSONArray("courses")))if(course.optBoolean("isArchived"))deletedIDs.add(course.getString("id"));
         Set<String> confirmationTasks=new HashSet<>();for(JSONObject record:Planner.list(s.getJSONArray("completions")))confirmationTasks.add(record.getString("taskID"));
-        Map<String,JSONObject> deletedTasks=new HashMap<>();for(String k:keys){JSONObject row=records().getJSONObject(k);if(row.getString("kind").equals("tasks")&&row.getBoolean("deleted")&&confirmationTasks.contains(row.getString("id")))deletedTasks.put(row.getString("id"),payload(row));}
+        Map<String,JSONObject> deletedTasks=new HashMap<>();
+        for(String k:keys){
+            JSONObject row=records().getJSONObject(k);
+            if(row.getString("kind").equals("tasks")&&row.getBoolean("deleted")&&confirmationTasks.contains(row.getString("id"))){
+                JSONObject task=payload(row);
+                if(!row.getString("id").equals(task.getString("id")))throw new IllegalArgumentException("已删除任务的记录 ID 不匹配");
+                deletedTasks.put(row.getString("id"),task);
+            }
+        }
         Planner.reconcileMergedCourseProgress(s,deletedIDs,deletedTasks);
         reconcileConfirmations(s);
         CourseTools.purgeDeletedLessonRecords(s,deletedTasks.values());

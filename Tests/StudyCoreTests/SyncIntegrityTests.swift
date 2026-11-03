@@ -61,4 +61,35 @@ final class SyncIntegrityTests: XCTestCase {
         XCTAssertEqual(restored.completions, [legacy])
         XCTAssertEqual(restored.tasks[0].completedMinutes, 20)
     }
+
+    func testReferencedTaskTombstoneMustMatchItsPayloadIdentity() throws {
+        var state = try fixture()
+        var other = state.tasks[0]
+        other.id = UUID(); other.confirmedAt = nil; other.completedMinutes = 0; other.status = .planned
+        state.tasks.append(other)
+        var ledger = SyncLedger()
+        try ledger.capture(state)
+        let key = "tasks/" + state.tasks[0].id.uuidString
+        var tombstone = try XCTUnwrap(ledger.records[key])
+        var wrongTask = other
+        wrongTask.id = UUID()
+        tombstone.payload = try JSONEncoder().encode(wrongTask)
+        tombstone.deleted = true
+        ledger.records[key] = tombstone
+        let before = ledger.records
+        XCTAssertThrowsError(try ledger.materialize())
+        XCTAssertThrowsError(try CloudArchive(ledger: ledger).validated())
+        XCTAssertEqual(ledger.records, before)
+    }
+
+    func testUnreferencedTaskTombstoneDoesNotRestoreItsPayload() throws {
+        let state = try fixture()
+        var ledger = SyncLedger()
+        try ledger.capture(state)
+        var historical = try XCTUnwrap(ledger.records["tasks/" + state.tasks[0].id.uuidString])
+        historical.id = UUID().uuidString; historical.deleted = true
+        try ledger.merge([historical])
+        XCTAssertEqual(try ledger.materialize().tasks, state.tasks)
+        XCTAssertEqual(try ledger.materialize().completions, state.completions)
+    }
 }

@@ -162,7 +162,10 @@ public struct SyncLedger: Codable, Sendable {
         let deletedTasks = try records.values.filter {
             $0.kind == "tasks" && $0.deleted && UUID(uuidString: $0.id).map(confirmationTasks.contains) == true
         }.map {
-            try decoder.decode(ScheduledTask.self, from: $0.payload)
+            let task = try decoder.decode(ScheduledTask.self, from: $0.payload)
+            // A recovered draft must have the same identity as its tombstone.
+            guard task.id.uuidString == $0.id else { throw SyncFailure.invalidData }
+            return task
         }
         try state.reconcileMergedCourseProgress(deletedIDs: deletedIDs, deletedTasks: deletedTasks)
         try reconcileConfirmations(in: &state)

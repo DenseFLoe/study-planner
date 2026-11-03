@@ -52,6 +52,24 @@ public final class SyncExchangeTests {
         check(restored.getJSONArray("completions").getJSONObject(0).getString("id").equals(legacy.getString("id")),"single legacy completion rejected");
         check(restored.getJSONArray("tasks").getJSONObject(0).getInt("completedMinutes")==20,"legacy completion progress changed");
     }
+    static SyncLedger mismatchedTaskTombstoneFixture()throws Exception{
+        double now=Planner.now();JSONObject state=fixture(now),task=state.getJSONArray("tasks").getJSONObject(0);
+        JSONObject other=CourseTools.copy(task).put("id",Planner.id());
+        Planner.confirm(state,task.getString("id"),20,now);SyncLedger ledger=new SyncLedger();ledger.capture(state);
+        JSONObject wrong=CourseTools.copy(other).put("id",Planner.id());
+        ledger.records().getJSONObject("tasks/"+task.getString("id")).put("deleted",true)
+            .put("payload",java.util.Base64.getEncoder().encodeToString(wrong.toString().getBytes(StandardCharsets.UTF_8)));
+        return ledger;
+    }
+    static void referencedTombstoneIntegrity()throws Exception{
+        SyncLedger ledger=mismatchedTaskTombstoneFixture();String before=ledger.value.toString();
+        boolean rejected=false;try{ledger.materialize();}catch(IllegalArgumentException expected){rejected=true;}
+        check(rejected,"task tombstone restored a different payload identity");
+        check(before.equals(ledger.value.toString()),"rejected task recovery changed the ledger");
+        ByteArrayOutputStream bytes=new ByteArrayOutputStream();CloudSnapshot.write(bytes,ledger,CloudSnapshot.header(ledger));
+        rejected=false;try{CloudSnapshot.read(new ByteArrayInputStream(bytes.toByteArray()));}catch(IllegalArgumentException expected){rejected=true;}
+        check(rejected,"cloud archive accepted mismatched task tombstone identity");
+    }
     static void latestEditRegression()throws Exception{
         long time=2000000000000L;JSONObject state=fixture(Planner.now());SyncLedger mac=new SyncLedger(),phone=new SyncLedger();
         mac.capture(state,time);phone.merge(mac.changes(0));
@@ -105,7 +123,7 @@ public final class SyncExchangeTests {
         exchange(phone,mac.changes(0),0);check(phone.materialize().getJSONArray("tasks").getJSONObject(0).has("confirmedAt"),"deleted draft lost offline confirmation");
     }
     public static void main(String[] args)throws Exception{
-        duplicateCompletionIntegrity();latestEditRegression();confirmationRegression();earlyCompletionRegression();
+        referencedTombstoneIntegrity();duplicateCompletionIntegrity();latestEditRegression();confirmationRegression();earlyCompletionRegression();
         JSONObject state=initial();String courseID=Planner.id();
         state.getJSONArray("courses").put(new JSONObject().put("id",courseID).put("name","Confirmation fixture").put("type","录播课程").put("totalMinutes",120)
             .put("initialCompletedMinutes",0).put("startDate",0).put("deadline",1000000000).put("minimumBlockMinutes",60).put("priority",2).put("color","blue").put("autoScheduleEnabled",false).put("isArchived",false).put("notes",""));
