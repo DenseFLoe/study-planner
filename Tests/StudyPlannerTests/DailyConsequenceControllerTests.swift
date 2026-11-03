@@ -93,13 +93,23 @@ final class DailyConsequenceControllerTests: XCTestCase {
         XCTAssertTrue(controller.celebrationEvents.isEmpty)
     }
     @MainActor func testDuplicateBaselineJournalUsesTemporaryCurrentForecastAndPreservesOriginalFile() async throws {
+        try await assertDamagedBaselinePreservesFile(duplicateTasks: false)
+    }
+    @MainActor func testDuplicateTaskBaselineUsesTemporaryCurrentForecastAndPreservesOriginalFile() async throws {
+        try await assertDamagedBaselinePreservesFile(duplicateTasks: true)
+    }
+    @MainActor private func assertDamagedBaselinePreservesFile(duplicateTasks: Bool) async throws {
         let (state, result, now) = fixture(), original = state
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
         let url = directory.appendingPathComponent("journal.json")
         var damaged = try DailyConsequenceAnalyzer().capture(state: state, result: result, now: now, warningMinutes: 120)
-        damaged.baseline.courses.append(damaged.baseline.courses[0])
+        if duplicateTasks {
+            damaged.baseline.tasks.append(try XCTUnwrap(damaged.baseline.tasks.first))
+        } else {
+            damaged.baseline.courses.append(damaged.baseline.courses[0])
+        }
         var journal = DailyConsequenceJournal(); journal.days = [damaged]
         let bytes = try JSONEncoder().encode(journal); try bytes.write(to: url)
         for _ in 0..<2 {
@@ -110,6 +120,8 @@ final class DailyConsequenceControllerTests: XCTestCase {
             XCTAssertNotEqual(temporary.id, damaged.id)
             XCTAssertEqual(temporary.baseline.courses.count, 1)
             XCTAssertEqual(temporary.baseline.courses[0].id, state.courses[0].id)
+            XCTAssertEqual(temporary.baseline.tasks.count, state.tasks.count)
+            XCTAssertEqual(Set(temporary.baseline.tasks.map(\.id)).count, temporary.baseline.tasks.count)
             XCTAssertEqual(temporary.goalMinutes, damaged.goalMinutes)
             XCTAssertEqual(temporary.forecasts.count, temporary.fractions.count)
             XCTAssertNil(controller.todayError)

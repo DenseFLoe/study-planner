@@ -130,13 +130,71 @@ final class DailyConsequenceRepositoryTests: XCTestCase {
         XCTAssertEqual(restored, original)
     }
 
-    func testJavaRootCourseIdentityTopologiesMatchLocalJournalValidation() async throws {
+    func testDuplicateRootBaselineTasksRejectWholeJournalAndBlockWrites() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let day = Calendar.current.startOfDay(for: Date()), now = day.addingTimeInterval(8 * 3600)
+        var course = Course(name: "Synthetic lesson baseline", totalMinutes: 60, startDate: day, deadline: day)
+        course.type = .lessonBasedRecorded; course.minimumBlockMinutes = 30
+        course.manualLessons = [.init(id: "a", name: "A", durationMinutes: 30), .init(id: "b", name: "B", durationMinutes: 30)]
+        let valid = try capturedEntry(now: now, courses: [course])
+        XCTAssertEqual(valid.baseline.tasks.count, 2)
+        let first = try XCTUnwrap(valid.baseline.tasks.first), second = try XCTUnwrap(valid.baseline.tasks.last)
+        for (index, tasks) in [[first, first], [first, second, first]].enumerated() {
+            var invalid = valid; invalid.baseline.tasks = tasks
+            var journal = DailyConsequenceJournal(); journal.days = [invalid]
+            let url = directory.appendingPathComponent("tasks-\(index).json")
+            let bytes = try JSONEncoder().encode(journal); try bytes.write(to: url)
+            let repository = DailyConsequenceRepository(url: url)
+            do { _ = try await repository.load(); XCTFail("Duplicate task identities must reject the whole journal") }
+            catch { XCTAssertEqual((error as? CocoaError)?.code, .coderReadCorrupt) }
+            do { try await repository.save(DailyConsequenceJournal(), sequence: 1); XCTFail("Read failure must block replacing the journal") }
+            catch { XCTAssertEqual((error as? CocoaError)?.code, .fileWriteNoPermission) }
+            XCTAssertEqual(try Data(contentsOf: url), bytes)
+        }
+    }
+
+    func testUniqueAndCrossDayTaskIDsAndDuplicateManualFallbackRemainCompatible() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let url = directory.appendingPathComponent("journal.json")
+        let calendar = Calendar.current, day = calendar.startOfDay(for: Date())
+        let now = day.addingTimeInterval(8 * 3600)
+        var course = Course(name: "Synthetic lesson baseline", totalMinutes: 60, startDate: day, deadline: day)
+        course.type = .lessonBasedRecorded; course.minimumBlockMinutes = 30
+        course.manualLessons = [.init(id: "a", name: "A", durationMinutes: 30), .init(id: "b", name: "B", durationMinutes: 30)]
+        let first = try capturedEntry(now: now, courses: [course])
+        XCTAssertEqual(first.baseline.tasks.count, 2)
+        var later = first; later.id = UUID()
+        later.date = calendar.date(byAdding: .day, value: 1, to: first.date)!
+        later.capturedAt = calendar.date(byAdding: .day, value: 1, to: first.capturedAt)!
+        var fallback = first; fallback.id = UUID()
+        fallback.date = calendar.date(byAdding: .day, value: 2, to: first.date)!
+        fallback.capturedAt = calendar.date(byAdding: .day, value: 2, to: first.capturedAt)!
+        fallback.baseline.courses[0].manualLessons![1].id = "a"
+        var journal = DailyConsequenceJournal(); journal.days = [first, later, fallback]
+        let repository = DailyConsequenceRepository(url: url)
+        try await repository.save(journal, sequence: 1)
+        let bytes = try Data(contentsOf: url)
+        let reopened = try await DailyConsequenceRepository(url: url).load()
+        XCTAssertEqual(reopened, journal)
+        XCTAssertEqual(reopened.days[0].baseline.tasks.map(\.id), reopened.days[1].baseline.tasks.map(\.id))
+        XCTAssertNotNil(try DailyConsequenceAnalyzer().forecast(reopened.days[0], fraction: 1000, horizon: 1))
+        let preserved = reopened.days[2].baseline
+        XCTAssertTrue(preserved.lessonWorkItems(for: preserved.courses[0]).isEmpty)
+        XCTAssertEqual(preserved.remainingMinutes(for: preserved.courses[0]), 60)
+        XCTAssertNotNil(try DailyConsequenceAnalyzer().forecast(reopened.days[2], fraction: 1000, horizon: 1))
+        XCTAssertEqual(try Data(contentsOf: url), bytes)
+    }
+
+    func testJavaRootCourseAndTaskIdentityTopologiesMatchLocalJournalValidation() async throws {
         let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
         let fixture = root.appendingPathComponent("Android/build/tests/daily-journal-identities.json")
         guard FileManager.default.fileExists(atPath: fixture.path) else { throw XCTSkip("Run ./Android/test.sh to generate journal identity controls") }
         let payload = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: fixture)) as? [String: Any])
         let cases = try XCTUnwrap(payload["cases"] as? [[String: Any]])
-        XCTAssertEqual(cases.count, 9)
+        XCTAssertEqual(cases.count, 18)
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
@@ -144,6 +202,8 @@ final class DailyConsequenceRepositoryTests: XCTestCase {
         for (index, row) in cases.enumerated() {
             let expected = try XCTUnwrap(row["accepted"] as? Bool), name = try XCTUnwrap(row["name"] as? String)
             let identities = try XCTUnwrap(row["days"] as? [[String]]), goal = try XCTUnwrap(row["goal"] as? Int)
+            let taskIdentities = row["tasks"] as? [[String]]
+            if let taskIdentities { XCTAssertEqual(taskIdentities.count, identities.count, name) }
             var journal = DailyConsequenceJournal()
             for (offset, ids) in identities.enumerated() {
                 let date = calendar.date(byAdding: .day, value: offset, to: day)!
@@ -153,6 +213,14 @@ final class DailyConsequenceRepositoryTests: XCTestCase {
                     var course = Course(name: "Synthetic topology", totalMinutes: 60, startDate: date, deadline: date)
                     course.id = try XCTUnwrap(UUID(uuidString: raw))
                     return course
+                }
+                if let ids = taskIdentities?[offset] {
+                    entry.baseline.tasks = try ids.enumerated().map { position, raw in
+                        let owner = try XCTUnwrap(entry.baseline.courses.first?.id)
+                        var task = ScheduledTask(courseID: owner, start: date.addingTimeInterval(Double(480 + position * 45) * 60), durationMinutes: 30)
+                        task.id = try XCTUnwrap(UUID(uuidString: raw))
+                        return task
+                    }
                 }
                 journal.days.append(entry)
             }

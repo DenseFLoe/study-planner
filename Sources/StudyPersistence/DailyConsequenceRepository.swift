@@ -21,6 +21,7 @@ public actor DailyConsequenceRepository {
                   value.days.allSatisfy({ day in
                       day.goalMinutes >= 0 && day.forecasts.count <= 5
                           && Set(day.baseline.courses.map(\.id)).count == day.baseline.courses.count
+                          && Set(day.baseline.tasks.map(\.id)).count == day.baseline.tasks.count
                   }) else { throw CocoaError(.coderReadCorrupt) }
             memory = value
             return value
