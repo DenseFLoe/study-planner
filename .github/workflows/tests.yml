@@ -31,11 +31,12 @@ jobs:
         with:
           node-version: '22'
       - name: Check browser and SSH concurrency
+        id: concurrency
         run: ./Scripts/test.sh --filter 'BrowserCourseSessionTests|CloudSyncPresentationTests|CloudSSHTests'
       - name: Run tests
         run: bash Scripts/test-ci.sh
       - name: Capture failing test backtrace
-        if: failure()
+        if: failure() && steps.concurrency.outcome == 'failure'
         timeout-minutes: 5
         run: |
           test_bin="$(swift build --show-bin-path)"

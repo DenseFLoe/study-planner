@@ -4,6 +4,9 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
+# Fast packaging/dependency checks run before toolchain builds or downloads.
+node Android/tests/crawlers.test.js
+
 json_jar="Android/tools/json.jar"
 json_url='https://repo.maven.apache.org/maven2/org/json/json/20240303/json-20240303.jar'
 json_sha256='3cf6cd6892e32e2b4c1c39e0f52f5248a2f5b37646fdfbb79a66b46b618414ed'

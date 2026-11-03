@@ -43,7 +43,12 @@ macOS 14 及以上（Apple Silicon）可使用 macOS 版本；Android 8.0 及以
 # Android：单元测试与 APK 打包
 ./Android/test.sh
 ./Android/build.sh              # 生成 dist/学习日程-安卓版.apk
+
+# 与 GitHub Actions 相同的完整验证（Swift、Java、Android、跨语言数据往返）
+bash Scripts/test-ci.sh
 ```
+
+两端共用的网站抓取脚本只维护 `Sources/StudyPlanner/Resources/` 中的一份源文件。Android 测试和打包通过 `Android/prepare-assets.py` 生成被 Git 忽略的 `Android/build/assets/`，并把学丞状态判断依赖分别打入目录、回放入口；不要在 `Android/assets/crawlers/` 中另存共享脚本副本，该目录只保留 Android 专用脚本。可先运行 `node Android/tests/crawlers.test.js` 快速检查实际打包脚本及其独立注入行为，再运行完整 CI；打包后也可传入解压出的 `assets` 目录复查成品。
 
 macOS 安装：打开 `dist/学习日程-macOS-<短SHA>.dmg`，把「学习日程」拖入 DMG 中的「应用程序」文件夹，再从「应用程序」启动。首次启动若被系统拦截，在 Finder 中右键应用选择「打开」确认。校验安装包：在 `dist` 目录执行 `shasum -a 256 -c 学习日程-macOS-<短SHA>.dmg.sha256`，输出 `OK` 表示文件完整。
 
