@@ -26,6 +26,8 @@ mkdir -p Android/build/tests
 "$JDK/bin/java" -cp Android/tools/json.jar:Android/build/tests local.studyplanner.DailyTaskOrderingTests
 "$JDK/bin/javac" -cp Android/tools/json.jar:Android/build/tests -d Android/build/tests Android/tests/DailyTaskDateIntervalTests.java
 "$JDK/bin/java" -cp Android/tools/json.jar:Android/build/tests local.studyplanner.DailyTaskDateIntervalTests
+"$JDK/bin/javac" -cp Android/tools/json.jar:Android/build/tests -d Android/build/tests Android/tests/DailyFloatingDateTests.java
+"$JDK/bin/java" -cp Android/tools/json.jar:Android/build/tests local.studyplanner.DailyFloatingDateTests
 "$JDK/bin/java" -cp Android/tools/json.jar:Android/build/tests local.studyplanner.ImportParityTests
 "$JDK/bin/java" -cp Android/tools/json.jar:Android/build/tests local.studyplanner.LessonDeletionTests
 "$JDK/bin/java" -cp Android/tools/json.jar:Android/build/tests local.studyplanner.DailyConsequenceTests

@@ -76,41 +76,23 @@ extension PlannerState {
     /// Packs whole lessons into available windows; never changes duration or another day.
     func placeDailyTasks(_ ordered: [ScheduledTask], earliest: Date, calendar: Calendar,
                          floatingPlacements: [UUID: Int]? = nil) -> [ScheduledTask]? {
+        placeDailyTasks(ordered, earliest: earliest, calendar: calendar,
+                        floatingPlacements: floatingPlacements, actualFloatingPlacements: nil)
+    }
+
+    private func placeDailyTasks(_ ordered: [ScheduledTask], earliest: Date, calendar: Calendar,
+                                floatingPlacements: [UUID: Int]?,
+                                actualFloatingPlacements: [UUID: (start: Date, end: Date)]?) -> [ScheduledTask]? {
         guard !ordered.isEmpty else { return [] }
         // Whole tasks must fit the minute-indexed day before any placement arithmetic.
         guard ordered.allSatisfy({ (1...1440).contains($0.durationMinutes) }) else { return nil }
         let day = calendar.startOfDay(for: earliest)
         let engine = ScheduleEngine(calendar: calendar)
         let windows = settings.availability.filter { $0.weekday == calendar.component(.weekday, from: day) && $0.startMinute >= 0 && $0.endMinute <= 1440 && $0.startMinute < $0.endMinute }
-        var available = Set(windows.flatMap { Array($0.startMinute..<$0.endMinute) })
+        let study = Set(windows.flatMap { Array($0.startMinute..<$0.endMinute) })
+        var available = study
         let events = fixedEvents.filter { $0.occurs(on: day, calendar: calendar) }
-        guard let placements = floatingPlacements ?? FloatingPlacement.reserve(events, studyMinutes: available) else { return nil }
-        for event in events {
-            let start = placements[event.id] ?? event.startMinute
-            available.subtract(start..<(start + event.occupiedMinutes))
-        }
-        // Clock-minute runs can be shorter or touch after a daylight-saving jump.
-        // Merge their actual Date spans before checking elapsed task durations.
-        var spans: [(start: Date, end: Date)] = []
-        var runStart: Int?
-        for minute in 0...1440 {
-            let free = minute < 1440 && available.contains(minute)
-            if free, runStart == nil { runStart = minute }
-            if !free, let first = runStart {
-                let start = engine.instant(day: day, minute: first)
-                let end = engine.instant(day: day, minute: minute)
-                if start < end { spans.append((start, end)) }
-                runStart = nil
-            }
-        }
-        var actualAvailable: [(start: Date, end: Date)] = []
-        for span in spans.sorted(by: { $0.start < $1.start }) {
-            if let last = actualAvailable.last, span.start <= last.end {
-                actualAvailable[actualAvailable.count - 1].end = max(last.end, span.end)
-            } else {
-                actualAvailable.append(span)
-            }
-        }
+        let floating = events.filter(\.isFloating)
         let moving = Set(ordered.map(\.id))
         let pause = TimeInterval(ScheduleEngine.breakMinutes * 60)
         let dayEnd = engine.instant(day: day, minute: 1440)
@@ -118,6 +100,63 @@ extension PlannerState {
         let obstacles = tasks.filter { !moving.contains($0.id) && ($0.isUnconfirmed || $0.completedMinutes > 0) }
             .map(\.retainedHistoryInterval)
             .filter { $0.end.addingTimeInterval(pause) > day && $0.start.addingTimeInterval(-pause) < dayEnd }
+        func merged(_ spans: [(start: Date, end: Date)]) -> [(start: Date, end: Date)] {
+            var result: [(start: Date, end: Date)] = []
+            for span in spans.filter({ $0.start < $0.end }).sorted(by: { $0.start < $1.start }) {
+                if let last = result.last, span.start <= last.end {
+                    result[result.count - 1].end = max(last.end, span.end)
+                } else { result.append(span) }
+            }
+            return result
+        }
+        let exact = merged(events.filter { !$0.isFloating }.map {
+            (start: engine.instant(day: day, minute: $0.startMinute), end: engine.instant(day: day, minute: $0.endMinute))
+        })
+        var reservations: [UUID: (start: Date, end: Date)] = [:]
+        if let actualFloatingPlacements {
+            reservations = actualFloatingPlacements
+            for event in events where !event.isFloating { available.subtract(event.startMinute..<event.endMinute) }
+        } else {
+            guard let placements = floatingPlacements ?? FloatingPlacement.reserve(events, studyMinutes: study) else { return nil }
+            for event in events {
+                let start = placements[event.id] ?? event.startMinute
+                available.subtract(start..<(start + event.occupiedMinutes))
+                if event.isFloating {
+                    reservations[event.id] = (engine.instant(day: day, minute: start), engine.instant(day: day, minute: start + event.occupiedMinutes))
+                }
+            }
+        }
+        func retryWithActualWitness() -> [ScheduledTask]? {
+            guard floatingPlacements == nil, actualFloatingPlacements == nil,
+                  let alternate = jointDailyFloatingPlacements(ordered, earliest: earliest, day: day,
+                      study: study, events: events, obstacles: obstacles, calendar: calendar) else { return nil }
+            return placeDailyTasks(ordered, earliest: earliest, calendar: calendar,
+                                   floatingPlacements: nil, actualFloatingPlacements: alternate)
+        }
+        let physicalOrder = (Array(reservations.values) + exact).sorted { $0.start < $1.start }
+        let valid = reservations.count == floating.count && floating.allSatisfy { event in
+            guard let span = reservations[event.id] else { return false }
+            return span.end.timeIntervalSince(span.start) >= Double(event.occupiedMinutes) * 60
+                && span.start >= engine.instant(day: day, minute: event.startMinute)
+                && span.end <= engine.instant(day: day, minute: event.endMinute)
+                && span.start >= day && span.end <= dayEnd
+        } && zip(physicalOrder, physicalOrder.dropFirst()).allSatisfy { $0.end <= $1.start }
+        guard valid else { return retryWithActualWitness() }
+        // Date mapping can shorten or reorder clock-minute runs. Subtract actual
+        // event spans from actual availability, including on the nominal fast path.
+        var actualAvailable = merged(windows.map {
+            (start: max(day, engine.instant(day: day, minute: $0.startMinute)),
+             end: min(dayEnd, engine.instant(day: day, minute: $0.endMinute)))
+        })
+        for block in merged(exact + Array(reservations.values)) {
+            actualAvailable = actualAvailable.flatMap { span -> [(start: Date, end: Date)] in
+                guard block.start < span.end, block.end > span.start else { return [span] }
+                var parts: [(start: Date, end: Date)] = []
+                if span.start < block.start { parts.append((span.start, block.start)) }
+                if block.end < span.end { parts.append((block.end, span.end)) }
+                return parts
+            }
+        }
         var result: [ScheduledTask] = []
         var cursor = earliest
         for var task in ordered {
@@ -158,11 +197,7 @@ extension PlannerState {
                 break
             }
             if !found {
-                guard floatingPlacements == nil,
-                      let alternate = jointDailyFloatingPlacements(ordered, earliest: earliest, day: day,
-                          study: Set(windows.flatMap { Array($0.startMinute..<$0.endMinute) }),
-                          events: events, obstacles: obstacles, calendar: calendar) else { return nil }
-                return placeDailyTasks(ordered, earliest: earliest, calendar: calendar, floatingPlacements: alternate)
+                return retryWithActualWitness()
             }
         }
         return result
@@ -172,7 +207,7 @@ extension PlannerState {
     /// witness is reused; the existing placement path retains every original task.
     private func jointDailyFloatingPlacements(_ ordered: [ScheduledTask], earliest: Date, day: Date,
                                               study: Set<Int>, events: [FixedEvent], obstacles: [(start: Date, end: Date)],
-                                              calendar: Calendar) -> [UUID: Int]? {
+                                              calendar: Calendar) -> [UUID: (start: Date, end: Date)]? {
         let floating = events.filter(\.isFloating)
         guard !floating.isEmpty, floating.count <= 8, ordered.count <= 600 else { return nil }
         let engine = ScheduleEngine(calendar: calendar)
@@ -211,11 +246,11 @@ extension PlannerState {
                 .init(key: day, start: minute(boundaries[$0.startMinute]), end: minute(boundaries[$0.endMinute]), minutes: $0.occupiedMinutes)
             }, floor: minute(earliest), initial: minute(day)),
               solution.tasks.count == ordered.count, solution.floatingStarts.count == floating.count else { return nil }
-        var placements: [UUID: Int] = [:]
+        var placements: [UUID: (start: Date, end: Date)] = [:]
         for (index, event) in floating.enumerated() {
             guard let start = solution.floatingStarts[index] else { return nil }
-            let date = Date(timeIntervalSinceReferenceDate: Double(start) * 60)
-            placements[event.id] = calendar.component(.hour, from: date) * 60 + calendar.component(.minute, from: date)
+            placements[event.id] = (Date(timeIntervalSinceReferenceDate: Double(start) * 60),
+                                    Date(timeIntervalSinceReferenceDate: Double(start + event.occupiedMinutes) * 60))
         }
         return placements
     }
