@@ -231,21 +231,20 @@ actor BrowserCourseSession {
         }
         stop()
         self.application = application; self.pid = pid; self.kind = kind
+        // Safari includes pinned tabs in every new window, ahead of the course tab.
+        // Capture the newly selected tab together with its window ID while creating it;
+        // neither tab 1 nor a later lookup of the front window identifies our course.
         let command = kind == .safari
-            ? "make new document with properties {URL:\(Self.appleString(target.absoluteString))}\nreturn id of front window"
-            : "set w to make new window\nset URL of active tab of w to \(Self.appleString(target.absoluteString))\nreturn id of w"
+            ? "make new document with properties {URL:\(Self.appleString(target.absoluteString))}\nset w to front window\nreturn {id of w, current tab of w}"
+            : "set w to make new window\nset URL of active tab of w to \(Self.appleString(target.absoluteString))\nreturn {id of w, active tab of w}"
         var error: NSDictionary?
         let script = NSAppleScript(source: "tell application id \(Self.appleString(application.bundleID))\n\(command)\nend tell")
-        guard let window = script?.executeAndReturnError(&error), error == nil, window.int32Value != 0 else {
+        guard let created = script?.executeAndReturnError(&error), error == nil,
+              let window = created.atIndex(1), window.int32Value != 0,
+              let ownedTab = created.atIndex(2) else {
             throw WebsiteUpdateError.message("无法创建课程更新窗口，请检查浏览器自动化权限。")
         }
-        let id = window.int32Value
-        managedWindowID = id
-        // Explicit window id is important: window indices shift when the user opens another window.
-        let selector = NSAppleScript(source: "tell application id \(Self.appleString(application.bundleID)) to return tab 1 of window id \(id)")
-        guard let ownedTab = selector?.executeAndReturnError(&error), error == nil else {
-            throw WebsiteUpdateError.message("未能连接课程更新窗口。")
-        }
+        managedWindowID = window.int32Value
         tab = ownedTab
         var submitted = false
         var submittedAt: Date?
