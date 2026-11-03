@@ -147,6 +147,7 @@ extension PlannerState {
         }
         if course.webCourse == nil, let segments = course.manualLessons, !segments.isEmpty,
            segments.allSatisfy({ !$0.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && $0.durationMinutes > 0 }) {
+            guard Set(segments.map(\.id)).count == segments.count else { return [] }
             var total = 0
             for segment in segments {
                 let sum = total.addingReportingOverflow(segment.durationMinutes)

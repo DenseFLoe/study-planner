@@ -428,9 +428,9 @@ public final class Planner {
             if(ceilMinutes(total)!=c.optInt("totalMinutes"))return new ArrayList<>();
             baseline=Math.max(0,recordedCompleted(s,c)-(ceilMinutes(total)-ceilMinutes(left)));
         }else if(manual!=null&&manual.length()>0){
-            int total=0;
+            int total=0;Set<String> ids=new HashSet<>();
             for(JSONObject l:list(manual)){
-                int n=l.optInt("durationMinutes");if(n<=0)return new ArrayList<>();
+                int n=l.optInt("durationMinutes");if(n<=0||!ids.add(l.optString("id")))return new ArrayList<>();
                 try{total=Math.addExact(total,n);}catch(ArithmeticException error){return new ArrayList<>();}
                 out.add(new Work(n,l.optString("id"),l.optString("name")));
             }
