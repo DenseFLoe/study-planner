@@ -146,8 +146,14 @@ extension PlannerState {
             return ordered(mergedWorkItems(for: course, sources: sources), for: course)
         }
         if course.webCourse == nil, let segments = course.manualLessons, !segments.isEmpty,
-           segments.allSatisfy({ !$0.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && $0.durationMinutes > 0 }),
-           segments.reduce(0, { $0 + $1.durationMinutes }) == course.totalMinutes {
+           segments.allSatisfy({ !$0.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && $0.durationMinutes > 0 }) {
+            var total = 0
+            for segment in segments {
+                let sum = total.addingReportingOverflow(segment.durationMinutes)
+                guard !sum.overflow else { return [] }
+                total = sum.partialValue
+            }
+            guard total == course.totalMinutes else { return [] }
             var items = segments.map {
                 LessonWorkItem(id: $0.id, name: $0.name, subject: "", stage: "", chapter: "",
                                durationMinutes: $0.durationMinutes, remainingMinutes: $0.durationMinutes)

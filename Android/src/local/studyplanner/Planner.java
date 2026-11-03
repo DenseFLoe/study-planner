@@ -428,7 +428,12 @@ public final class Planner {
             if(ceilMinutes(total)!=c.optInt("totalMinutes"))return new ArrayList<>();
             baseline=Math.max(0,recordedCompleted(s,c)-(ceilMinutes(total)-ceilMinutes(left)));
         }else if(manual!=null&&manual.length()>0){
-            int total=0;for(JSONObject l:list(manual)){int n=l.optInt("durationMinutes");if(n<=0)return new ArrayList<>();total+=n;out.add(new Work(n,l.optString("id"),l.optString("name")));}
+            int total=0;
+            for(JSONObject l:list(manual)){
+                int n=l.optInt("durationMinutes");if(n<=0)return new ArrayList<>();
+                try{total=Math.addExact(total,n);}catch(ArithmeticException error){return new ArrayList<>();}
+                out.add(new Work(n,l.optString("id"),l.optString("name")));
+            }
             if(total!=c.optInt("totalMinutes"))return new ArrayList<>();
             baseline=Math.max(0,c.optInt("initialCompletedMinutes"));
         }else return out;
