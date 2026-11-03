@@ -68,10 +68,24 @@ public final class SyncLedger {
     }
     public JSONArray changes(long after)throws Exception{if(after<0||after>sequence())throw new IllegalArgumentException("游标无效，请重新配对");List<JSONObject> out=new ArrayList<>();Iterator<String> it=records().keys();while(it.hasNext()){JSONObject r=records().getJSONObject(it.next());if(r.getLong("sequence")>after)out.add(r);}out.sort(Comparator.comparingLong(r->r.optLong("sequence")));return new JSONArray(out);}
     public void merge(JSONArray incoming)throws Exception{for(int i=0;i<incoming.length();i++)mergeRecord(incoming.getJSONObject(i));}
+    static long wireInteger(JSONObject row,String key)throws Exception{
+        Object number=row.get(key);
+        if(!(number instanceof Number))throw new IllegalArgumentException("同步整数类型无效");
+        try{return new java.math.BigDecimal(number.toString()).longValueExact();}
+        catch(NumberFormatException|ArithmeticException error){throw new IllegalArgumentException("同步整数超出范围或含小数",error);}
+    }
     void mergeRecord(JSONObject item)throws Exception{
-        JSONObject r=shallowCopy(item);String kind=r.getString("kind"),id=r.getString("id");long v=r.getLong("version");
-        if(!Arrays.asList(KINDS).contains(kind)||v<=0||v>Long.MAX_VALUE-1000000||r.optLong("modifiedAt")<0||r.optLong("modifiedAt")>Long.MAX_VALUE-1000000||r.getString("device").isEmpty()||r.getString("device").length()>64||r.getString("payload").length()>1400000)throw new IllegalArgumentException("同步记录无效");
+        JSONObject r=shallowCopy(item);
+        // Android's JSONObject string getters coerce non-strings, unlike desktop JSON-java.
+        for(String field:new String[]{"kind","id","device","payload"})if(!(r.get(field) instanceof String))throw new IllegalArgumentException("同步字符串类型无效");
+        String kind=r.getString("kind"),id=r.getString("id"),encoded=r.getString("payload");
+        long v=wireInteger(r,"version"),modified=r.has("modifiedAt")?wireInteger(r,"modifiedAt"):0;
+        wireInteger(r,"sequence");
+        if(!Arrays.asList(KINDS).contains(kind)||v<=0||v>=Long.MAX_VALUE-1000000||modified<0||modified>=Long.MAX_VALUE-1000000||!(r.get("deleted") instanceof Boolean)||r.getString("device").isEmpty()||r.getString("device").length()>64||encoded.length()>1400000)throw new IllegalArgumentException("同步记录无效");
         if(kind.equals("settings")?!id.equals("settings"):!UUID.fromString(id).toString().toUpperCase(Locale.ROOT).equals(id))throw new IllegalArgumentException("同步 ID 无效");
+        // Swift decodes every payload as Data, even for unrelated historical tombstones.
+        // Java's decoder alone also accepts missing padding, which Swift rejects.
+        if(encoded.length()%4!=0||Base64.getDecoder().decode(encoded).length>1_000_000)throw new IllegalArgumentException("同步负载编码或大小无效");
         value.put("clock",Math.max(value.getLong("clock"),v));JSONObject old=records().optJSONObject(key(r));if(old!=null&&!wins(r,old))return;long seq=sequence()+1;value.put("sequence",seq);r.put("sequence",seq);records().put(key(r),r);
     }
     public JSONObject materialize()throws Exception{

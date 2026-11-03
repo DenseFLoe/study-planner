@@ -93,6 +93,14 @@ public final class CloudServerTests {
         check(server.revision==revision,"duplicate task confirmation committed a cloud version");
         check(before.equals(SyncLedger.canonical(server.loadLedger().materialize())),"rejected duplicate changed cloud progress");
     }
+    static void malformedTombstoneWireRegression(CloudSyncServer server,String token)throws Exception{
+        long revision=server.revision;String before=SyncLedger.canonical(server.loadLedger().materialize());
+        for(Map.Entry<String,JSONObject> sample:SyncRecordValidationTests.invalidRows().entrySet()){
+            request(server,token,"/cloud/snapshot",SyncRecordValidationTests.packedWithRow(sample.getValue()),400);
+            check(server.revision==revision,"malformed tombstone committed: "+sample.getKey());
+        }
+        check(before.equals(SyncLedger.canonical(server.loadLedger().materialize())),"malformed wire changed cloud state");
+    }
     public static void main(String[] args)throws Exception{
         Path directory=Files.createTempDirectory("planner-cloud-server-");String token=UUID.randomUUID().toString()+UUID.randomUUID();
         CloudSyncServer server=new CloudSyncServer(directory,"127.0.0.1",0,token);server.start();
@@ -112,6 +120,7 @@ public final class CloudServerTests {
             a.get();b.get();clients.shutdown();
             JSONObject merged=server.loadLedger().materialize();check(merged.getJSONArray("courses").length()==2,"offline addition lost");check(merged.getJSONArray("completions").length()==1,"offline confirmation lost");
             duplicateCompletionRegression(server,token);
+            malformedTombstoneWireRegression(server,token);
             long tombstoneRevision=server.revision;String beforeTombstone=SyncLedger.canonical(server.loadLedger().materialize());
             request(server,token,"/cloud/snapshot",packed(SyncExchangeTests.mismatchedTaskTombstoneFixture()),400);
             check(server.revision==tombstoneRevision,"mismatched task tombstone committed a cloud version");
