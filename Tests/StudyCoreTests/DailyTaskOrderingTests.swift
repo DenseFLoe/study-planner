@@ -286,7 +286,7 @@ final class DailyTaskOrderingTests: XCTestCase {
             for (first, second) in zip(state.tasks, state.tasks.dropFirst()) {
                 XCTAssertGreaterThanOrEqual(second.start.timeIntervalSince(first.end), 900)
             }
-            XCTAssertNotNil(FloatingPlacement.reserve(state.fixedEvents + [state.immediateStudyReservation(pinned, calendar: calendar)]))
+            XCTAssertNotNil(FloatingPlacement.reserve(state.fixedEvents + [try XCTUnwrap(state.immediateStudyReservation(pinned, calendar: calendar).nominalEvent)]))
         }
         state = try JSONDecoder().decode(PlannerState.self, from: JSONEncoder().encode(state))
         _ = state.replan(now: date(9, minute: 5), calendar: calendar)

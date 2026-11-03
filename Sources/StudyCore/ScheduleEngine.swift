@@ -107,7 +107,8 @@ public struct ScheduleEngine: Sendable {
             if !valid { diagnostics.append("固定事项「\($0.title)」的时间无效，请修改。") }
             return valid
         }
-        if let immediate { validEvents.append(state.immediateStudyReservation(immediate, calendar: calendar)) }
+        let immediateReservation = immediate.map { state.immediateStudyReservation($0, calendar: calendar) }
+        if let nominal = immediateReservation?.nominalEvent { validEvents.append(nominal) }
         let availability = state.settings.availability.filter {
             let valid = (1...7).contains($0.weekday) && $0.startMinute >= 0 && $0.endMinute <= 1440 && $0.endMinute > $0.startMinute
             if !valid { diagnostics.append("部分可学习时间设置无效，已忽略。") }
@@ -132,8 +133,11 @@ public struct ScheduleEngine: Sendable {
                 Span(start: max(nextMinute, instant(day: day, minute: $0.startMinute)), end: instant(day: day, minute: $0.endMinute))
             }
             let events = validEvents.filter { $0.occurs(on: day, calendar: calendar) }
-            let exact = events.filter { !$0.isFloating }.map {
+            var exact = events.filter { !$0.isFloating }.map {
                 Span(start: instant(day: day, minute: $0.startMinute), end: instant(day: day, minute: $0.endMinute))
+            }
+            if let pin = immediateReservation, calendar.isDate(pin.start, inSameDayAs: day) {
+                exact.append(.init(start: pin.start, end: pin.end))
             }
             let regions = merged(events.filter(\.isFloating).map {
                 Span(start: instant(day: day, minute: $0.startMinute), end: instant(day: day, minute: $0.endMinute))

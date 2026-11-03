@@ -6,6 +6,39 @@ public struct ImmediateStudyRequest: Codable, Equatable, Sendable {
     public var continuesLesson: Bool? = nil
 }
 
+/// A pinned task always has an actual interval. Some repeated-hour intervals
+/// cannot also be expressed by one same-day pair of clock-minute bounds.
+struct ImmediateStudyReservation: Sendable {
+    var start: Date
+    var end: Date
+    var nominalEvent: FixedEvent?
+}
+
+private func mergedImmediateIntervals(_ spans: [(start: Date, end: Date)]) -> [(start: Date, end: Date)] {
+    var result: [(start: Date, end: Date)] = []
+    for span in spans.filter({ $0.start < $0.end }).sorted(by: { $0.start < $1.start }) {
+        if let last = result.last, span.start <= last.end {
+            result[result.count - 1].end = max(last.end, span.end)
+        } else { result.append(span) }
+    }
+    return result
+}
+
+private func subtractImmediateIntervals(_ blocks: [(start: Date, end: Date)],
+                                        from spans: [(start: Date, end: Date)]) -> [(start: Date, end: Date)] {
+    var result = mergedImmediateIntervals(spans)
+    for block in mergedImmediateIntervals(blocks) {
+        result = result.flatMap { span -> [(start: Date, end: Date)] in
+            guard block.start < span.end, block.end > span.start else { return [span] }
+            var parts: [(start: Date, end: Date)] = []
+            if span.start < block.start { parts.append((span.start, block.start)) }
+            if block.end < span.end { parts.append((block.end, span.end)) }
+            return parts
+        }
+    }
+    return result
+}
+
 public enum ImmediateStudyError: Error, LocalizedError, Equatable {
     case unavailable, invalidDate, noSpace, noFeasiblePlan, pinnedTask
 
@@ -48,15 +81,11 @@ extension PlannerState {
         // draft is not evidence of study and must not impose a rest period.
         let minute = calendar.component(.hour, from: start) * 60 + calendar.component(.minute, from: start)
         try next.recordActualStudyStart(minute: minute, now: start, calendar: calendar)
-        let available = Set(settings.availability.filter {
-            $0.weekday == calendar.component(.weekday, from: day) && $0.startMinute >= 0 &&
-            $0.endMinute <= 1440 && $0.startMinute < $0.endMinute
-        }.flatMap { Array($0.startMinute..<$0.endMinute) })
-        let exact = fixedEvents.filter { !$0.isFloating && $0.occurs(on: day, calendar: calendar) }
-        var stop = minute
-        while stop < 1440, available.contains(stop),
-              !exact.contains(where: { $0.startMinute <= stop && stop < $0.endMinute }) { stop += 1 }
-        let maximum = min(lesson.remainingMinutes, stop - minute)
+        // Preserve the explicitly chosen occurrence during a repeated clock hour.
+        next.settings.actualStudyStart = start
+        guard let free = next.immediateStudyFreeIntervals(on: day, calendar: calendar)
+            .first(where: { $0.start <= start && start < $0.end }) else { throw ImmediateStudyError.noSpace }
+        let maximum = min(lesson.remainingMinutes, 1440, Int(floor(free.end.timeIntervalSince(start) / 60)))
         guard maximum > 0 else { throw ImmediateStudyError.noSpace }
         func fittingTask(_ duration: Int) -> ScheduledTask? {
             let task = ScheduledTask(courseID: course.id, start: start, durationMinutes: duration,
@@ -94,7 +123,7 @@ extension PlannerState {
     /// The first reserved segment expires at its end or confirmation; hard constraints win.
     func validImmediateStudyTask(now: Date, calendar: Calendar) -> ScheduledTask? {
         guard let task = settings.immediateStudy?.task, task.isUnconfirmed,
-              task.durationMinutes > 0, task.start < task.end, task.end > now,
+              (1...1440).contains(task.durationMinutes), task.start < task.end, task.end > now,
               task.start.timeIntervalSince(now) < 60,
               !tasks.contains(where: { $0.id == task.id && !$0.isUnconfirmed }),
               let course = immediateStudyCourses.first(where: { $0.id == task.courseID }),
@@ -107,15 +136,9 @@ extension PlannerState {
               day >= calendar.startOfDay(for: course.startDate), day <= calendar.startOfDay(for: course.deadline),
               task.end <= engine.instant(day: day, minute: 1440),
               task.start >= (settings.actualStudyStart(on: now, calendar: calendar) ?? day) else { return nil }
-        let first = calendar.component(.hour, from: task.start) * 60 + calendar.component(.minute, from: task.start)
-        let available = Set(settings.availability.filter {
-            $0.weekday == calendar.component(.weekday, from: day) && $0.startMinute >= 0 &&
-            $0.endMinute <= 1440 && $0.startMinute < $0.endMinute
-        }.flatMap { Array($0.startMinute..<$0.endMinute) })
-        guard (first..<(first + task.durationMinutes)).allSatisfy({ available.contains($0) }) else { return nil }
-        let events = fixedEvents.filter { $0.occurs(on: day, calendar: calendar) }
-        guard !events.contains(where: { !$0.isFloating && first < $0.endMinute && first + task.durationMinutes > $0.startMinute }),
-              FloatingPlacement.reserve(events + [immediateStudyReservation(task, calendar: calendar)], studyMinutes: available) != nil else { return nil }
+        guard immediateStudyFreeIntervals(on: day, calendar: calendar).contains(where: {
+            task.start >= $0.start && task.end <= $0.end
+        }) else { return nil }
         let pause = Double(ScheduleEngine.breakMinutes * 60)
         let anchored = settings.actualStudyStart(on: now, calendar: calendar) != nil
         let history = tasks.filter {
@@ -126,12 +149,87 @@ extension PlannerState {
             let span = $0.retainedHistoryInterval
             return task.start < span.end.addingTimeInterval(pause) && task.end > span.start.addingTimeInterval(-pause)
         }) else { return nil }
+        guard immediateFloatingEventsFit(task, day: day, calendar: calendar) else { return nil }
         return task
     }
 
-    func immediateStudyReservation(_ task: ScheduledTask, calendar: Calendar) -> FixedEvent {
+    private func immediateStudyFreeIntervals(on day: Date, calendar: Calendar) -> [(start: Date, end: Date)] {
+        let engine = ScheduleEngine(calendar: calendar), end = engine.instant(day: day, minute: 1440)
+        let study = settings.availability.filter {
+            $0.weekday == calendar.component(.weekday, from: day) && $0.startMinute >= 0 &&
+            $0.endMinute <= 1440 && $0.startMinute < $0.endMinute
+        }.map {
+            (start: max(day, engine.instant(day: day, minute: $0.startMinute)),
+             end: min(end, engine.instant(day: day, minute: $0.endMinute)))
+        }
+        let exact = fixedEvents.filter { !$0.isFloating && $0.occurs(on: day, calendar: calendar) }.map {
+            (start: engine.instant(day: day, minute: $0.startMinute), end: engine.instant(day: day, minute: $0.endMinute))
+        }
+        return subtractImmediateIntervals(exact, from: study)
+    }
+
+    private func immediateFloatingEventsFit(_ task: ScheduledTask, day: Date, calendar: Calendar) -> Bool {
+        let events = fixedEvents.filter { $0.occurs(on: day, calendar: calendar) }
+        let floating = events.filter(\.isFloating)
+        guard !floating.isEmpty else { return true }
+        let engine = ScheduleEngine(calendar: calendar), dayEnd = engine.instant(day: day, minute: 1440)
+        let pin = immediateStudyReservation(task, calendar: calendar)
+        let exact = mergedImmediateIntervals(events.filter { !$0.isFloating }.map {
+            (start: engine.instant(day: day, minute: $0.startMinute), end: engine.instant(day: day, minute: $0.endMinute))
+        } + [(pin.start, pin.end)])
+        let available = Set(settings.availability.filter {
+            $0.weekday == calendar.component(.weekday, from: day) && $0.startMinute >= 0 &&
+            $0.endMinute <= 1440 && $0.startMinute < $0.endMinute
+        }.flatMap { Array($0.startMinute..<$0.endMinute) })
+        func valid(_ spans: [UUID: (start: Date, end: Date)]) -> Bool {
+            let physicalOrder = (Array(spans.values) + exact).sorted { $0.start < $1.start }
+            return spans.count == floating.count && floating.allSatisfy { event in
+                guard let span = spans[event.id] else { return false }
+                return span.end.timeIntervalSince(span.start) >= Double(event.occupiedMinutes) * 60
+                    && span.start >= engine.instant(day: day, minute: event.startMinute)
+                    && span.end <= engine.instant(day: day, minute: event.endMinute)
+                    && span.start >= day && span.end <= dayEnd
+            } && zip(physicalOrder, physicalOrder.dropFirst()).allSatisfy { $0.end <= $1.start }
+        }
+        if let nominal = FloatingPlacement.reserve(events + (pin.nominalEvent.map { [$0] } ?? []), studyMinutes: available) {
+            var spans: [UUID: (start: Date, end: Date)] = [:]
+            for event in floating {
+                guard let start = nominal[event.id] else { return false }
+                spans[event.id] = (engine.instant(day: day, minute: start), engine.instant(day: day, minute: start + event.occupiedMinutes))
+            }
+            if valid(spans) { return true }
+        }
+        func minute(_ date: Date) -> Int { Int(ceil(date.timeIntervalSinceReferenceDate / 60)) }
+        let beginning = minute(day), end = minute(dayEnd)
+        let study = immediateStudyFreeIntervals(on: day, calendar: calendar)
+        let eventFree = subtractImmediateIntervals(exact, from: [(day, dayEnd)])
+        guard let solution = ScheduleFeasibilitySearch.find(
+            queues: [.init(courseID: task.courseID, start: beginning, end: end, work: [])],
+            study: study.map { .init(start: minute($0.start), end: Int(floor($0.end.timeIntervalSinceReferenceDate / 60))) },
+            eventWindows: eventFree.map { .init(start: minute($0.start), end: Int(floor($0.end.timeIntervalSinceReferenceDate / 60))) },
+            floating: floating.map { .init(key: day, start: minute(engine.instant(day: day, minute: $0.startMinute)),
+                                          end: minute(engine.instant(day: day, minute: $0.endMinute)), minutes: $0.occupiedMinutes) },
+            floor: beginning, initial: beginning), solution.tasks.isEmpty, solution.floatingStarts.count == floating.count else { return false }
+        var spans: [UUID: (start: Date, end: Date)] = [:]
+        for (index, event) in floating.enumerated() {
+            guard let start = solution.floatingStarts[index] else { return false }
+            spans[event.id] = (Date(timeIntervalSinceReferenceDate: Double(start) * 60),
+                               Date(timeIntervalSinceReferenceDate: Double(start + event.occupiedMinutes) * 60))
+        }
+        return valid(spans)
+    }
+
+    func immediateStudyReservation(_ task: ScheduledTask, calendar: Calendar) -> ImmediateStudyReservation {
+        let day = calendar.startOfDay(for: task.start), engine = ScheduleEngine(calendar: calendar)
+        let dayEnd = engine.instant(day: day, minute: 1440)
         let first = calendar.component(.hour, from: task.start) * 60 + calendar.component(.minute, from: task.start)
-        return FixedEvent(title: "立即学习", startMinute: first, endMinute: first + task.durationMinutes,
-                          startDate: task.start, endDate: task.start)
+        let last = task.end == dayEnd ? 1440 : calendar.component(.hour, from: task.end) * 60 + calendar.component(.minute, from: task.end)
+        var reservation = ImmediateStudyReservation(start: task.start, end: task.end, nominalEvent: nil)
+        if first < last, task.start >= day, task.end <= dayEnd,
+           engine.instant(day: day, minute: first) == task.start, engine.instant(day: day, minute: last) == task.end {
+            reservation.nominalEvent = FixedEvent(title: "立即学习", startMinute: first, endMinute: last,
+                                                 startDate: day, endDate: day)
+        }
+        return reservation
     }
 }

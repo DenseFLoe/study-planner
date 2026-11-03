@@ -56,13 +56,17 @@ extension PlannerState {
         var reordered = original
         reordered.swapAt(a, b)
         var context = self
+        var hardReservations: [(start: Date, end: Date)] = []
         if let immediate, calendar.isDate(immediate.start, inSameDayAs: day) {
             // Other swaps must keep both the pinned slot and the floating-event
             // placement that makes it possible. Its history also reserves rest.
             reordered.removeAll { $0.id == immediate.id }
-            context.fixedEvents.append(immediateStudyReservation(immediate, calendar: calendar))
+            let reservation = immediateStudyReservation(immediate, calendar: calendar)
+            hardReservations.append((reservation.start, reservation.end))
+            if let nominal = reservation.nominalEvent { context.fixedEvents.append(nominal) }
         }
-        guard let placed = context.placeDailyTasks(reordered, earliest: original[0].start, calendar: calendar) else {
+        guard let placed = context.placeDailyTasks(reordered, earliest: original[0].start, calendar: calendar,
+            floatingPlacements: nil, actualFloatingPlacements: nil, hardReservations: hardReservations) else {
             throw DailyTaskOrderError.noSpace
         }
         let byID = Dictionary(uniqueKeysWithValues: placed.map { ($0.id, $0) })
@@ -77,12 +81,13 @@ extension PlannerState {
     func placeDailyTasks(_ ordered: [ScheduledTask], earliest: Date, calendar: Calendar,
                          floatingPlacements: [UUID: Int]? = nil) -> [ScheduledTask]? {
         placeDailyTasks(ordered, earliest: earliest, calendar: calendar,
-                        floatingPlacements: floatingPlacements, actualFloatingPlacements: nil)
+                        floatingPlacements: floatingPlacements, actualFloatingPlacements: nil, hardReservations: [])
     }
 
     private func placeDailyTasks(_ ordered: [ScheduledTask], earliest: Date, calendar: Calendar,
                                 floatingPlacements: [UUID: Int]?,
-                                actualFloatingPlacements: [UUID: (start: Date, end: Date)]?) -> [ScheduledTask]? {
+                                actualFloatingPlacements: [UUID: (start: Date, end: Date)]?,
+                                hardReservations: [(start: Date, end: Date)]) -> [ScheduledTask]? {
         guard !ordered.isEmpty else { return [] }
         // Whole tasks must fit the minute-indexed day before any placement arithmetic.
         guard ordered.allSatisfy({ (1...1440).contains($0.durationMinutes) }) else { return nil }
@@ -111,7 +116,7 @@ extension PlannerState {
         }
         let exact = merged(events.filter { !$0.isFloating }.map {
             (start: engine.instant(day: day, minute: $0.startMinute), end: engine.instant(day: day, minute: $0.endMinute))
-        })
+        } + hardReservations)
         var reservations: [UUID: (start: Date, end: Date)] = [:]
         if let actualFloatingPlacements {
             reservations = actualFloatingPlacements
@@ -131,7 +136,7 @@ extension PlannerState {
                   let alternate = jointDailyFloatingPlacements(ordered, earliest: earliest, day: day,
                       study: study, events: events, obstacles: obstacles, calendar: calendar) else { return nil }
             return placeDailyTasks(ordered, earliest: earliest, calendar: calendar,
-                                   floatingPlacements: nil, actualFloatingPlacements: alternate)
+                                   floatingPlacements: nil, actualFloatingPlacements: alternate, hardReservations: hardReservations)
         }
         let physicalOrder = (Array(reservations.values) + exact).sorted { $0.start < $1.start }
         let valid = reservations.count == floating.count && floating.allSatisfy { event in
