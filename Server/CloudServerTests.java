@@ -195,6 +195,23 @@ public final class CloudServerTests {
             check(before.equals(SyncLedger.canonical(server.loadLedger().materialize())),"invalid course number changed cloud state");
         }
     }
+    static void taskNumberRegression(CloudSyncServer server,String token)throws Exception{
+        long revision=server.revision;String before=SyncLedger.canonical(server.loadLedger().materialize());
+        for(String field:new String[]{"durationMinutes","completedMinutes"})for(String kind:new String[]{"live","draftTombstone","confirmedTombstone"}){
+            int ordinary=field.equals("durationMinutes")?60:20;
+            for(Object value:new Object[]{4294967296L+ordinary,ordinary+0.5,String.valueOf(ordinary),true,JSONObject.NULL,null}){
+                SyncLedger invalid=copy(server.loadLedger());JSONObject record=invalid.materialize().getJSONArray("completions").getJSONObject(0);
+                JSONObject row=invalid.records().getJSONObject("tasks/"+record.getString("taskID")),task=SyncLedger.payload(row);
+                if(kind.equals("draftTombstone")){task.remove("confirmedAt");task.put("completedMinutes",0).put("status","planned");}
+                if(value==null)task.remove(field);else task.put(field,value);
+                row.put("payload",Base64.getEncoder().encodeToString(task.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8)))
+                    .put("deleted",!kind.equals("live")).put("version",row.getLong("version")+1).put("modifiedAt",row.optLong("modifiedAt")+1);
+                request(server,token,"/cloud/snapshot",packed(invalid),400);
+                check(server.revision==revision,"invalid task number committed: "+field+", "+kind);
+                check(before.equals(SyncLedger.canonical(server.loadLedger().materialize())),"invalid task number changed cloud state");
+            }
+        }
+    }
     static void malformedTombstoneWireRegression(CloudSyncServer server,String token)throws Exception{
         long revision=server.revision;String before=SyncLedger.canonical(server.loadLedger().materialize());
         for(Map.Entry<String,JSONObject> sample:SyncRecordValidationTests.invalidRows().entrySet()){
@@ -249,6 +266,7 @@ public final class CloudServerTests {
             completionNumberRegression(server,token);
             completionTotalRegression(server,token);
             courseNumberRegression(server,token);
+            taskNumberRegression(server,token);
             malformedTombstoneWireRegression(server,token);
             long tombstoneRevision=server.revision;String beforeTombstone=SyncLedger.canonical(server.loadLedger().materialize());
             request(server,token,"/cloud/snapshot",packed(SyncExchangeTests.mismatchedTaskTombstoneFixture()),400);

@@ -51,6 +51,10 @@ public final class Planner {
         try{return new java.math.BigDecimal(value.toString()).intValueExact();}
         catch(NumberFormatException|ArithmeticException error){throw new IllegalArgumentException("学习进度超出整数范围或含小数",error);}
     }
+    static void validateTaskNumbers(JSONObject task){
+        exactProgressInteger(task.opt("durationMinutes"));
+        exactProgressInteger(task.opt("completedMinutes"));
+    }
     static int completionMinutes(JSONObject record){
         int minutes=exactProgressInteger(record.opt("minutes"));
         if(minutes<0)throw new IllegalArgumentException("完成时长不能为负数");
@@ -287,7 +291,7 @@ public final class Planner {
         if(deadline.isBefore(start)||deadline.isAfter(day(now).plusYears(10)))throw new IllegalArgumentException("截止日期须晚于或等于开始日期，且在未来十年以内");
         if(course.optInt("minimumBlockMinutes")<0||course.optInt("minimumBlockMinutes")>1440)throw new IllegalArgumentException("最小时间块无效");
     }
-    public static void validate(JSONObject s)throws Exception{if(s.getInt("schemaVersion")!=1)throw new IllegalArgumentException("不支持此备份版本");for(String key:new String[]{"courses","fixedEvents","tasks","completions"}){Set<String> ids=new HashSet<>();for(JSONObject o:list(s.getJSONArray(key)))if(o==null||!ids.add(o.getString("id")))throw new IllegalArgumentException("数据缺少 ID 或重复");}validateCourseTotals(s.getJSONArray("courses"),Collections.emptySet());validateRecordedProgress(s,Collections.emptySet());JSONObject settings=s.getJSONObject("settings");if(settings.getInt("minimumScheduleUnit")<1)throw new IllegalArgumentException("最小时间块无效");migrateLegacyAvailabilityIDs(s);Set<String> availabilityIDs=new HashSet<>();for(JSONObject a:list(settings.getJSONArray("availability")))if(a==null||!canonicalID(a.optString("id"))||!availabilityIDs.add(a.getString("id"))||a.getInt("weekday")<1||a.getInt("weekday")>7||a.getInt("startMinute")<0||a.getInt("endMinute")>1440||a.getInt("startMinute")>=a.getInt("endMinute"))throw new IllegalArgumentException("可学习时段数据无效");for(JSONObject t:list(s.getJSONArray("tasks")))if(course(s,t.getString("courseID"))==null||t.getInt("durationMinutes")<=0||!hasValidPlanningInterval(t))throw new IllegalArgumentException("任务数据不完整或时间区间无效");}
+    public static void validate(JSONObject s)throws Exception{if(s.getInt("schemaVersion")!=1)throw new IllegalArgumentException("不支持此备份版本");for(String key:new String[]{"courses","fixedEvents","tasks","completions"}){Set<String> ids=new HashSet<>();for(JSONObject o:list(s.getJSONArray(key)))if(o==null||!ids.add(o.getString("id")))throw new IllegalArgumentException("数据缺少 ID 或重复");}for(JSONObject task:list(s.getJSONArray("tasks")))validateTaskNumbers(task);validateCourseTotals(s.getJSONArray("courses"),Collections.emptySet());validateRecordedProgress(s,Collections.emptySet());JSONObject settings=s.getJSONObject("settings");if(settings.getInt("minimumScheduleUnit")<1)throw new IllegalArgumentException("最小时间块无效");migrateLegacyAvailabilityIDs(s);Set<String> availabilityIDs=new HashSet<>();for(JSONObject a:list(settings.getJSONArray("availability")))if(a==null||!canonicalID(a.optString("id"))||!availabilityIDs.add(a.getString("id"))||a.getInt("weekday")<1||a.getInt("weekday")>7||a.getInt("startMinute")<0||a.getInt("endMinute")>1440||a.getInt("startMinute")>=a.getInt("endMinute"))throw new IllegalArgumentException("可学习时段数据无效");for(JSONObject t:list(s.getJSONArray("tasks")))if(course(s,t.getString("courseID"))==null||t.getInt("durationMinutes")<=0||!hasValidPlanningInterval(t))throw new IllegalArgumentException("任务数据不完整或时间区间无效");}
     public static final class EventConflict {
         public final String eventID,title,reason;
         public final LocalDate date;
