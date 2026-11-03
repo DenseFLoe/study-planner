@@ -93,6 +93,30 @@ public final class CloudServerTests {
         check(server.revision==revision,"duplicate task confirmation committed a cloud version");
         check(before.equals(SyncLedger.canonical(server.loadLedger().materialize())),"rejected duplicate changed cloud progress");
     }
+    static void completionCourseRegression(CloudSyncServer server,String token)throws Exception{
+        long revision=server.revision;String before=SyncLedger.canonical(server.loadLedger().materialize());
+        for(String taskKind:new String[]{"live","draftTombstone","confirmedTombstone"}){
+            SyncLedger invalid=copy(server.loadLedger());JSONObject state=invalid.materialize();
+            JSONObject record=CourseTools.copy(state.getJSONArray("completions").getJSONObject(0));
+            String other=null;for(JSONObject course:Planner.list(state.getJSONArray("courses")))
+                if(!course.getString("id").equals(record.getString("courseID"))){other=course.getString("id");break;}
+            if(other==null)throw new AssertionError("course mismatch fixture needs two courses");
+            record.put("courseID",other);
+            JSONObject row=invalid.records().getJSONObject("completions/"+record.getString("id"));
+            row.put("payload",Base64.getEncoder().encodeToString(record.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8)))
+                .put("version",row.getLong("version")+1).put("modifiedAt",row.optLong("modifiedAt")+1);
+            if(!taskKind.equals("live")){
+                JSONObject taskRow=invalid.records().getJSONObject("tasks/"+record.getString("taskID"));
+                JSONObject task=SyncLedger.payload(taskRow);
+                if(taskKind.equals("draftTombstone")){task.remove("confirmedAt");task.put("completedMinutes",0).put("status","planned");}
+                taskRow.put("deleted",true).put("version",taskRow.getLong("version")+1).put("modifiedAt",taskRow.optLong("modifiedAt")+1)
+                    .put("payload",Base64.getEncoder().encodeToString(task.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8)));
+            }
+            request(server,token,"/cloud/snapshot",packed(invalid),400);
+            check(server.revision==revision,"course-mismatched completion committed: "+taskKind);
+            check(before.equals(SyncLedger.canonical(server.loadLedger().materialize())),"course-mismatched completion changed cloud progress: "+taskKind);
+        }
+    }
     static void malformedTombstoneWireRegression(CloudSyncServer server,String token)throws Exception{
         long revision=server.revision;String before=SyncLedger.canonical(server.loadLedger().materialize());
         for(Map.Entry<String,JSONObject> sample:SyncRecordValidationTests.invalidRows().entrySet()){
@@ -142,6 +166,7 @@ public final class CloudServerTests {
             a.get();b.get();clients.shutdown();
             JSONObject merged=server.loadLedger().materialize();check(merged.getJSONArray("courses").length()==2,"offline addition lost");check(merged.getJSONArray("completions").length()==1,"offline confirmation lost");
             duplicateCompletionRegression(server,token);
+            completionCourseRegression(server,token);
             malformedTombstoneWireRegression(server,token);
             long tombstoneRevision=server.revision;String beforeTombstone=SyncLedger.canonical(server.loadLedger().materialize());
             request(server,token,"/cloud/snapshot",packed(SyncExchangeTests.mismatchedTaskTombstoneFixture()),400);

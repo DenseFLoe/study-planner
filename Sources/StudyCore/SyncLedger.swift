@@ -84,6 +84,14 @@ public struct SyncLedger: Codable, Sendable {
     }
     public mutating func capture(_ state: PlannerState, now: Date = Date()) throws {
         var state = state
+        let archived = Set(state.courses.filter(\.isArchived).map(\.id))
+        // Keep task ownership evidence until retained confirmations are checked,
+        // even when archiving will remove the associated task from this snapshot.
+        let taskCourses = Dictionary(state.tasks.map { ($0.id, $0.courseID) },
+                                     uniquingKeysWith: { _, latest in latest })
+        guard state.completions.allSatisfy({ record in
+            archived.contains(record.courseID) || (taskCourses[record.taskID].map { $0 == record.courseID } ?? true)
+        }) else { throw SyncFailure.invalidData }
         state.removeArchivedCourses()
         // Canonical IDs must not silently collapse conflicting progress records.
         guard Set(state.completions.map(\.taskID)).count == state.completions.count else {
@@ -187,6 +195,7 @@ public struct SyncLedger: Codable, Sendable {
         for record in state.completions where tasks[record.taskID] == nil {
             if let row = records["tasks/" + record.taskID.uuidString], row.deleted {
                 let old = try decoder.decode(ScheduledTask.self, from: row.payload)
+                guard record.courseID == old.courseID else { throw SyncFailure.invalidData }
                 // A removed draft can still have been confirmed by the offline peer.
                 if old.confirmedAt == nil { tasks[old.id] = old }
             }
@@ -199,11 +208,13 @@ public struct SyncLedger: Codable, Sendable {
         let completions = Dictionary(uniqueKeysWithValues: state.completions.map { ($0.taskID, $0) })
         for id in tasks.keys.sorted(by: { $0.uuidString < $1.uuidString }) {
             var task = tasks[id]!
+            let record = completions[id]
+            guard record.map({ $0.courseID == task.courseID }) ?? true else { throw SyncFailure.invalidData }
             let key = "completions/" + stablePlannerID("completion|" + id.uuidString).uuidString
             if let row = records[key], row.deleted {
                 if task.confirmedAt != nil { task.status = .planned }
                 task.confirmedAt = nil; task.completedMinutes = 0
-            } else if let record = completions[id], record.courseID == task.courseID {
+            } else if let record {
                 guard record.minutes >= 0, record.minutes <= task.durationMinutes else { throw SyncFailure.invalidData }
                 task.confirmedAt = record.recordedAt; task.completedMinutes = record.minutes
                 task.status = record.minutes == 0 ? .missed : (record.minutes == task.durationMinutes ? .completed : .partial)

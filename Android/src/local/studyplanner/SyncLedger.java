@@ -47,6 +47,13 @@ public final class SyncLedger {
     public void capture(JSONObject state,long nowMillis)throws Exception{
         Set<String> archived=new HashSet<>(),desired=new HashSet<>(),confirmationTasks=new HashSet<>();
         for(JSONObject course:Planner.list(state.getJSONArray("courses")))if(course.optBoolean("isArchived"))archived.add(course.getString("id"));
+        // Check retained progress before archived task ownership is discarded.
+        Map<String,String> taskCourses=new HashMap<>();
+        for(JSONObject task:Planner.list(state.getJSONArray("tasks")))taskCourses.put(task.getString("id"),task.getString("courseID"));
+        for(JSONObject record:Planner.list(state.getJSONArray("completions"))){
+            String course=record.getString("courseID"),owner=taskCourses.get(record.getString("taskID"));
+            if(!archived.contains(course)&&owner!=null&&!owner.equals(course))throw new IllegalArgumentException("完成记录与关联任务的课程不一致");
+        }
         JSONObject records=records();List<JSONObject> changes=new ArrayList<>();
         for(String kind:KINDS){List<JSONObject> values=kind.equals("settings")?Collections.singletonList(state.getJSONObject(kind)):Planner.list(state.getJSONArray(kind));
             for(JSONObject source:values){
@@ -118,15 +125,18 @@ public final class SyncLedger {
             if(completions.putIfAbsent(id,record)!=null)throw new IllegalArgumentException("同一任务存在多条完成记录");
             JSONObject row=records().optJSONObject("tasks/"+id);
             if(!tasks.containsKey(id)&&row!=null&&row.getBoolean("deleted")){
-                JSONObject old=payload(row);if(!old.has("confirmedAt"))tasks.put(id,old);
+                JSONObject old=payload(row);
+                if(!record.getString("courseID").equals(old.getString("courseID")))throw new IllegalArgumentException("完成记录与关联任务的课程不一致");
+                if(!old.has("confirmedAt"))tasks.put(id,old);
             }
         }
         for(JSONObject task:tasks.values()){
             String id=task.getString("id");JSONObject row=records().optJSONObject("completions/"+Planner.stableID("completion|"+id));
             JSONObject record=completions.get(id);
+            if(record!=null&&!record.getString("courseID").equals(task.getString("courseID")))throw new IllegalArgumentException("完成记录与关联任务的课程不一致");
             if(row!=null&&row.getBoolean("deleted")){
                 if(task.has("confirmedAt"))task.put("status","planned");task.remove("confirmedAt");task.put("completedMinutes",0);
-            }else if(record!=null&&record.getString("courseID").equals(task.getString("courseID"))){
+            }else if(record!=null){
                 int minutes=record.getInt("minutes");if(minutes<0||minutes>task.getInt("durationMinutes"))throw new IllegalArgumentException("确认时长无效");
                 task.put("confirmedAt",record.getDouble("recordedAt")).put("completedMinutes",minutes)
                     .put("status",minutes==0?"missed":minutes==task.getInt("durationMinutes")?"completed":"partial");

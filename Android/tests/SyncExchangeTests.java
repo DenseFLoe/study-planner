@@ -70,6 +70,70 @@ public final class SyncExchangeTests {
         rejected=false;try{CloudSnapshot.read(new ByteArrayInputStream(bytes.toByteArray()));}catch(IllegalArgumentException expected){rejected=true;}
         check(rejected,"cloud archive accepted mismatched task tombstone identity");
     }
+    static void completionCourseIntegrity()throws Exception{
+        for(String kind:new String[]{"live","deletedDraft","deletedConfirmed"}){
+            double now=Planner.now();JSONObject state=fixture(now),task=state.getJSONArray("tasks").getJSONObject(0);
+            JSONObject other=CourseTools.copy(state.getJSONArray("courses").getJSONObject(0)).put("id",Planner.id()).put("name","Other course");
+            state.getJSONArray("courses").put(other);Planner.confirm(state,task.getString("id"),20,now);
+            if(kind.equals("deletedDraft")){task.remove("confirmedAt");task.put("completedMinutes",0).put("status","planned");}
+            SyncLedger ledger=new SyncLedger();ledger.capture(state);
+            JSONObject record=state.getJSONArray("completions").getJSONObject(0);record.put("courseID",other.getString("id"));
+            ledger.records().getJSONObject("completions/"+record.getString("id"))
+                .put("payload",java.util.Base64.getEncoder().encodeToString(record.toString().getBytes(StandardCharsets.UTF_8)));
+            if(!kind.equals("live"))ledger.records().getJSONObject("tasks/"+task.getString("id")).put("deleted",true);
+            String before=ledger.value.toString(),input=state.toString();boolean rejected=false;
+            try{ledger.materialize();}catch(IllegalArgumentException expected){rejected=true;}
+            check(rejected,"completion credited another course through "+kind);
+            check(before.equals(ledger.value.toString()),"rejected course association changed ledger");
+            ByteArrayOutputStream bytes=new ByteArrayOutputStream();CloudSnapshot.write(bytes,ledger,CloudSnapshot.header(ledger));
+            rejected=false;try{CloudSnapshot.read(new ByteArrayInputStream(bytes.toByteArray()));}catch(IllegalArgumentException expected){rejected=true;}
+            check(rejected,"archive accepted mismatched completion course through "+kind);
+            check(input.equals(state.toString())&&before.equals(ledger.value.toString()),"course association validation mutated input");
+        }
+        for(boolean hasTombstone:new boolean[]{false,true}){
+            double now=Planner.now();JSONObject state=fixture(now);String task=state.getJSONArray("tasks").getJSONObject(0).getString("id");
+            Planner.confirm(state,task,20,now);SyncLedger ledger=new SyncLedger();ledger.capture(state);
+            if(hasTombstone)ledger.records().getJSONObject("tasks/"+task).put("deleted",true);else ledger.records().remove("tasks/"+task);
+            JSONObject restored=ledger.materialize();
+            check(restored.getJSONArray("tasks").length()==0,"legacy task history was unexpectedly restored");
+            check(Planner.completed(restored,restored.getJSONArray("courses").getJSONObject(0))==20,"legacy completion without live task lost progress");
+            ByteArrayOutputStream bytes=new ByteArrayOutputStream();CloudSnapshot.write(bytes,ledger,CloudSnapshot.header(ledger));
+            check(CloudSnapshot.read(new ByteArrayInputStream(bytes.toByteArray())).ledger.materialize().getJSONArray("completions").length()==1,"legacy archive completion was lost");
+        }
+    }
+    static void captureCompletionCourseIntegrity()throws Exception{
+        for(boolean archivedTaskCourse:new boolean[]{false,true}){
+            double now=Planner.now();JSONObject state=fixture(now),first=state.getJSONArray("courses").getJSONObject(0);
+            JSONObject other=CourseTools.copy(first).put("id",Planner.id()).put("name","Other course");state.getJSONArray("courses").put(other);
+            Planner.confirm(state,state.getJSONArray("tasks").getJSONObject(0).getString("id"),20,now);
+            SyncLedger ledger=new SyncLedger();ledger.capture(state);String before=ledger.value.toString();
+            first.put("isArchived",archivedTaskCourse);state.getJSONArray("completions").getJSONObject(0).put("courseID",other.getString("id"));String input=state.toString();
+            boolean rejected=false;try{ledger.capture(state);}catch(IllegalArgumentException expected){rejected=true;}
+            check(rejected,"capture accepted a completion for another course");
+            check(before.equals(ledger.value.toString()),"rejected course association capture changed ledger");
+            check(input.equals(state.toString()),"rejected course association capture changed UI state");
+        }
+    }
+    static void nestedMergeCompletionCourseIntegrity()throws Exception{
+        for(boolean replaceDraft:new boolean[]{false,true}){
+            double now=Planner.at(java.time.LocalDate.of(2026,11,3),420);JSONObject base=fixture(now);
+            JSONObject firstSource=base.getJSONArray("courses").getJSONObject(0);firstSource.put("autoScheduleEnabled",true);
+            JSONObject second=CourseTools.copy(firstSource).put("id",Planner.id()).put("name","B").put("totalMinutes",60),third=CourseTools.copy(second).put("id",Planner.id()).put("name","C");
+            base.getJSONArray("courses").put(second).put(third);JSONObject task=base.getJSONArray("tasks").getJSONObject(0);task.put("start",now+3600);String taskID=task.getString("id");
+            SyncLedger mac=new SyncLedger(),phone=new SyncLedger();mac.capture(base,1000);phone.merge(mac.changes(0));JSONObject combined=CourseTools.copy(base);
+            JSONObject first=CourseTools.merge(combined,new java.util.HashSet<>(java.util.Arrays.asList(firstSource.getString("id"),second.getString("id"))),"First merge");mac.capture(combined,2000);
+            JSONObject merged=CourseTools.merge(combined,new java.util.HashSet<>(java.util.Arrays.asList(first.getString("id"),third.getString("id"))),"Nested merge");
+            if(replaceDraft)Planner.replan(combined,now);mac.capture(combined,4000);
+            JSONObject offline=phone.materialize();Planner.confirm(offline,taskID,20,now+7200);phone.capture(offline,3000);
+            JSONArray localRows=mac.changes(0),remoteRows=phone.changes(0);mac.merge(remoteRows);phone.merge(localRows);JSONObject restored=mac.materialize();
+            check(SyncLedger.equivalent(restored,phone.materialize()),"nested course references failed to converge");
+            check(Planner.completed(restored,Planner.course(restored,merged.getString("id")))==20,"nested merge lost offline progress");
+            check(restored.getJSONArray("completions").getJSONObject(0).getString("courseID").equals(merged.getString("id")),"nested completion was not reparented");
+            JSONObject recovered=null;for(JSONObject row:Planner.list(restored.getJSONArray("tasks")))if(row.getString("id").equals(taskID))recovered=row;
+            check(recovered!=null&&recovered.getString("courseID").equals(merged.getString("id")),"nested task was not reparented before validation");
+            ByteArrayOutputStream bytes=new ByteArrayOutputStream();CloudSnapshot.write(bytes,mac,CloudSnapshot.header(mac));CloudSnapshot.read(new ByteArrayInputStream(bytes.toByteArray()));
+        }
+    }
     static void latestEditRegression()throws Exception{
         long time=2000000000000L;JSONObject state=fixture(Planner.now());SyncLedger mac=new SyncLedger(),phone=new SyncLedger();
         mac.capture(state,time);phone.merge(mac.changes(0));
@@ -123,7 +187,7 @@ public final class SyncExchangeTests {
         exchange(phone,mac.changes(0),0);check(phone.materialize().getJSONArray("tasks").getJSONObject(0).has("confirmedAt"),"deleted draft lost offline confirmation");
     }
     public static void main(String[] args)throws Exception{
-        referencedTombstoneIntegrity();duplicateCompletionIntegrity();latestEditRegression();confirmationRegression();earlyCompletionRegression();
+        referencedTombstoneIntegrity();duplicateCompletionIntegrity();captureCompletionCourseIntegrity();completionCourseIntegrity();nestedMergeCompletionCourseIntegrity();latestEditRegression();confirmationRegression();earlyCompletionRegression();
         JSONObject state=initial();String courseID=Planner.id();
         state.getJSONArray("courses").put(new JSONObject().put("id",courseID).put("name","Confirmation fixture").put("type","录播课程").put("totalMinutes",120)
             .put("initialCompletedMinutes",0).put("startDate",0).put("deadline",1000000000).put("minimumBlockMinutes",60).put("priority",2).put("color","blue").put("autoScheduleEnabled",false).put("isArchived",false).put("notes",""));
