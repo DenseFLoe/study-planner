@@ -85,6 +85,76 @@ final class DailyTaskOrderingTests: XCTestCase {
         XCTAssertEqual(state.tasks.map(\.id), ids)
     }
 
+    private func jointFloatingFixture() -> PlannerState {
+        var state = PlannerState()
+        state.settings.availability = [.init(weekday: 2, startMinute: 480, endMinute: 720)]
+        state.courses = [Course(name: "Short", totalMinutes: 30, startDate: date(), deadline: date()),
+                         Course(name: "Long", totalMinutes: 90, startDate: date(), deadline: date())]
+        state.tasks = [ScheduledTask(courseID: state.courses[0].id, start: date(8), durationMinutes: 30),
+                       ScheduledTask(courseID: state.courses[1].id, start: date(9, minute: 30), durationMinutes: 90)]
+        let exact = FixedEvent(title: "Exact", startMinute: 540, endMinute: 570, startDate: date(), endDate: date())
+        var floating = FixedEvent(title: "Floating", startMinute: 480, endMinute: 720, startDate: date(), endDate: date())
+        floating.floatingDurationMinutes = 60
+        state.fixedEvents = [exact, floating]
+        return state
+    }
+
+    func testSwapJointlyMovesFloatingWitnessWithoutChangingEventsOrTaskIdentity() throws {
+        var state = jointFloatingFixture()
+        let before = state
+        try state.swapDailyTasks(before.tasks[0].id, before.tasks[1].id, now: date(7), calendar: calendar)
+        XCTAssertEqual(state.tasks.map(\.id), before.tasks.reversed().map(\.id))
+        XCTAssertEqual(state.tasks.map(\.durationMinutes), [90, 30])
+        XCTAssertEqual(state.tasks.map(\.start), [date(9, minute: 30), date(11, minute: 15)])
+        XCTAssertEqual(state.tasks[1].start.timeIntervalSince(state.tasks[0].end), 900)
+        XCTAssertTrue(state.tasks.allSatisfy(\.isFloating))
+        XCTAssertEqual(state.fixedEvents, before.fixedEvents)
+        XCTAssertEqual(state.courses, before.courses)
+        XCTAssertEqual(state.completions, before.completions)
+        XCTAssertEqual(state.applyingDailyTaskOrders(to: before.tasks, calendar: calendar), state.tasks)
+    }
+
+    func testJointFloatingSwapRollsBackWhenUnavailableOrBeyondSearchScope() {
+        for overBudget in [false, true] {
+            var state = jointFloatingFixture()
+            if overBudget {
+                for index in 0..<8 {
+                    var event = FixedEvent(title: "Budget fixture", startMinute: index * 2, endMinute: index * 2 + 1,
+                                           startDate: date(), endDate: date())
+                    event.floatingDurationMinutes = 1
+                    state.fixedEvents.append(event)
+                }
+            } else { state.settings.availability[0].endMinute = 704 }
+            let before = state
+            XCTAssertThrowsError(try state.swapDailyTasks(state.tasks[0].id, state.tasks[1].id, now: date(7), calendar: calendar)) {
+                XCTAssertEqual($0 as? DailyTaskOrderError, .noSpace)
+            }
+            XCTAssertEqual(state, before)
+        }
+    }
+
+    func testJointFloatingSwapHonorsRetainedHistoryAndItsRestBoundary() throws {
+        for minutes in [45, 46] {
+            var state = jointFloatingFixture()
+            state.tasks[0].start = date(8, minute: minutes == 45 ? 0 : 1)
+            let moving = state.tasks
+            let course = Course(name: "Retained history", totalMinutes: minutes, startDate: date(), deadline: date())
+            state.courses.append(course)
+            let task = ScheduledTask(courseID: course.id, start: date(7), durationMinutes: minutes)
+            state.tasks.append(task)
+            try state.confirm(taskID: task.id, actualMinutes: minutes, now: task.end, calendar: calendar)
+            let before = state
+            if minutes == 45 {
+                try state.swapDailyTasks(moving[0].id, moving[1].id, now: date(7, minute: 50), calendar: calendar)
+                XCTAssertEqual(state.tasks.first { $0.id == task.id }, before.tasks.last)
+                XCTAssertEqual(state.tasks.filter(\.isUnconfirmed).map(\.id), moving.reversed().map(\.id))
+            } else {
+                XCTAssertThrowsError(try state.swapDailyTasks(moving[0].id, moving[1].id, now: date(7, minute: 50), calendar: calendar))
+                XCTAssertEqual(state, before)
+            }
+        }
+    }
+
     func testSwappingOtherLessonsKeepsImmediateTaskAndItsFloatingReservation() throws {
         var state = PlannerState()
         state.settings.availability = (1...7).map { .init(weekday: $0, startMinute: 480, endMinute: 780) }

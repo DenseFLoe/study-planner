@@ -72,14 +72,15 @@ extension PlannerState {
     }
 
     /// Packs whole lessons into available windows; never changes duration or another day.
-    func placeDailyTasks(_ ordered: [ScheduledTask], earliest: Date, calendar: Calendar) -> [ScheduledTask]? {
+    func placeDailyTasks(_ ordered: [ScheduledTask], earliest: Date, calendar: Calendar,
+                         floatingPlacements: [UUID: Int]? = nil) -> [ScheduledTask]? {
         guard !ordered.isEmpty else { return [] }
         let day = calendar.startOfDay(for: earliest)
         let engine = ScheduleEngine(calendar: calendar)
         let windows = settings.availability.filter { $0.weekday == calendar.component(.weekday, from: day) && $0.startMinute >= 0 && $0.endMinute <= 1440 && $0.startMinute < $0.endMinute }
         var available = Set(windows.flatMap { Array($0.startMinute..<$0.endMinute) })
         let events = fixedEvents.filter { $0.occurs(on: day, calendar: calendar) }
-        guard let placements = FloatingPlacement.reserve(events, studyMinutes: available) else { return nil }
+        guard let placements = floatingPlacements ?? FloatingPlacement.reserve(events, studyMinutes: available) else { return nil }
         for event in events {
             let start = placements[event.id] ?? event.startMinute
             available.subtract(start..<(start + event.occupiedMinutes))
@@ -129,9 +130,67 @@ extension PlannerState {
                 found = true
                 break
             }
-            if !found { return nil }
+            if !found {
+                guard floatingPlacements == nil,
+                      let alternate = jointDailyFloatingPlacements(ordered, earliest: earliest, day: day,
+                          study: Set(windows.flatMap { Array($0.startMinute..<$0.endMinute) }),
+                          events: events, obstacles: obstacles, calendar: calendar) else { return nil }
+                return placeDailyTasks(ordered, earliest: earliest, calendar: calendar, floatingPlacements: alternate)
+            }
         }
         return result
+    }
+
+    /// A single queue preserves the requested order across courses. Only the event
+    /// witness is reused; the existing placement path retains every original task.
+    private func jointDailyFloatingPlacements(_ ordered: [ScheduledTask], earliest: Date, day: Date,
+                                              study: Set<Int>, events: [FixedEvent], obstacles: [DateInterval],
+                                              calendar: Calendar) -> [UUID: Int]? {
+        let floating = events.filter(\.isFloating)
+        guard !floating.isEmpty, floating.count <= 8, ordered.count <= 600 else { return nil }
+        let engine = ScheduleEngine(calendar: calendar)
+        let boundaries = (0...1440).map { engine.instant(day: day, minute: $0) }
+        let exact = events.filter { !$0.isFloating }
+        let pause = TimeInterval(ScheduleEngine.breakMinutes * 60)
+        var eventFree = [Bool](repeating: true, count: 1440)
+        for minute in 0..<1440 {
+            eventFree[minute] = !exact.contains { minute >= $0.startMinute && minute < $0.endMinute }
+                && !obstacles.contains {
+                    boundaries[minute] < $0.end.addingTimeInterval(pause)
+                        && boundaries[minute + 1] > $0.start.addingTimeInterval(-pause)
+                }
+        }
+        func windows(studyOnly: Bool) -> [ScheduleFeasibilitySearch.Window] {
+            var result: [ScheduleFeasibilitySearch.Window] = [], start: Int?
+            for minute in 0...1440 {
+                let free = minute < 1440 && eventFree[minute] && (!studyOnly || study.contains(minute))
+                if free, start == nil { start = minute }
+                if !free, let first = start {
+                    let lower = Int(ceil(boundaries[first].timeIntervalSinceReferenceDate / 60))
+                    let upper = Int(floor(boundaries[minute].timeIntervalSinceReferenceDate / 60))
+                    if lower < upper { result.append(.init(start: lower, end: upper)) }
+                    start = nil
+                }
+            }
+            return result
+        }
+        func minute(_ date: Date) -> Int { Int(ceil(date.timeIntervalSinceReferenceDate / 60)) }
+        let queue = ScheduleFeasibilitySearch.Queue(courseID: ordered[0].courseID,
+            start: minute(day), end: minute(boundaries[1440]), work: ordered.map {
+                .init(minutes: $0.durationMinutes, lessonID: nil, lessonName: nil)
+            })
+        guard let solution = ScheduleFeasibilitySearch.find(queues: [queue], study: windows(studyOnly: true),
+            eventWindows: windows(studyOnly: false), floating: floating.map {
+                .init(key: day, start: minute(boundaries[$0.startMinute]), end: minute(boundaries[$0.endMinute]), minutes: $0.occupiedMinutes)
+            }, floor: minute(earliest), initial: minute(day)),
+              solution.tasks.count == ordered.count, solution.floatingStarts.count == floating.count else { return nil }
+        var placements: [UUID: Int] = [:]
+        for (index, event) in floating.enumerated() {
+            guard let start = solution.floatingStarts[index] else { return nil }
+            let date = Date(timeIntervalSinceReferenceDate: Double(start) * 60)
+            placements[event.id] = calendar.component(.hour, from: date) * 60 + calendar.component(.minute, from: date)
+        }
+        return placements
     }
 
     func applyingDailyTaskOrders(to generated: [ScheduledTask], calendar: Calendar) -> [ScheduledTask] {
