@@ -176,6 +176,11 @@ public struct ScheduledTask: Identifiable, Codable, Equatable, Sendable {
     public var isFloating: Bool { floatingWindowStart != nil && floatingWindowEnd != nil }
     public var planningStart: Date { floatingWindowStart ?? start }
     public var planningEnd: Date { floatingWindowEnd ?? end }
+    var hasValidPlanningInterval: Bool {
+        let lower = planningStart.timeIntervalSinceReferenceDate
+        let upper = planningEnd.timeIntervalSinceReferenceDate
+        return lower.isFinite && upper.isFinite && lower <= upper
+    }
     public var end: Date { start.addingTimeInterval(Double(durationMinutes) * 60) }
     public var isUnconfirmed: Bool { confirmedAt == nil && (status == .planned || status == .future) }
     /// Retained history reserves time only up to confirmation. An early confirmation

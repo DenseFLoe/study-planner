@@ -58,6 +58,7 @@ public final class SyncLedger {
         for(String kind:KINDS){List<JSONObject> values=kind.equals("settings")?Collections.singletonList(state.getJSONObject(kind)):Planner.list(state.getJSONArray(kind));
             for(JSONObject source:values){
                 if(archived.contains(source.optString(kind.equals("courses")?"id":"courseID")))continue;
+                if(kind.equals("tasks")&&!Planner.hasValidPlanningInterval(source))throw new IllegalArgumentException("任务时间区间无效");
                 // Detect conflicts before canonical IDs collapse rows or mutate the ledger.
                 if(kind.equals("completions")&&!confirmationTasks.add(source.getString("taskID")))throw new IllegalArgumentException("同一任务存在多条完成记录");
                 JSONObject data=shallowCopy(source);

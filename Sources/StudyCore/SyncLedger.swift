@@ -93,6 +93,7 @@ public struct SyncLedger: Codable, Sendable {
             archived.contains(record.courseID) || (taskCourses[record.taskID].map { $0 == record.courseID } ?? true)
         }) else { throw SyncFailure.invalidData }
         state.removeArchivedCourses()
+        guard state.tasks.allSatisfy(\.hasValidPlanningInterval) else { throw SyncFailure.invalidData }
         // Canonical IDs must not silently collapse conflicting progress records.
         guard Set(state.completions.map(\.taskID)).count == state.completions.count else {
             throw SyncFailure.invalidData
@@ -182,7 +183,7 @@ public struct SyncLedger: Codable, Sendable {
         state.removeCourses(ids: deletedIDs)
         let ids = Set(state.courses.map(\.id))
         guard state.settings.minimumScheduleUnit > 0,
-              state.tasks.allSatisfy({ ids.contains($0.courseID) && $0.durationMinutes > 0 }),
+              state.tasks.allSatisfy({ ids.contains($0.courseID) && $0.durationMinutes > 0 && $0.hasValidPlanningInterval }),
               state.completions.allSatisfy({ ids.contains($0.courseID) && $0.minutes >= 0 }) else { throw SyncFailure.invalidData }
         state.tasks.sort { $0.start == $1.start ? $0.id.uuidString < $1.id.uuidString : $0.start < $1.start }
         return state

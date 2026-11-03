@@ -117,6 +117,22 @@ public final class CloudServerTests {
             check(before.equals(SyncLedger.canonical(server.loadLedger().materialize())),"course-mismatched completion changed cloud progress: "+taskKind);
         }
     }
+    static void taskIntervalRegression(CloudSyncServer server,String token)throws Exception{
+        long revision=server.revision;String before=SyncLedger.canonical(server.loadLedger().materialize());
+        for(String shape:new String[]{"both","startOnly","endOnly"}){
+            SyncLedger invalid=copy(server.loadLedger());JSONObject task=CourseTools.copy(invalid.materialize().getJSONArray("tasks").getJSONObject(0));
+            double start=task.getDouble("start"),end=Planner.end(task);
+            task.remove("floatingWindowStart");task.remove("floatingWindowEnd");
+            if(!shape.equals("endOnly"))task.put("floatingWindowStart",end+600);
+            if(!shape.equals("startOnly"))task.put("floatingWindowEnd",start-600);
+            JSONObject row=invalid.records().getJSONObject("tasks/"+task.getString("id"));
+            row.put("payload",Base64.getEncoder().encodeToString(task.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8)))
+                .put("version",row.getLong("version")+1).put("modifiedAt",row.optLong("modifiedAt")+1);
+            request(server,token,"/cloud/snapshot",packed(invalid),400);
+            check(server.revision==revision,"inverted task interval committed: "+shape);
+            check(before.equals(SyncLedger.canonical(server.loadLedger().materialize())),"inverted task interval changed cloud state: "+shape);
+        }
+    }
     static void malformedTombstoneWireRegression(CloudSyncServer server,String token)throws Exception{
         long revision=server.revision;String before=SyncLedger.canonical(server.loadLedger().materialize());
         for(Map.Entry<String,JSONObject> sample:SyncRecordValidationTests.invalidRows().entrySet()){
@@ -167,6 +183,7 @@ public final class CloudServerTests {
             JSONObject merged=server.loadLedger().materialize();check(merged.getJSONArray("courses").length()==2,"offline addition lost");check(merged.getJSONArray("completions").length()==1,"offline confirmation lost");
             duplicateCompletionRegression(server,token);
             completionCourseRegression(server,token);
+            taskIntervalRegression(server,token);
             malformedTombstoneWireRegression(server,token);
             long tombstoneRevision=server.revision;String beforeTombstone=SyncLedger.canonical(server.loadLedger().materialize());
             request(server,token,"/cloud/snapshot",packed(SyncExchangeTests.mismatchedTaskTombstoneFixture()),400);
