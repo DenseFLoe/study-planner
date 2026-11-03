@@ -32,14 +32,14 @@ public final class DailyTaskOrdering {
         for(JSONObject source:ordered){boolean found=false;int first=Planner.day(cursor).equals(day)?(int)((cursor-Planner.at(day,0))/60):1440;
             for(int minute=first;minute<1440;minute++){
                 int endMinute=minute+source.getInt("durationMinutes");double start=Planner.at(day,minute),end=Planner.at(day,endMinute);
-                if(start<cursor||endMinute>1440||!available[minute])continue;
+                if(start<cursor||endMinute>1440||end>dayEnd||!available[minute])continue;
                 boolean blocked=false;for(int m=minute;m<endMinute;m++)if(!available[m]){blocked=true;break;}
                 if(blocked)continue;
                 for(JSONObject obstacle:obstacles)if(start<Planner.retainedHistoryEnd(obstacle)+Planner.BREAK_SECONDS&&end>Planner.retainedHistoryStart(obstacle)-Planner.BREAK_SECONDS){blocked=true;break;}
                 if(blocked)continue;
                 JSONObject task=new JSONObject(source.toString());task.put("start",start);task.remove("floatingWindowStart");task.remove("floatingWindowEnd");
                 int regionStart=1440,regionEnd=0;for(JSONObject e:events)if(Planner.floating(e)&&e.getInt("startMinute")<endMinute&&e.getInt("endMinute")>minute){regionStart=Math.min(regionStart,e.getInt("startMinute"));regionEnd=Math.max(regionEnd,e.getInt("endMinute"));}
-                if(regionEnd>0){int lower=minute,upper=endMinute;while(lower>regionStart&&inWindow(lower-1,study,events))lower--;while(upper<regionEnd&&inWindow(upper,study,events))upper++;task.put("floatingWindowStart",Planner.at(day,lower)).put("floatingWindowEnd",Planner.at(day,upper));}
+                if(regionEnd>0){int lower=minute,upper=endMinute;while(lower>regionStart&&inWindow(lower-1,study,events))lower--;while(upper<regionEnd&&inWindow(upper,study,events))upper++;task.put("floatingWindowStart",Planner.at(day,lower)).put("floatingWindowEnd",Math.min(dayEnd,Planner.at(day,upper)));}
                 placed.add(task);cursor=end+Planner.BREAK_SECONDS;found=true;break;
             }
             if(!found){

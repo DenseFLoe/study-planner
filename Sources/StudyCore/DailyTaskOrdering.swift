@@ -89,6 +89,28 @@ extension PlannerState {
             let start = placements[event.id] ?? event.startMinute
             available.subtract(start..<(start + event.occupiedMinutes))
         }
+        // Clock-minute runs can be shorter or touch after a daylight-saving jump.
+        // Merge their actual Date spans before checking elapsed task durations.
+        var spans: [(start: Date, end: Date)] = []
+        var runStart: Int?
+        for minute in 0...1440 {
+            let free = minute < 1440 && available.contains(minute)
+            if free, runStart == nil { runStart = minute }
+            if !free, let first = runStart {
+                let start = engine.instant(day: day, minute: first)
+                let end = engine.instant(day: day, minute: minute)
+                if start < end { spans.append((start, end)) }
+                runStart = nil
+            }
+        }
+        var actualAvailable: [(start: Date, end: Date)] = []
+        for span in spans.sorted(by: { $0.start < $1.start }) {
+            if let last = actualAvailable.last, span.start <= last.end {
+                actualAvailable[actualAvailable.count - 1].end = max(last.end, span.end)
+            } else {
+                actualAvailable.append(span)
+            }
+        }
         let moving = Set(ordered.map(\.id))
         let pause = TimeInterval(ScheduleEngine.breakMinutes * 60)
         let dayEnd = engine.instant(day: day, minute: 1440)
@@ -111,6 +133,7 @@ extension PlannerState {
                 guard start >= cursor, endMinute <= 1440,
                       (minute..<endMinute).allSatisfy({ available.contains($0) }) else { continue }
                 let end = start.addingTimeInterval(Double(task.durationMinutes * 60))
+                guard actualAvailable.contains(where: { start >= $0.start && end <= $0.end }) else { continue }
                 guard !obstacles.contains(where: { start < $0.end.addingTimeInterval(pause) && end > $0.start.addingTimeInterval(-pause) }) else { continue }
                 task.start = start
                 task.floatingWindowStart = nil
@@ -126,8 +149,8 @@ extension PlannerState {
                     func inWindow(_ m: Int) -> Bool { study.contains(m) && !exact.contains { m >= $0.startMinute && m < $0.endMinute } }
                     while lower > regionStart && inWindow(lower - 1) { lower -= 1 }
                     while upper < regionEnd && inWindow(upper) { upper += 1 }
-                    task.floatingWindowStart = engine.instant(day: day, minute: lower)
-                    task.floatingWindowEnd = engine.instant(day: day, minute: upper)
+                    task.floatingWindowStart = min(task.start, engine.instant(day: day, minute: lower))
+                    task.floatingWindowEnd = max(task.end, engine.instant(day: day, minute: upper))
                 }
                 result.append(task)
                 cursor = end.addingTimeInterval(pause)
