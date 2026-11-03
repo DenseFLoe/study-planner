@@ -159,9 +159,11 @@ public final class SyncLedger {
         SyncExchange.reconcileTasks(this,state);
         Set<String> kept=new HashSet<>();for(JSONObject task:Planner.list(state.getJSONArray("tasks")))kept.add(task.getString("id"));
         JSONArray result=new JSONArray();for(JSONObject record:completions.values())if(!tasks.containsKey(record.getString("taskID"))||kept.contains(record.getString("taskID")))result.put(record);
-        for(JSONObject task:Planner.list(state.getJSONArray("tasks")))if(task.has("confirmedAt")&&!completions.containsKey(task.getString("id")))
+        for(JSONObject task:Planner.list(state.getJSONArray("tasks")))if(task.has("confirmedAt")&&!completions.containsKey(task.getString("id"))){
+            int minutes=task.getInt("completedMinutes");if(minutes<0||minutes>task.getInt("durationMinutes"))throw new IllegalArgumentException("确认时长无效");
             result.put(new JSONObject().put("id",Planner.stableID("completion|"+task.getString("id"))).put("taskID",task.getString("id")).put("courseID",task.getString("courseID"))
-                .put("minutes",task.getInt("completedMinutes")).put("recordedAt",task.getDouble("confirmedAt")));
+                .put("minutes",minutes).put("recordedAt",task.getDouble("confirmedAt")));
+        }
         // Stable order prevents no-op captures from appearing as new edits.
         List<JSONObject> sorted=Planner.list(result);sorted.sort(Comparator.comparing(r->r.optString("id")));state.put("completions",new JSONArray(sorted));
     }

@@ -42,6 +42,8 @@ mkdir -p Android/build/tests
 "$JDK/bin/java" -cp Android/tools/json.jar:Android/build/tests local.studyplanner.CourseNumberIntegrityTests
 "$JDK/bin/javac" -cp Android/tools/json.jar:Android/build/tests -d Android/build/tests Android/tests/TaskNumberIntegrityTests.java
 "$JDK/bin/java" -cp Android/tools/json.jar:Android/build/tests local.studyplanner.TaskNumberIntegrityTests
+"$JDK/bin/javac" -cp Android/tools/json.jar:Android/build/tests -d Android/build/tests Android/tests/LegacyConfirmationIntegrityTests.java
+"$JDK/bin/java" -cp Android/tools/json.jar:Android/build/tests local.studyplanner.LegacyConfirmationIntegrityTests
 "$JDK/bin/javac" -cp Android/tools/json.jar:Android/build/tests -d Android/build/tests Android/tests/SyncRecordValidationTests.java
 "$JDK/bin/java" -cp Android/tools/json.jar:Android/build/tests local.studyplanner.SyncRecordValidationTests
 "$JDK/bin/javac" -cp Android/tools/json.jar:Android/build/tests -d Android/build/tests Android/tests/SyncScheduleIntegrityTests.java

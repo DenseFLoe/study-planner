@@ -270,6 +270,9 @@ public struct SyncLedger: Codable, Sendable {
         // Backfill legacy task-only confirmations, but never override an explicit undo.
         for task in state.tasks where completions[task.id] == nil {
             if let confirmed = task.confirmedAt {
+                guard task.completedMinutes >= 0, task.completedMinutes <= task.durationMinutes else {
+                    throw SyncFailure.invalidData
+                }
                 state.completions.append(CompletionRecord(id: stablePlannerID("completion|" + task.id.uuidString),
                     courseID: task.courseID, taskID: task.id, minutes: task.completedMinutes, recordedAt: confirmed))
             }

@@ -212,6 +212,19 @@ public final class CloudServerTests {
             }
         }
     }
+    static void legacyConfirmationRegression(CloudSyncServer server,String token)throws Exception{
+        long revision=server.revision;String before=SyncLedger.canonical(server.loadLedger().materialize());
+        for(int completed:new int[]{61,120}){
+            SyncLedger invalid=copy(server.loadLedger());JSONObject state=invalid.materialize();
+            JSONObject task=CourseTools.copy(state.getJSONArray("tasks").getJSONObject(0)).put("id",Planner.id());
+            task.put("start",task.getDouble("start")+86400).put("durationMinutes",60).put("completedMinutes",completed)
+                .put("confirmedAt",Planner.now()).put("status","completed");
+            state.getJSONArray("tasks").put(task);invalid.capture(state);
+            request(server,token,"/cloud/snapshot",packed(invalid),400);
+            check(server.revision==revision,"invalid legacy confirmation committed a cloud version");
+            check(before.equals(SyncLedger.canonical(server.loadLedger().materialize())),"invalid legacy confirmation changed cloud progress");
+        }
+    }
     static void malformedTombstoneWireRegression(CloudSyncServer server,String token)throws Exception{
         long revision=server.revision;String before=SyncLedger.canonical(server.loadLedger().materialize());
         for(Map.Entry<String,JSONObject> sample:SyncRecordValidationTests.invalidRows().entrySet()){
@@ -267,6 +280,7 @@ public final class CloudServerTests {
             completionTotalRegression(server,token);
             courseNumberRegression(server,token);
             taskNumberRegression(server,token);
+            legacyConfirmationRegression(server,token);
             malformedTombstoneWireRegression(server,token);
             long tombstoneRevision=server.revision;String beforeTombstone=SyncLedger.canonical(server.loadLedger().materialize());
             request(server,token,"/cloud/snapshot",packed(SyncExchangeTests.mismatchedTaskTombstoneFixture()),400);
