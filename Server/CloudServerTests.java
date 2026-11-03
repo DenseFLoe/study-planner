@@ -195,6 +195,36 @@ public final class CloudServerTests {
             check(before.equals(SyncLedger.canonical(server.loadLedger().materialize())),"invalid course number changed cloud state");
         }
     }
+    static void manualLessonNumberRegression(CloudSyncServer server,String token)throws Exception{
+        long revision=server.revision;String before=SyncLedger.canonical(server.loadLedger().materialize());
+        for(String kind:new String[]{"manual","nested","unused"})for(Object duration:new Object[]{4294967356L,60.5,"60",true,JSONObject.NULL,null}){
+            SyncLedger invalid=copy(server.loadLedger());JSONObject state=invalid.materialize(),course;
+            if(kind.equals("nested")){
+                Set<String> ids=new HashSet<>();for(JSONObject source:Planner.list(state.getJSONArray("courses")))ids.add(source.getString("id"));
+                course=CourseTools.merge(state,ids,"Synthetic merged course");invalid.capture(state);
+            }else course=CourseTools.copy(state.getJSONArray("courses").getJSONObject(0));
+            JSONObject target=kind.equals("nested")?course.getJSONArray("mergedSources").getJSONObject(0):course;
+            if(!kind.equals("unused"))target.put("type","不定时录播课程");
+            JSONObject lesson=new JSONObject().put("id","synthetic-lesson").put("name","Synthetic lesson");
+            if(duration!=null)lesson.put("durationMinutes",duration);
+            target.put("manualLessons",new JSONArray().put(lesson));
+            JSONObject row=invalid.records().getJSONObject("courses/"+course.getString("id"));
+            row.put("payload",Base64.getEncoder().encodeToString(course.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8)))
+                .put("version",row.getLong("version")+1).put("modifiedAt",row.optLong("modifiedAt")+1);
+            request(server,token,"/cloud/snapshot",packed(invalid),400);
+            check(server.revision==revision,"invalid manual lesson number committed: "+kind);
+            check(before.equals(SyncLedger.canonical(server.loadLedger().materialize())),"invalid manual lesson number changed cloud state");
+        }
+        for(Object manual:new Object[]{"invalid",true,new JSONObject(),new JSONArray().put(JSONObject.NULL),new JSONArray().put(60),new JSONArray().put("lesson")}){
+            SyncLedger invalid=copy(server.loadLedger());JSONObject course=CourseTools.copy(invalid.materialize().getJSONArray("courses").getJSONObject(0));
+            course.put("manualLessons",manual);JSONObject row=invalid.records().getJSONObject("courses/"+course.getString("id"));
+            row.put("payload",Base64.getEncoder().encodeToString(course.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8)))
+                .put("version",row.getLong("version")+1).put("modifiedAt",row.optLong("modifiedAt")+1);
+            request(server,token,"/cloud/snapshot",packed(invalid),400);
+            check(server.revision==revision,"invalid manual lesson container committed");
+            check(before.equals(SyncLedger.canonical(server.loadLedger().materialize())),"invalid manual lesson container changed cloud state");
+        }
+    }
     static void taskNumberRegression(CloudSyncServer server,String token)throws Exception{
         long revision=server.revision;String before=SyncLedger.canonical(server.loadLedger().materialize());
         for(String field:new String[]{"durationMinutes","completedMinutes"})for(String kind:new String[]{"live","draftTombstone","confirmedTombstone"}){
@@ -279,6 +309,7 @@ public final class CloudServerTests {
             completionNumberRegression(server,token);
             completionTotalRegression(server,token);
             courseNumberRegression(server,token);
+            manualLessonNumberRegression(server,token);
             taskNumberRegression(server,token);
             legacyConfirmationRegression(server,token);
             malformedTombstoneWireRegression(server,token);
