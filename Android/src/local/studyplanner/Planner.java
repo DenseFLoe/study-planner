@@ -130,6 +130,16 @@ public final class Planner {
         for(JSONObject e:events){int a=e.optInt("startMinute"),b=e.optInt("endMinute"),n=occupied(e);if(a<0||b>1440||a>=b||n<=0||n>b-a)return null;
             if(floating(e))floats.add(e);else for(int m=a;m<b;m++)busy[m]=true;}
         floats.sort((a,b)->{int x=a.optInt("endMinute")-a.optInt("startMinute")-occupied(a),y=b.optInt("endMinute")-b.optInt("startMinute")-occupied(b);return x!=y?Integer.compare(x,y):a.optString("id").compareTo(b.optString("id"));});
+        if(floats.isEmpty())return new HashMap<>();
+        // Necessary nominal bound: occupied minutes must fit in the union of
+        // floating windows outside exact blocks. Passing it does not prove fit.
+        int required=0,lowerMinute=1440,upperMinute=0;int[] coverage=new int[1441];
+        for(JSONObject e:floats){int n=occupied(e);if(n>1440-required)return null;required+=n;
+            int a=e.optInt("startMinute"),b=e.optInt("endMinute");coverage[a]++;coverage[b]--;
+            lowerMinute=Math.min(lowerMinute,a);upperMinute=Math.max(upperMinute,b);}
+        int available=0,depth=0;
+        for(int m=lowerMinute;m<upperMinute;m++){depth+=coverage[m];if(depth>0&&!busy[m])available++;}
+        if(required>available)return null;
         int[] prefix=new int[1441];for(int m=0;m<1440;m++)prefix[m+1]=prefix[m]+(study[m]&&!busy[m]?1:0);
         List<List<int[]>> candidates=new ArrayList<>();
         for(JSONObject e:floats){List<int[]> choices=new ArrayList<>();int n=occupied(e);
