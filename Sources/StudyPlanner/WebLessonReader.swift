@@ -48,7 +48,11 @@ final class WebLessonReader: NSObject, WKScriptMessageHandler, WKNavigationDeleg
     static let defaultAddress = "https://www.kaoyanvip.cn/appmanage/my/mycourse"
     static let defaultURL = URL(string: WebLessonReader.defaultAddress)!
     var result: WebCourseAccount?
-    var status = "在默认浏览器登录并进入课程页面后，点击“读取浏览器当前课程”。"
+    var status = "在默认浏览器登录并进入课程页面后，点击“读取浏览器当前课程”。" {
+        didSet { updateProgress?(status) }
+    }
+    private var updateProgress: ((String) -> Void)?
+    private var readFailure: Error?
     var busy = false
     var lastRefresh: Date?
     var webView: WKWebView!
@@ -108,7 +112,10 @@ final class WebLessonReader: NSObject, WKScriptMessageHandler, WKNavigationDeleg
         webView.uiDelegate = self
     }
     /// One complete read for a saved binding. No other packages are imported or updated.
-    func managedSnapshot(url: URL, packageID: String, interactive: Bool) async throws -> WebCourseSnapshot {
+    func managedSnapshot(url: URL, packageID: String, interactive: Bool,
+                         progress: ((String) -> Void)? = nil) async throws -> WebCourseSnapshot {
+        updateProgress = progress
+        defer { updateProgress = nil }
         guard let browser, let site = CourseWebsite.identify(url),
               let appURL = NSWorkspace.shared.urlForApplication(toOpen: url),
               let bundleID = Bundle(url: appURL)?.bundleIdentifier else {
@@ -133,7 +140,8 @@ final class WebLessonReader: NSObject, WKScriptMessageHandler, WKNavigationDeleg
                 snapshot = try decoder.decode(WebCourseSnapshot.self, from: data)
             } else {
                 busy = true
-                await readGeneric(generation: generation, page: page, forceCatalog: true)
+                await readGeneric(generation: generation, page: page, forceCatalog: true, failOnReplayFailure: true)
+                if let readFailure { throw readFailure }
                 guard let result, result.issues.isEmpty,
                       let found = result.snapshots.first(where: { $0.packageID == packageID }) else {
                     throw WebsiteUpdateError.message("未取得完整的学丞课程，请在更新窗口检查登录和课程目录后重试。")
@@ -300,8 +308,8 @@ final class WebLessonReader: NSObject, WKScriptMessageHandler, WKNavigationDeleg
         }
     }
 
-    private func browserReplayMetadata(_ browser: BrowserCourseSession, url: URL) async -> XuechengReplayMetadata? {
-        guard let data = try? await browser.readReplay(url: url, script: Self.replayScript) else { return nil }
+    private func browserReplayMetadata(_ browser: BrowserCourseSession, url: URL) async throws -> XuechengReplayMetadata? {
+        guard let data = try await browser.readReplay(url: url, script: Self.replayScript) else { return nil }
         return try? JSONDecoder().decode(XuechengReplayMetadata.self, from: data)
     }
 
@@ -321,7 +329,9 @@ final class WebLessonReader: NSObject, WKScriptMessageHandler, WKNavigationDeleg
         busy = false
     }
     /// Sites without an adapter are read from their own already-loaded JSON; nothing new is requested.
-    private func readGeneric(generation current: UUID, page: URL, forceCatalog: Bool) async {
+    private func readGeneric(generation current: UUID, page: URL, forceCatalog: Bool,
+                             failOnReplayFailure: Bool = false) async {
+        readFailure = nil
         do {
             var catalog: XuechengCatalog?
             if Self.isXuechengHost(page.host), page.path == "/detail" {
@@ -349,7 +359,8 @@ final class WebLessonReader: NSObject, WKScriptMessageHandler, WKNavigationDeleg
             guard !stopped, generation == current else { return }
             capturedResponses = payloads.count
             if let catalog, !catalog.rows.isEmpty {
-                let course = await collectXuecheng(catalog, page: page, baseSnapshots: snapshots, generation: current)
+                let course = try await collectXuecheng(catalog, page: page, baseSnapshots: snapshots, generation: current,
+                                                      failOnReplayFailure: failOnReplayFailure)
                 guard !stopped, generation == current else { return }
                 snapshots = Self.merged(snapshots, with: [course])
             }
@@ -379,6 +390,7 @@ final class WebLessonReader: NSObject, WKScriptMessageHandler, WKNavigationDeleg
             }
         } catch {
             guard !stopped, generation == current else { return }
+            readFailure = error
             status = "识别失败：\(Self.crawlerFailureDescription(error))。"
         }
         busy = false
@@ -449,7 +461,8 @@ final class WebLessonReader: NSObject, WKScriptMessageHandler, WKNavigationDeleg
                                  lessons: lessons, issues: [])
     }
     private func collectXuecheng(_ catalog: XuechengCatalog, page: URL,
-                                  baseSnapshots: [WebCourseSnapshot], generation current: UUID) async -> WebCourseSnapshot {
+                                  baseSnapshots: [WebCourseSnapshot], generation current: UUID,
+                                  failOnReplayFailure: Bool) async throws -> WebCourseSnapshot {
         let packageID = "generic:" + catalog.courseID
         var counts: [String: Int] = [:]
         var lessons: [WebCourseLesson] = []
@@ -464,13 +477,23 @@ final class WebLessonReader: NSObject, WKScriptMessageHandler, WKNavigationDeleg
                 replayAttempts.insert(id)
                 status = "正在进入直播回放 \(index + 1)/\(catalog.rows.count)：\(row.name)"
                 if let url = await replayURL(for: index), !stopped, generation == current {
-                    let candidate = await readReplayMetadata(at: url)
+                    let candidate: XuechengReplayMetadata?
+                    do { candidate = try await readReplayMetadata(at: url) }
+                    catch {
+                        if failOnReplayFailure || error is CancellationError || Task.isCancelled { throw error }
+                        candidate = nil
+                    }
                     if let candidate,
+                       candidate.durationSeconds.isFinite, candidate.durationSeconds > 0, candidate.durationSeconds <= 36000,
                        candidate.title.filter({ !$0.isWhitespace }) == row.name.filter({ !$0.isWhitespace }) {
                         metadata = candidate
                         replayCache[id] = candidate
                     }
                 }
+            }
+            try Task.checkCancellation()
+            if failOnReplayFailure, row.replay, metadata == nil {
+                throw WebsiteUpdateError.message("第 \(index + 1)/\(catalog.rows.count) 个直播回放未取得匹配的有效时长，更新已暂停，原课程已保留。请在浏览器检查回放后再点“立即更新”。")
             }
             lessons.append(WebCourseLesson(id: id, name: row.name, subject: "", stage: "", chapter: "",
                                            kind: "living", published: row.replay,
@@ -545,10 +568,10 @@ final class WebLessonReader: NSObject, WKScriptMessageHandler, WKNavigationDeleg
         replayWebView = nil
         continuation?.resume(returning: metadata)
     }
-    private func readReplayMetadata(at url: URL) async -> XuechengReplayMetadata? {
+    private func readReplayMetadata(at url: URL) async throws -> XuechengReplayMetadata? {
         guard url.scheme == "https", Self.isXuechengHost(url.host),
               url.path == "/backWindow" else { return nil }
-        if let browser { return await browserReplayMetadata(browser, url: url) }
+        if let browser { return try await browserReplayMetadata(browser, url: url) }
         let configuration = WKWebViewConfiguration()
         configuration.websiteDataStore = webView.configuration.websiteDataStore
         configuration.userContentController.add(self, name: "replayMetadata")

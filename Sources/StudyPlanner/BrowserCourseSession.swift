@@ -366,9 +366,6 @@ actor BrowserCourseSession {
         guard error == nil else { return nil }
         let marker = UUID().uuidString
         var expected = url
-        var installed = false
-        let metadataScript = script.replacingOccurrences(of: "window.webkit?.messageHandlers?.replayMetadata?.postMessage(metadata);",
-                                                         with: "window.__studyReplayMetadata = metadata;")
         defer {
             // Never close a user tab that moved into the old tab's position.
             if pid == replayPID,
@@ -376,34 +373,70 @@ actor BrowserCourseSession {
                 _ = try? PlaybackStateReader.send(pid: pid, eventID: "clos", direct: replayTab)
             }
         }
-        for _ in 0..<80 {
+        let deadline = ContinuousClock.now.advanced(by: .seconds(30))
+        while ContinuousClock.now < deadline {
             guard session == activeSession else { return nil }
             try Task.checkCancellation()
-            if let current = try? self.url(of: replayTab), current == expected {
-                // The tab was just created for this exact URL, never a pre-existing tab.
-                _ = try execute("window.__studyReplayOwner = \(Self.literal(marker)); 'owned';", in: replayTab)
-                if current.host == "view.csslcloud.net" {
-                    if !installed { _ = try execute(metadataScript + "\n'ready';", in: replayTab); installed = true }
-                    let json = try execute("JSON.stringify(window.__studyReplayMetadata ?? null)", in: replayTab)
-                    if json != "null", let data = json.data(using: .utf8) { return data }
-                } else {
-                    let value = try execute("""
-                    (() => { for (const f of document.querySelectorAll('iframe')) {
-                      try { const u = new URL(f.src, location.href);
-                        if (u.protocol === 'https:' && u.hostname === 'view.csslcloud.net') return u.href;
-                      } catch {}
-                    } return ''; })()
-                    """, in: replayTab)
-                    if let frame = WebLessonTiming.websiteURL(value), frame.host == "view.csslcloud.net" {
-                        _ = try PlaybackStateReader.send(pid: pid, eventID: "setd",
-                            direct: PlaybackStateReader.object("prop", container: replayTab, property: kind == .safari ? "pURL" : "URL "),
-                            parameter: ("data", .init(string: frame.absoluteString)))
-                        expected = frame
+            // Safari can expose the destination URL before its new document is ready.
+            // The callback endpoint can also redirect within the playback origin.
+            if let current = try? self.url(of: replayTab),
+               current == expected || (Self.isReplayPage(expected) && Self.isReplayPage(current)),
+               let json = try? execute(Self.replayProbe(documentURL: current, marker: marker, script: script), in: replayTab),
+               let data = json.data(using: .utf8),
+               let packet = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+                if Self.isReplayPage(current) {
+                    if let metadata = packet["metadata"] as? [String: Any] {
+                        return try JSONSerialization.data(withJSONObject: metadata)
                     }
+                } else if let value = packet["frame"] as? String,
+                          let frame = URL(string: value), Self.isReplayPage(frame) {
+                    _ = try PlaybackStateReader.send(pid: pid, eventID: "setd",
+                        direct: PlaybackStateReader.object("prop", container: replayTab, property: kind == .safari ? "pURL" : "URL "),
+                        parameter: ("data", .init(string: frame.absoluteString)))
+                    expected = frame
                 }
             }
             try await Task.sleep(for: .milliseconds(250))
         }
-        return nil
+        throw WebsiteUpdateError.message("直播回放读取超时，更新已暂停，原课程已保留。请在浏览器检查回放能否打开后再点“立即更新”。")
+    }
+
+    static func isReplayPage(_ url: URL) -> Bool {
+        url.scheme == "https" && url.host == "view.csslcloud.net" &&
+            (url.port == nil || url.port == 443) && url.user == nil && url.password == nil
+    }
+
+    /// One atomic document check/install/read. The marker lives in the document,
+    /// so a reload reinstalls the observer instead of leaving a stale Swift flag.
+    static func replayProbe(documentURL: URL, marker: String, script: String) -> String {
+        let metadataScript = script.replacingOccurrences(of: "window.webkit?.messageHandlers?.replayMetadata?.postMessage(metadata);",
+                                                         with: "window.__studyReplayMetadata = metadata;")
+        return """
+        (() => {
+          if (location.href !== \(literal(documentURL.absoluteString))) return '{}';
+          const replay = u => u.protocol === 'https:' && u.hostname === 'view.csslcloud.net' &&
+            (!u.port || u.port === '443') && !u.username && !u.password;
+          const page = new URL(location.href);
+          const wrapper = page.protocol === 'https:' && /^(www\\.)?ixuecheng\\.cn$/.test(page.hostname) &&
+            page.pathname === '/backWindow' && (!page.port || page.port === '443') && !page.username && !page.password;
+          if (!replay(page) && !wrapper) return '{}';
+          window.__studyReplayOwner = \(literal(marker));
+          if (document.readyState === 'loading' || !document.documentElement || !document.body) return '{}';
+          if (replay(page)) {
+            if (window.__studyReplayReader !== \(literal(marker))) {
+              \(metadataScript)
+              window.__studyReplayReader = \(literal(marker));
+            }
+            return JSON.stringify({metadata: window.__studyReplayMetadata ?? null});
+          }
+          for (const frame of document.querySelectorAll('iframe')) {
+            try { const u = new URL(frame.src, location.href);
+              // Vue renders the iframe before onMounted fills in its replay query.
+              if (replay(u) && u.searchParams.get('recordid')) return JSON.stringify({frame: u.href});
+            } catch {}
+          }
+          return '{}';
+        })()
+        """
     }
 }

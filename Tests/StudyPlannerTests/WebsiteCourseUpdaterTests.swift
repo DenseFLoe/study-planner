@@ -99,6 +99,26 @@ final class WebsiteCourseUpdaterTests: XCTestCase {
         XCTAssertEqual(store.state, before)
         XCTAssertEqual(updater.sources[course.id]?.enabled, false)
     }
+    @MainActor func testReplayTimeoutIsVisibleAndPausesWithoutChangingCourseOrRetrying() async throws {
+        let (store, repo, course) = try fixture()
+        let before = store.state
+        let message = "直播回放读取超时，更新已暂停，原课程已保留。"
+        var calls = 0
+        let updater = WebsiteCourseUpdater { _, _, _, _ in
+            calls += 1
+            throw WebsiteUpdateError.message(message)
+        }
+        updater.start(store: store)
+        defer { updater.stop() }
+        try updater.configure(course: course, url: snapshot().sourceURL, enabled: true, interval: 30)
+        await updater.tick()
+        await updater.tick(now: Date().addingTimeInterval(86400))
+        XCTAssertEqual(calls, 1)
+        XCTAssertEqual(updater.sources[course.id]?.status, message)
+        XCTAssertEqual(updater.sources[course.id]?.needsAttention, true)
+        XCTAssertEqual(store.state, before)
+        XCTAssertNil(repo.saved)
+    }
     @MainActor func testDeletedCourseDuringFetchIsNotRecreated() async throws {
         let (store, _, course) = try fixture()
         let fresh = snapshot()

@@ -11,15 +11,12 @@ final class WebsiteCourseUpdater {
     private weak var store: PlannerStore?
     @ObservationIgnored private var loop: Task<Void, Never>?
     @ObservationIgnored private let defaults: UserDefaults?
-    @ObservationIgnored private let fetch: Fetch
+    @ObservationIgnored private let fetch: Fetch?
     private static let key = "studyPlannerWebsiteSources.v1"
 
     init(defaults: UserDefaults? = nil, fetch: Fetch? = nil) {
         self.defaults = defaults
-        self.fetch = fetch ?? { url, packageID, _, interactive in
-            let reader = WebLessonReader()
-            return try await reader.managedSnapshot(url: url, packageID: packageID, interactive: interactive)
-        }
+        self.fetch = fetch
         if let data = defaults?.data(forKey: Self.key),
            let decoded = try? JSONDecoder().decode([UUID: WebsiteCourseSource].self, from: data) {
             sources = decoded.filter { _, source in
@@ -81,7 +78,16 @@ final class WebsiteCourseUpdater {
         defer { updating = nil }
         do {
             let url = try site.courseURL(binding.url, packageID: previous.packageID)
-            let snapshot = try await fetch(url, previous.packageID, site, interactive)
+            let snapshot: WebCourseSnapshot
+            if let fetch {
+                snapshot = try await fetch(url, previous.packageID, site, interactive)
+            } else {
+                let reader = WebLessonReader()
+                snapshot = try await reader.managedSnapshot(url: url, packageID: previous.packageID, interactive: interactive) { [weak self] status in
+                    guard let self, self.updating == courseID else { return }
+                    self.sources[courseID]?.status = status
+                }
+            }
             try Task.checkCancellation()
             // Do not replace the snapshot underneath an open course/order editor's unsaved draft.
             while editors[courseID] != nil {
