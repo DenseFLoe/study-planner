@@ -239,7 +239,10 @@ public struct SyncLedger: Codable, Sendable {
             if task.replacesConfirmedBlock == true { slot.generation = task.id }
             else if counts[slot, default: 0] > 1 && task.id.uuid.6 & 0xf0 == 0x50 {
                 // Recognize salted IDs from older schedulers only for colliding slots.
-                let base = "task|\(task.courseID.uuidString)|\(Int64(task.start.timeIntervalSinceReferenceDate))|\(task.durationMinutes)" + (task.lessonID.map { "|" + $0 } ?? "")
+                guard let start = Int64(exactly: task.start.timeIntervalSinceReferenceDate.rounded(.towardZero)) else {
+                    throw SyncFailure.invalidData
+                }
+                let base = "task|\(task.courseID.uuidString)|\(start)|\(task.durationMinutes)" + (task.lessonID.map { "|" + $0 } ?? "")
                 if task.id != stablePlannerID(base) {
                     let confirmed = tasks.values.filter { $0.courseID == task.courseID && $0.confirmedAt != nil && $0.id != task.id }.map { $0.id.uuidString }.sorted()
                     if task.id == stablePlannerID(base + "|confirmed|" + confirmed.joined(separator: ",")) { slot.generation = task.id }
