@@ -15,7 +15,7 @@ struct SchedulePrioritiesPanel: View {
                 Text("保留往日及已确认记录；保持整节课与课节顺序，以及 15 分钟课间休息。普通课程遵守最小时间块，最后余量可更短。")
             }
             .font(.callout).padding(.vertical, 6)
-            Text("Mac 主页的“立即学习”仅次于上述时间约束，高于以下所有偏好和拖动顺序；重排必须保留各课程截止日前已排入的学习量。")
+            Text("Mac 主页的“立即学习”高于以下所有偏好和拖动顺序。今日时间不足时，原有未确认课程可移出今日，重排到截止日前的其他可用时段；已确认记录和固定事项保留。仍排不下的学习量会保留并提示，不会阻止当前可开始的课节。")
                 .font(.callout).foregroundStyle(.secondary)
             ForEach(ScheduleRule.allCases) { rule in
                 VStack(alignment: .leading, spacing: 6) {

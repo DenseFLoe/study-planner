@@ -39,6 +39,6 @@ struct ImmediateStudyMenu: View {
         .menuStyle(.button)
         .buttonStyle(.borderedProminent)
         .disabled(entryDisabled)
-        .help("选择任意未完成分节，从当前分钟向上取整开始；空档不足整节时先学一段，剩余分钟保留并在后续优先接续同一节；其余未确认课表允许整体重排，失败时保留原数据")
+        .help("选择任意未完成分节，从当前分钟向上取整开始；今日时间不足时，原有未确认课程会移到截止日前的其他可用时段。空档不足整节时先学一段，剩余分钟保留并优先接续；已确认记录和固定事项保留，排不下的学习量会提示，无法开始时保留原数据")
     }
 }
