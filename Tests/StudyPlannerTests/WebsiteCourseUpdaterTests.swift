@@ -119,6 +119,34 @@ final class WebsiteCourseUpdaterTests: XCTestCase {
         XCTAssertEqual(store.state, before)
         XCTAssertNil(repo.saved)
     }
+
+    @MainActor func testPendingLessonIsRetainedAndLaterPublishedWithoutPausingUpdates() async throws {
+        let (store, _, course) = try fixture()
+        var fresh = snapshot(ids: ["1", "2", "3"])
+        fresh.lessons[2].published = false
+        fresh.lessons[2].requiresDuration = false
+        fresh.lessons[2].durationSeconds = nil
+        var calls = 0
+        let updater = WebsiteCourseUpdater { _, _, _, _ in calls += 1; return fresh }
+        updater.start(store: store)
+        defer { updater.stop() }
+        try updater.configure(course: course, url: fresh.sourceURL, enabled: true, interval: 60)
+        await updater.tick()
+        let pending = try XCTUnwrap(store.course(course.id))
+        XCTAssertEqual(pending.webCourse?.lessons.count, 3)
+        XCTAssertEqual(pending.totalMinutes, course.totalMinutes)
+        XCTAssertEqual(store.state.lessonWorkItems(for: pending).map(\.id), ["42:1", "42:2"])
+        XCTAssertEqual(updater.sources[course.id]?.needsAttention, false)
+        XCTAssertTrue(updater.sources[course.id]?.status.contains("1 个课节尚未更新") == true)
+        fresh = snapshot(ids: ["1", "2", "3"])
+        await updater.tick(now: Date().addingTimeInterval(7200))
+        let published = try XCTUnwrap(store.course(course.id))
+        XCTAssertEqual(calls, 2)
+        XCTAssertEqual(published.totalMinutes, course.totalMinutes + 60)
+        XCTAssertEqual(store.state.lessonWorkItems(for: published).map(\.id), ["42:1", "42:2", "42:3"])
+        XCTAssertEqual(updater.sources[course.id]?.needsAttention, false)
+        XCTAssertEqual(updater.sources[course.id]?.status, "更新成功")
+    }
     @MainActor func testDeletedCourseDuringFetchIsNotRecreated() async throws {
         let (store, _, course) = try fixture()
         let fresh = snapshot()

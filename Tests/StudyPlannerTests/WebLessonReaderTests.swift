@@ -112,6 +112,66 @@ final class WebLessonReaderTests: XCTestCase {
     }
 
     @MainActor
+    func testXuechengReadsRowStatusWithoutDroppingLessonsOrOpeningPendingReplays() async throws {
+        let reader = WebLessonReader(useExternalBrowser: false); defer { reader.stop() }
+        reader.webView.loadHTMLString(#"""
+        <html><body><div>状态测试</div><div>课程有效期：2099-12-31</div>
+        <div id="rows"></div><script>
+        const labels = ['尚未更新', '回放生成中', '直播时间：2099-11-03 19:00', '', '没有权限', ''];
+        document.getElementById('rows').innerHTML = labels.map((label, i) =>
+          '<div class="cursor-pointer" onclick="window.opened=' + i + '; document.getElementById(\'notice\').textContent=\'回放生成中\'">' +
+          '<img src="/ic_course_live.png"><span>' + (i === 5 ? '尚未更新的课程识别方法' : '课节' + i) + '</span>' +
+          '<span>直播回放</span><span>' + label + '</span><span style="display:none">尚未更新</span></div>').join('');
+        </script><div id="notice" class="ant-message-notice-content"></div></body></html>
+        """#, baseURL: URL(string: "https://ixuecheng.cn/detail?id=fixture"))
+        for _ in 0..<60 {
+            if (try? await reader.webView.evaluateJavaScript("typeof window.studyXuechengCrawler")) as? String == "object" { break }
+            try await Task.sleep(for: .milliseconds(100))
+        }
+        let value = try await reader.webView.callAsyncJavaScript("""
+        const catalog = await window.studyXuechengCrawler.catalog();
+        const pendingOpened = await window.studyXuechengCrawler.open(0);
+        const publishedOpened = await window.studyXuechengCrawler.open(3);
+        const notice = window.studyXuechengCrawler.replayState(3);
+        document.getElementById('notice').textContent = '请先登录，回放生成中';
+        const blocked = window.studyXuechengCrawler.replayState(3);
+        document.getElementById('notice').textContent = '回放生成中';
+        await window.studyXuechengCrawler.open(5);
+        const staleNotice = window.studyXuechengCrawler.replayState(5);
+        document.querySelector('.cursor-pointer').querySelectorAll('span')[2].textContent = '';
+        const updated = await window.studyXuechengCrawler.catalog(true);
+        return JSON.stringify({catalog, pendingOpened, publishedOpened, notice, blocked, staleNotice, updated});
+        """, arguments: [:], in: nil, contentWorld: .page)
+        let packet = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(try XCTUnwrap(value as? String).utf8)) as? [String: Any])
+        let catalog = try JSONDecoder().decode(XuechengCatalog.self, from: JSONSerialization.data(withJSONObject: try XCTUnwrap(packet["catalog"])))
+        XCTAssertEqual(catalog.rows.count, 6)
+        XCTAssertEqual(catalog.rows.map(\.availability), ["pending", "pending", "pending", nil, "blocked", nil])
+        XCTAssertEqual(catalog.rows.last?.name, "尚未更新的课程识别方法")
+        XCTAssertEqual(packet["pendingOpened"] as? Bool, false)
+        XCTAssertEqual(packet["publishedOpened"] as? Bool, true)
+        XCTAssertEqual(packet["notice"] as? String, "pending")
+        XCTAssertEqual(packet["blocked"] as? String, "blocked")
+        XCTAssertTrue(packet["staleNotice"] is NSNull)
+        let updated = try JSONDecoder().decode(XuechengCatalog.self, from: JSONSerialization.data(withJSONObject: try XCTUnwrap(packet["updated"])))
+        XCTAssertEqual(updated.rows[0].key, catalog.rows[0].key)
+        XCTAssertNil(updated.rows[0].availability)
+    }
+
+    @MainActor
+    func testMissingOrMismatchedReplayDoesNotBecomeUnpublished() {
+        let row = XuechengCatalog.Row(name: "课节", replay: true, previouslyWatched: false, key: "0")
+        for metadata: XuechengReplayMetadata? in [nil,
+            .init(title: "其他课节", durationSeconds: nil, watchedPercent: nil, availability: "pending"),
+            .init(title: "其他课节", durationSeconds: 3600, watchedPercent: 0),
+            .init(title: "课节", durationSeconds: nil, watchedPercent: nil, availability: "blocked")] {
+            let lesson = WebLessonReader.xuechengLesson(id: "same-id", row: row, metadata: metadata)
+            XCTAssertTrue(lesson.published)
+            XCTAssertTrue(lesson.requiresDuration)
+            XCTAssertNil(lesson.durationSeconds)
+        }
+    }
+
+    @MainActor
     func testXuechengExpansionIgnoresHiddenLabelsAndDoesNotToggleOpenGroups() async throws {
         let reader = WebLessonReader(useExternalBrowser: false); defer { reader.stop() }
         reader.webView.loadHTMLString(#"""

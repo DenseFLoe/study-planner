@@ -24,22 +24,37 @@ private struct SniffedPage: Decodable {
     let revision: Int
 }
 
-private struct XuechengCatalog: Decodable {
+struct XuechengCatalog: Decodable {
     struct Row: Decodable {
         let name: String
         let replay: Bool
         let previouslyWatched: Bool
         let key: String?
+        var availability: String? = nil
     }
     let courseID: String
     let name: String
     let rows: [Row]
 }
 
-private struct XuechengReplayMetadata: Decodable {
+struct XuechengReplayMetadata: Decodable {
     let title: String
-    let durationSeconds: Double
+    let durationSeconds: Double?
     let watchedPercent: Double?
+    var availability: String? = nil
+
+    func matches(_ name: String) -> Bool {
+        title.filter { !$0.isWhitespace } == name.filter { !$0.isWhitespace }
+    }
+    var hasDuration: Bool {
+        guard let seconds = durationSeconds else { return false }
+        return seconds.isFinite && seconds > 0 && seconds <= 36000 && availability == nil
+    }
+}
+
+private struct XuechengReplayTarget {
+    var url: URL? = nil
+    var availability: String? = nil
 }
 
 @MainActor @Observable
@@ -70,7 +85,7 @@ final class WebLessonReader: NSObject, WKScriptMessageHandler, WKNavigationDeleg
     private var opened = false
     private var attemptedURL: String?
     private var redirectAttempts = 0
-    private var replayURLContinuation: CheckedContinuation<URL?, Never>?
+    private var replayURLContinuation: CheckedContinuation<XuechengReplayTarget, Never>?
     private var replayURLRequestID: UUID?
     private var replayMetadataContinuation: CheckedContinuation<XuechengReplayMetadata?, Never>?
     private var replayMetadataRequestID: UUID?
@@ -89,8 +104,8 @@ final class WebLessonReader: NSObject, WKScriptMessageHandler, WKNavigationDeleg
     static var script: String { resource("CourseCrawler") }
     /// External browsers install this on explicit connection; test WebViews inject at document start.
     static var genericScript: String { resource("GenericCrawler") }
-    static var xuechengScript: String { resource("XuechengCrawler") }
-    static var replayScript: String { resource("XuechengReplay") }
+    static var xuechengScript: String { resource("XuechengAvailability") + "\n" + resource("XuechengCrawler") }
+    static var replayScript: String { resource("XuechengAvailability") + "\n" + resource("XuechengReplay") }
     private static func resource(_ name: String) -> String {
         guard let url = Bundle.module.url(forResource: name, withExtension: "js"),
               let source = try? String(contentsOf: url, encoding: .utf8) else { return "" }
@@ -162,11 +177,12 @@ final class WebLessonReader: NSObject, WKScriptMessageHandler, WKNavigationDeleg
     func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
         if message.name == "replayMetadata" {
             guard message.webView === replayWebView,
-                  message.frameInfo.securityOrigin.host == "view.csslcloud.net",
+                  (message.frameInfo.securityOrigin.host == "view.csslcloud.net" ||
+                    (Self.isXuechengHost(message.frameInfo.securityOrigin.host) && message.frameInfo.request.url?.path == "/backWindow")),
                   let body = message.body as? [String: Any],
                   let data = try? JSONSerialization.data(withJSONObject: body),
                   let metadata = try? JSONDecoder().decode(XuechengReplayMetadata.self, from: data),
-                  !metadata.title.isEmpty, metadata.durationSeconds > 0, metadata.durationSeconds <= 36_000 else { return }
+                  metadata.hasDuration || metadata.availability == "pending" || metadata.availability == "blocked" else { return }
             finishReplayMetadata(metadata)
             return
         }
@@ -233,7 +249,7 @@ final class WebLessonReader: NSObject, WKScriptMessageHandler, WKNavigationDeleg
             return
         }
         busy = true; generation = UUID()
-        if forceCatalog { replayAttempts.removeAll() }
+        if forceCatalog { replayAttempts.removeAll(); replayCache = replayCache.filter { $0.value.hasDuration } }
         let current = generation
         if isGenericSite {
             status = "正在识别网页已加载的课程数据…"
@@ -272,7 +288,7 @@ final class WebLessonReader: NSObject, WKScriptMessageHandler, WKNavigationDeleg
                     browserConnected = true
                 } else { page = try await browser.currentPage() }
                 guard !stopped, generation == current else { return }
-                if forceCatalog { replayAttempts.removeAll() }
+                if forceCatalog { replayAttempts.removeAll(); replayCache = replayCache.filter { $0.value.hasDuration } }
                 status = "正在读取\(browserName)中的课程数据…"
                 if isGenericSite { await readGeneric(generation: current, page: page, forceCatalog: forceCatalog) }
                 else { result = nil; await readAdapted(generation: current) }
@@ -381,8 +397,9 @@ final class WebLessonReader: NSObject, WKScriptMessageHandler, WKNavigationDeleg
                 if let catalog, !catalog.rows.isEmpty {
                     let course = merged.first { $0.packageID == "generic:" + catalog.courseID }
                     let missing = course?.unknownDurations ?? 0
+                    let pending = course?.lessons.filter { !$0.published }.count ?? 0
                     status = missing == 0
-                        ? "已读取 \(catalog.rows.count) 个直播条目；网站未提供的观看进度按 0% 计。请核对后生成计划。"
+                        ? "已读取 \(catalog.rows.count) 个直播条目，其中 \(pending) 个尚未更新，保留目录并等待后续发布；网站未提供的观看进度按 0% 计。请核对后生成计划。"
                         : "已读取 \(catalog.rows.count) 个直播条目，其中 \(missing) 个回放未取得时长；请重新抓取。"
                 } else {
                     status = "本轮识别出 \(snapshots.count) 门课程，累计 \(merged.count) 门；继续打开其他课程会自动累加，核对后生成计划。"
@@ -473,10 +490,14 @@ final class WebLessonReader: NSObject, WKScriptMessageHandler, WKNavigationDeleg
             counts[row.name] = occurrence
             let id = packageID + ":live:" + row.name + ":" + (row.key ?? String(occurrence))
             var metadata = replayCache[id]
-            if row.replay && metadata == nil && !replayAttempts.contains(id) && !stopped && generation == current {
+            if row.replay && row.availability == nil && metadata == nil && !replayAttempts.contains(id) && !stopped && generation == current {
                 replayAttempts.insert(id)
                 status = "正在进入直播回放 \(index + 1)/\(catalog.rows.count)：\(row.name)"
-                if let url = await replayURL(for: index), !stopped, generation == current {
+                let target = await replayURL(for: index)
+                if let availability = target.availability {
+                    metadata = XuechengReplayMetadata(title: row.name, durationSeconds: nil, watchedPercent: nil, availability: availability)
+                    replayCache[id] = metadata
+                } else if let url = target.url, !stopped, generation == current {
                     let candidate: XuechengReplayMetadata?
                     do { candidate = try await readReplayMetadata(at: url) }
                     catch {
@@ -484,43 +505,51 @@ final class WebLessonReader: NSObject, WKScriptMessageHandler, WKNavigationDeleg
                         candidate = nil
                     }
                     if let candidate,
-                       candidate.durationSeconds.isFinite, candidate.durationSeconds > 0, candidate.durationSeconds <= 36000,
-                       candidate.title.filter({ !$0.isWhitespace }) == row.name.filter({ !$0.isWhitespace }) {
+                       (candidate.hasDuration && candidate.matches(row.name)) ||
+                        (candidate.availability == "pending" && (candidate.title.isEmpty || candidate.matches(row.name))) {
                         metadata = candidate
                         replayCache[id] = candidate
                     }
                 }
             }
             try Task.checkCancellation()
-            if failOnReplayFailure, row.replay, metadata == nil {
+            let lesson = Self.xuechengLesson(id: id, row: row, metadata: metadata)
+            if failOnReplayFailure, lesson.published, lesson.durationSeconds == nil {
                 throw WebsiteUpdateError.message("第 \(index + 1)/\(catalog.rows.count) 个直播回放未取得匹配的有效时长，更新已暂停，原课程已保留。请在浏览器检查回放后再点“立即更新”。")
             }
-            lessons.append(WebCourseLesson(id: id, name: row.name, subject: "", stage: "", chapter: "",
-                                           kind: "living", published: row.replay,
-                                           durationSeconds: metadata?.durationSeconds,
-                                           watchedPercent: metadata?.watchedPercent ?? 0,
-                                           markedFinished: false, requiresDuration: row.replay))
+            lessons.append(lesson)
             guard !stopped, generation == current else { break }
-            if row.replay {
-                if metadata?.durationSeconds != nil { resolved += 1 } else { unresolved += 1 }
+            if lesson.published {
+                if lesson.durationSeconds != nil { resolved += 1 } else { unresolved += 1 }
             }
             let partial = xuechengSnapshot(catalog, page: page, lessons: lessons, complete: false)
             let merged = Self.merged(result?.snapshots ?? [], with: Self.merged(baseSnapshots, with: [partial]))
             result = WebCourseAccount(snapshots: merged, unavailable: [],
                                       issues: ["学丞直播回放时长仍在读取，请等待完成。"], packageCount: merged.count)
-            status = "已处理直播条目 \(index + 1)/\(catalog.rows.count)；取得时长 \(resolved) 个，待定 \(unresolved) 个。"
+            status = "已处理直播条目 \(index + 1)/\(catalog.rows.count)；取得时长 \(resolved) 个，尚未更新 \(lessons.filter { !$0.published }.count) 个，读取异常 \(unresolved) 个。"
         }
         return xuechengSnapshot(catalog, page: page, lessons: lessons,
                                 complete: !stopped && generation == current && lessons.count == catalog.rows.count)
     }
 
-    private func finishReplayURL(_ url: URL?) {
+    static func xuechengLesson(id: String, row: XuechengCatalog.Row, metadata: XuechengReplayMetadata?) -> WebCourseLesson {
+        let pending = row.availability == "pending" || (row.availability != "blocked" &&
+            metadata?.availability == "pending" && (metadata?.title.isEmpty == true || metadata?.matches(row.name) == true))
+        let published = !pending && (row.replay || row.availability == "blocked")
+        let verified = published && row.availability != "blocked" && metadata?.hasDuration == true && metadata?.matches(row.name) == true
+        return WebCourseLesson(id: id, name: row.name, subject: "", stage: "", chapter: "", kind: "living",
+                               published: published, durationSeconds: verified ? metadata?.durationSeconds : nil,
+                               watchedPercent: verified ? (metadata?.watchedPercent ?? 0) : 0,
+                               markedFinished: false, requiresDuration: published)
+    }
+
+    private func finishReplayURL(_ url: URL?, availability: String? = nil) {
         let continuation = replayURLContinuation
         replayURLContinuation = nil
         replayURLRequestID = nil
-        continuation?.resume(returning: url)
+        continuation?.resume(returning: XuechengReplayTarget(url: url, availability: availability))
     }
-    private func replayURL(for index: Int) async -> URL? {
+    private func replayURL(for index: Int) async -> XuechengReplayTarget {
         if browser != nil {
             let source = """
             const previous = window.open;
@@ -537,24 +566,35 @@ final class WebLessonReader: NSObject, WKScriptMessageHandler, WKNavigationDeleg
             bridge.restoreReplayOpen = restore;
             try {
               await window.studyXuechengCrawler?.open(index);
-              for (let i = 0; i < 80 && !captured; i++) await new Promise(r => setTimeout(r, 100));
-              return captured;
+              for (let i = 0; i < 80; i++) {
+                const availability = window.studyXuechengCrawler?.replayState(index);
+                if (availability) return {availability};
+                if (captured) return {url: captured};
+                await new Promise(r => setTimeout(r, 100));
+              }
+              return {};
             } finally {
               restore();
               if (bridge.restoreReplayOpen === restore) delete bridge.restoreReplayOpen;
             }
             """
-            guard let value = try? await evaluate(source, arguments: ["index": index]) as? String else { return nil }
-            return URL(string: value)
+            guard let value = try? await evaluate(source, arguments: ["index": index]) as? [String: Any] else { return XuechengReplayTarget() }
+            return XuechengReplayTarget(url: (value["url"] as? String).flatMap(URL.init(string:)), availability: value["availability"] as? String)
         }
         return await withCheckedContinuation { continuation in
             let requestID = UUID()
             replayURLRequestID = requestID
             replayURLContinuation = continuation
             Task { @MainActor in
-                let clicked = try? await evaluate("return (await window.studyXuechengCrawler?.open(index)) === true;", arguments: ["index": index]) as? Bool
-                if clicked != true, replayURLRequestID == requestID { finishReplayURL(nil); return }
-                try? await Task.sleep(for: .seconds(8))
+                _ = try? await evaluate("return (await window.studyXuechengCrawler?.open(index)) === true;", arguments: ["index": index])
+                for _ in 0..<80 {
+                    guard replayURLRequestID == requestID else { return }
+                    if let availability = try? await evaluate("return window.studyXuechengCrawler?.replayState(index);", arguments: ["index": index]) as? String {
+                        if replayURLRequestID == requestID { finishReplayURL(nil, availability: availability) }
+                        return
+                    }
+                    try? await Task.sleep(for: .milliseconds(100))
+                }
                 if replayURLRequestID == requestID { finishReplayURL(nil) }
             }
         }

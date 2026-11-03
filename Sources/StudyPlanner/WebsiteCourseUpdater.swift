@@ -125,7 +125,8 @@ final class WebsiteCourseUpdater {
             guard saved else { throw WebsiteUpdateError.message("网站数据已读取，但本地未保存成功，请检查课程设置后重试。") }
             sources[courseID]?.lastSuccess = Date()
             sources[courseID]?.needsAttention = false
-            sources[courseID]?.status = "更新成功"
+            let pending = snapshot.lessons.filter { !$0.published }.count
+            sources[courseID]?.status = pending == 0 ? "更新成功" : "更新成功；\(pending) 个课节尚未更新，已保留目录，将按设置继续检查"
             // A successful manual read proves the shared website session works again.
             for peer in store.courses where CourseWebsite.identify(peer.webCourse) == site && peer.id != courseID {
                 if sources[peer.id]?.status == WebsiteUpdateError.loginRequired.localizedDescription {

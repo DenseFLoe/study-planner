@@ -24,18 +24,21 @@
       .filter((row, index, all) => row && all.indexOf(row) === index);
   }
   function describe(row) {
-    const labels = [...row.querySelectorAll('span')].map(span => clean(span.textContent)).filter(Boolean);
+    const classifier = window.studyXuechengAvailability;
+    const labels = [...row.querySelectorAll('span')].filter(classifier.visible)
+      .map(span => clean(span.textContent)).filter(Boolean);
     const name = labels.find(line => line !== '上次观看' && line !== '直播回放' &&
-      !line.startsWith('直播时间') && !/^\d+$/.test(line)) || '';
-    // textContent also works for retained, currently collapsed panels.
-    const text = clean(row.textContent);
-    return {name, replay: text.includes('直播回放'), previouslyWatched: text.includes('上次观看')};
+      !line.startsWith('直播时间') && !classifier.classify([line]) && !/^\d+$/.test(line)) || '';
+    const availability = classifier.classify(labels.filter(line => line !== name), true);
+    return {name, replay: labels.includes('直播回放'), previouslyWatched: labels.includes('上次观看'), availability};
   }
   function courseName() {
     const lines = (document.body?.innerText || '').split('\n').map(clean).filter(Boolean);
     const validity = lines.findIndex(line => line.startsWith('课程有效期'));
     return validity > 0 ? lines[validity - 1] : '';
   }
+  const notices = () => [...document.querySelectorAll('[role="alert"], .ant-message-notice-content, .ant-modal-body, .el-message, .el-message-box')]
+    .filter(window.studyXuechengAvailability.visible);
   function check(current) {
     if (state !== current || current.page !== pageKey()) throw Error('课程页面已切换，请重新读取');
   }
@@ -106,7 +109,7 @@
     }
     check(current);
     return {courseID: current.courseID, name: courseName(), rows: [...current.entries.values()].map(
-      ({name, replay, previouslyWatched, key}) => ({name, replay, previouslyWatched, key}))};
+      ({name, replay, previouslyWatched, key, availability}) => ({name, replay, previouslyWatched, key, availability}))};
   }
   window.studyXuechengCrawler = {
     async catalog(force = false) {
@@ -125,7 +128,7 @@
       const current = state;
       if (!current || current.page !== pageKey()) return false;
       const entry = [...current.entries.values()][index];
-      if (!entry?.replay) return false;
+      if (!entry?.replay || entry.availability) return false;
       let scope = document;
       for (const [listIndex, itemIndex] of entry.path) {
         check(current);
@@ -137,9 +140,30 @@
       }
       check(current);
       const row = rows(scope)[entry.rowIndex];
-      if (!row || describe(row).name !== entry.name || !describe(row).replay) return false;
+      if (!row || describe(row).name !== entry.name) return false;
+      current.activeRow = row;
+      current.activeKey = entry.key;
+      const fresh = describe(row);
+      entry.availability = fresh.availability;
+      if (!fresh.replay || fresh.availability) return false;
+      // A toast from the previous lesson must not mark the next lesson pending.
+      current.noticeBaseline = new Map(notices().map(element => [element, element.innerText]));
       row.click();
       return true;
+    },
+    replayState(index) {
+      const current = state;
+      if (!current || current.page !== pageKey()) return null;
+      const entry = [...current.entries.values()][index];
+      if (!entry) return null;
+      const classifier = window.studyXuechengAvailability;
+      const messages = current.activeKey === entry.key ? notices()
+        .filter(element => current.noticeBaseline?.get(element) !== element.innerText)
+        .flatMap(element => [element.innerText, ...classifier.labels(element)]) : [];
+      const row = current.activeRow;
+      const labels = row?.isConnected && describe(row).name === entry.name
+        ? [...row.querySelectorAll('span')].filter(classifier.visible).map(element => element.textContent).filter(text => clean(text) !== entry.name) : [];
+      return classifier.classify([...labels, ...messages], true) || entry.availability || null;
     }
   };
 })();

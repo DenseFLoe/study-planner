@@ -384,10 +384,8 @@ actor BrowserCourseSession {
                let json = try? execute(Self.replayProbe(documentURL: current, marker: marker, script: script), in: replayTab),
                let data = json.data(using: .utf8),
                let packet = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
-                if Self.isReplayPage(current) {
-                    if let metadata = packet["metadata"] as? [String: Any] {
-                        return try JSONSerialization.data(withJSONObject: metadata)
-                    }
+                if let metadata = packet["metadata"] as? [String: Any] {
+                    return try JSONSerialization.data(withJSONObject: metadata)
                 } else if let value = packet["frame"] as? String,
                           let frame = URL(string: value), Self.isReplayPage(frame) {
                     _ = try PlaybackStateReader.send(pid: pid, eventID: "setd",
@@ -422,13 +420,11 @@ actor BrowserCourseSession {
           if (!replay(page) && !wrapper) return '{}';
           window.__studyReplayOwner = \(literal(marker));
           if (document.readyState === 'loading' || !document.documentElement || !document.body) return '{}';
-          if (replay(page)) {
-            if (window.__studyReplayReader !== \(literal(marker))) {
-              \(metadataScript)
-              window.__studyReplayReader = \(literal(marker));
-            }
-            return JSON.stringify({metadata: window.__studyReplayMetadata ?? null});
+          if (window.__studyReplayReader !== \(literal(marker))) {
+            \(metadataScript)
+            window.__studyReplayReader = \(literal(marker));
           }
+          if (replay(page) || window.__studyReplayMetadata) return JSON.stringify({metadata: window.__studyReplayMetadata ?? null});
           for (const frame of document.querySelectorAll('iframe')) {
             try { const u = new URL(frame.src, location.href);
               // Vue renders the iframe before onMounted fills in its replay query.
