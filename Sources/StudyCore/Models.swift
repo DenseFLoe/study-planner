@@ -140,13 +140,16 @@ public struct FixedEventConflict: Identifiable, Equatable, Sendable {
     public var requestedEndMinute: Int
     public var floatingDurationMinutes: Int?
     public var reason: Reason
+    /// Transient conflict detail when clock-window minutes differ from elapsed overlap.
+    public var actualOverlapMinutes: Double?
     public init(eventID: UUID, title: String, date: Date, startMinute: Int = 0, endMinute: Int = 0,
                 requestedStartMinute: Int = 0, requestedEndMinute: Int = 0,
-                floatingDurationMinutes: Int? = nil, reason: Reason = .overlap) {
+                floatingDurationMinutes: Int? = nil, reason: Reason = .overlap, actualOverlapMinutes: Double? = nil) {
         self.eventID = eventID; self.title = title; self.date = date
         self.startMinute = startMinute; self.endMinute = endMinute
         self.requestedStartMinute = requestedStartMinute; self.requestedEndMinute = requestedEndMinute
         self.floatingDurationMinutes = floatingDurationMinutes; self.reason = reason
+        self.actualOverlapMinutes = actualOverlapMinutes
     }
     private func time(_ minute: Int) -> String { String(format: "%02d:%02d", minute / 60, minute % 60) }
     public var timeDescription: String {
@@ -155,6 +158,9 @@ public struct FixedEventConflict: Identifiable, Equatable, Sendable {
     public var explanation: String {
         switch reason {
         case .overlap:
+            if let actualOverlapMinutes {
+                return "按实际时间重叠 \(String(format: "%g", actualOverlapMinutes)) 分钟"
+            }
             let start = max(startMinute, requestedStartMinute), end = min(endMinute, requestedEndMinute)
             return "重叠 " + time(start) + "–" + time(end) + "（\(max(0, end - start)) 分钟）"
         case .floatingCapacity:
@@ -340,26 +346,53 @@ public struct PlannerState: Codable, Equatable, Sendable {
         while candidate <= updated.endDate {
             if updated.occurs(on: candidate, calendar: calendar) {
                 let others = fixedEvents.filter { $0.id != event.id && $0.occurs(on: candidate, calendar: calendar) }
-                let exactConflicts = others.filter { !updated.isFloating && !$0.isFloating && $0.startMinute < updated.endMinute && $0.endMinute > updated.startMinute }
-                // Only inspect the connected window component; unrelated conflicts must not block this edit.
-                var lower = updated.startMinute, upper = updated.endMinute
-                var component: [FixedEvent] = []
-                var changed = true
-                while changed {
-                    component = others.filter { $0.startMinute < upper && $0.endMinute > lower }
-                    let nextLower = min(lower, component.map(\.startMinute).min() ?? lower)
-                    let nextUpper = max(upper, component.map(\.endMinute).max() ?? upper)
-                    changed = nextLower != lower || nextUpper != upper
-                    lower = nextLower; upper = nextUpper
+                let candidates = [updated] + others, engine = ScheduleEngine(calendar: calendar)
+                let spans = candidates.map { value -> (start: Date, end: Date)? in
+                    // Unrelated malformed imports were not previously mapped.
+                    // Keep their nominal connection and existing validation path.
+                    guard value.hasValidTimeWindow else { return nil }
+                    return (engine.instant(day: candidate, minute: value.startMinute), engine.instant(day: candidate, minute: value.endMinute))
                 }
-                let capacityConflict = !fixedEventCapacityAvailable(component + [updated], on: candidate, calendar: calendar)
-                let involved = capacityConflict ? component : exactConflicts
-                for other in involved {
+                func nominalOverlap(_ a: Int, _ b: Int) -> Bool {
+                    candidates[a].startMinute < candidates[b].endMinute && candidates[a].endMinute > candidates[b].startMinute
+                }
+                func actualOverlap(_ a: Int, _ b: Int) -> TimeInterval {
+                    guard let a = spans[a], let b = spans[b] else { return 0 }
+                    return max(0, min(a.end, b.end).timeIntervalSince(max(a.start, b.start)))
+                }
+                let exactConflicts = Set(candidates.indices.dropFirst().filter {
+                    !updated.isFloating && !candidates[$0].isFloating && (nominalOverlap(0, $0) || actualOverlap(0, $0) > 0)
+                })
+                // Preserve nominal connections and add actual ones. A mixed
+                // component may have gaps in either coordinate system, so a
+                // single bounding window would pull in unrelated conflicts.
+                var included: Set<Int> = [0], frontier = [0], cursor = 0
+                while cursor < frontier.count && included.count < candidates.count {
+                    let current = frontier[cursor]
+                    cursor += 1
+                    for index in candidates.indices.dropFirst() where !included.contains(index) {
+                        if nominalOverlap(current, index) || actualOverlap(current, index) > 0 {
+                            included.insert(index)
+                            frontier.append(index)
+                        }
+                    }
+                }
+                let component = candidates.indices.dropFirst().filter { included.contains($0) }
+                let capacityConflict = !fixedEventCapacityAvailable(component.map { candidates[$0] } + [updated], on: candidate, calendar: calendar)
+                let involved = capacityConflict ? component : candidates.indices.dropFirst().filter { exactConflicts.contains($0) }
+                for index in involved {
+                    let other = candidates[index], seconds = actualOverlap(0, index)
+                    var actualMinutes: Double?
+                    if exactConflicts.contains(index), seconds > 0 {
+                        let start = max(other.startMinute, updated.startMinute), end = min(other.endMinute, updated.endMinute)
+                        let nominalMinutes = end > start ? end - start : 0
+                        if seconds != Double(nominalMinutes) * 60 { actualMinutes = seconds / 60 }
+                    }
                     conflicts.append(.init(eventID: other.id, title: other.title, date: candidate,
                         startMinute: other.startMinute, endMinute: other.endMinute,
                         requestedStartMinute: updated.startMinute, requestedEndMinute: updated.endMinute,
                         floatingDurationMinutes: other.floatingDurationMinutes,
-                        reason: exactConflicts.contains(where: { $0.id == other.id }) ? .overlap : .floatingCapacity))
+                        reason: exactConflicts.contains(index) ? .overlap : .floatingCapacity, actualOverlapMinutes: actualMinutes))
                 }
                 if capacityConflict && involved.isEmpty { throw PlannerError.invalidFixedEvent }
             }

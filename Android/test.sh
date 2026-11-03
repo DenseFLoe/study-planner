@@ -16,6 +16,8 @@ mkdir -p Android/build/tests
 "$JDK/bin/java" -cp Android/tools/json.jar:Android/build/tests local.studyplanner.FloatingDateCapacityTests
 "$JDK/bin/javac" -cp Android/tools/json.jar:Android/build/tests -d Android/build/tests Android/tests/FixedEventDateCapacityTests.java
 "$JDK/bin/java" -cp Android/tools/json.jar:Android/build/tests local.studyplanner.FixedEventDateCapacityTests
+"$JDK/bin/javac" -cp Android/tools/json.jar:Android/build/tests -d Android/build/tests Android/tests/FixedEventActualOverlapTests.java
+"$JDK/bin/java" -cp Android/tools/json.jar:Android/build/tests local.studyplanner.FixedEventActualOverlapTests
 
 "$JDK/bin/java" -cp Android/tools/json.jar:Android/build/tests local.studyplanner.JointFloatingSearchTests
 
