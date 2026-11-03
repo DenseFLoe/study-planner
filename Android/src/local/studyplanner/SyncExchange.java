@@ -4,6 +4,7 @@ import org.json.*;
 import java.io.*;
 import java.nio.charset.StandardCharsets;
 import java.security.*;
+import java.time.LocalDate;
 import java.util.*;
 
 /** Pure exchange logic; callers commit only after parsing, validation and response staging succeed. */
@@ -107,6 +108,62 @@ final class SyncExchange {
             if(index<blocked.size()&&blocked.get(index).a<Planner.end(task))return true;
         }
         for(JSONObject course:courses.values())if(totals.getOrDefault(course.getString("id"),0)>Planner.remaining(state,course))return true;
+        return invalidWindows(state,pending);
+    }
+    private static boolean invalidWindows(JSONObject state,List<JSONObject> pending)throws Exception {
+        Map<LocalDate,List<JSONObject>> days=new TreeMap<>();
+        for(JSONObject task:pending)days.computeIfAbsent(Planner.day(task.getDouble("start")),day->new ArrayList<>()).add(task);
+        List<JSONObject> windows=Planner.list(state.getJSONObject("settings").getJSONArray("availability"));
+        List<JSONObject> events=Planner.list(state.getJSONArray("fixedEvents"));
+        for(Map.Entry<LocalDate,List<JSONObject>> entry:days.entrySet()){
+            LocalDate day=entry.getKey();List<Planner.Span> available=new ArrayList<>(),exact=new ArrayList<>();
+            List<JSONObject> floating=new ArrayList<>();
+            for(JSONObject window:windows)if(window.getInt("weekday")==Planner.weekday(day))
+                available.add(new Planner.Span(Planner.at(day,window.getInt("startMinute")),Planner.at(day,window.getInt("endMinute"))));
+            for(JSONObject event:events)if(Planner.occurs(event,day)){
+                if(Planner.floating(event))floating.add(event);
+                else exact.add(new Planner.Span(Planner.at(day,event.getInt("startMinute")),Planner.at(day,event.getInt("endMinute"))));
+            }
+            available=Planner.subtract(available,exact);
+            List<Planner.Span> occupied=new ArrayList<>(exact),moving=new ArrayList<>();
+            for(JSONObject task:entry.getValue()){
+                double start=task.getDouble("start"),end=Planner.end(task);boolean fits=false;
+                for(Planner.Span window:available)if(start>=window.a&&end<=window.b){fits=true;break;}
+                if(!fits)return true;
+                Planner.Span span=new Planner.Span(start,end);occupied.add(span);moving.add(span);
+            }
+            // An optimistic per-event check proves only that a continuous slot is
+            // impossible. Do not invalidate a saved plan on a search-budget limit
+            // or pin a feasible floating event to one arbitrary witness position.
+            for(JSONObject event:floating){
+                Planner.Span window=new Planner.Span(Planner.at(day,event.getInt("startMinute")),Planner.at(day,event.getInt("endMinute")));
+                if(!overlapsAny(window,moving))continue;
+                boolean fits=false;for(Planner.Span free:Planner.subtract(Collections.singletonList(window),occupied))
+                    if(free.minutes()>=Planner.occupied(event)){fits=true;break;}
+                if(!fits)return true;
+            }
+            // Overlapping floating windows also share capacity: each event fitting
+            // individually cannot justify booking the same free minutes twice.
+            floating.sort(Comparator.comparingInt(event->event.optInt("startMinute")));
+            Planner.Span component=null;int required=0;
+            for(JSONObject event:floating){
+                double start=Planner.at(day,event.getInt("startMinute")),end=Planner.at(day,event.getInt("endMinute"));
+                if(component==null||start>component.b){
+                    if(component!=null&&overlapsAny(component,moving)&&freeMinutes(component,occupied)<required)return true;
+                    component=new Planner.Span(start,end);required=Planner.occupied(event);
+                }else{component.b=Math.max(component.b,end);required+=Planner.occupied(event);}
+            }
+            if(component!=null&&overlapsAny(component,moving)&&freeMinutes(component,occupied)<required)return true;
+        }
+        return false;
+    }
+    private static int freeMinutes(Planner.Span window,List<Planner.Span> occupied){
+        int total=0;for(Planner.Span free:Planner.subtract(Collections.singletonList(window),occupied))total+=free.minutes();
+        return total;
+    }
+    private static boolean overlapsAny(Planner.Span window,List<Planner.Span> tasks){
+        // Existing event conflicts must not repeatedly replan unrelated study slots.
+        for(Planner.Span task:tasks)if(window.a<task.b&&window.b>task.a)return true;
         return false;
     }
 }

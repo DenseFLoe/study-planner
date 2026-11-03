@@ -105,8 +105,80 @@ public final class SyncScheduleIntegrityTests {
         history.getJSONArray("tasks").remove(1);
         check(!SyncExchange.invalidPending(history,syncTime),"paused course invalidated confirmed history");
     }
+    static JSONObject event(LocalDate day,int start,int end)throws Exception{
+        return new JSONObject().put("id",Planner.id()).put("title","Current commitment").put("startMinute",start).put("endMinute",end)
+            .put("startDate",Planner.at(day,0)).put("endDate",Planner.at(day,0)).put("weekdays",new JSONArray()).put("excludedDates",new JSONArray())
+            .put("color","orange").put("notes","");
+    }
+    static JSONObject window(LocalDate day,int start,int end)throws Exception{
+        return new JSONObject().put("id",Planner.id()).put("weekday",Planner.weekday(day)).put("startMinute",start).put("endMinute",end);
+    }
+    static void offlineScheduleAfterWindowEdit()throws Exception{
+        LocalDate monday=LocalDate.of(2026,11,2),tuesday=monday.plusDays(1);double syncTime=Planner.at(tuesday,540);
+        JSONObject initial=state(Planner.at(monday,420));
+        initial.getJSONArray("courses").getJSONObject(0).put("totalMinutes",45).put("startDate",Planner.at(monday,0)).put("deadline",Planner.at(tuesday,0));
+        initial.getJSONObject("settings").put("availability",new JSONArray().put(window(tuesday,480,600)));
+        Planner.replan(initial,Planner.at(monday,420));SyncLedger base=new SyncLedger();base.capture(initial,1000);
+        for(String edit:new String[]{"availability","exact","floating","floatingPair"}){
+            SyncLedger local=new SyncLedger(CourseTools.copy(base.value)),offline=new SyncLedger(CourseTools.copy(base.value));
+            JSONObject changed=local.materialize();
+            if(edit.equals("availability"))changed.getJSONObject("settings").put("availability",new JSONArray());
+            else{
+                JSONObject event=event(tuesday,480,600);if(edit.startsWith("floating"))event.put("floatingDurationMinutes",edit.equals("floating")?120:60);
+                Planner.saveEvent(changed,event,Planner.at(monday,480));
+                if(edit.equals("floatingPair"))Planner.saveEvent(changed,event(tuesday,480,600).put("floatingDurationMinutes",60),Planner.at(monday,480));
+            }
+            Planner.replan(changed,Planner.at(monday,480));local.capture(changed,2000);
+            JSONObject stale=offline.materialize();Planner.replan(stale,syncTime);offline.capture(stale,3000);
+            check(Planner.list(stale.getJSONArray("tasks")).stream().filter(task->Planner.end(task)>syncTime).count()==1,"offline window fixture did not generate a future task");
+            exchange(local,offline,tuesday,syncTime);JSONObject merged=local.materialize();
+            check(merged.getJSONArray("tasks").length()==0,"offline task bypassed current "+edit);
+            check(SyncLedger.equivalent(merged.getJSONObject("settings"),changed.getJSONObject("settings")),"stale task changed current availability");
+            java.util.List<JSONObject> actualEvents=Planner.list(merged.getJSONArray("fixedEvents")),expectedEvents=Planner.list(changed.getJSONArray("fixedEvents"));
+            actualEvents.sort(java.util.Comparator.comparing(event->event.optString("id")));expectedEvents.sort(java.util.Comparator.comparing(event->event.optString("id")));
+            check(SyncLedger.equivalent(new JSONArray(actualEvents),new JSONArray(expectedEvents)),"stale task changed current commitments");
+            check(Planner.remaining(merged,merged.getJSONArray("courses").getJSONObject(0))==45,"window repair discarded unfinished work");
+            long sequence=local.sequence();exchange(local,offline,tuesday,syncTime);
+            check(local.sequence()==sequence,"window constraint repair repeated on retry");
+        }
+    }
+    static void windowBoundaries()throws Exception{
+        LocalDate day=LocalDate.of(2026,11,3);double now=Planner.at(day,420);
+        JSONObject state=state(now),course=state.getJSONArray("courses").getJSONObject(0);
+        state.getJSONArray("tasks").put(Planner.task(course.getString("id"),Planner.at(day,510),60));
+        JSONObject later=window(day,540,600);
+        state.getJSONObject("settings").put("availability",new JSONArray().put(window(day,480,540)).put(later));
+        check(!SyncExchange.invalidPending(state,now),"adjacent availability windows were not combined");
+        later.put("startMinute",541);check(SyncExchange.invalidPending(state,now),"task crossed an availability gap");
+        later.put("startMinute",540);
+        JSONObject exact=event(day,570,600);state.getJSONArray("fixedEvents").put(exact);
+        check(!SyncExchange.invalidPending(state,now),"exact appointment touching task end was rejected");
+        exact.put("startMinute",569);check(SyncExchange.invalidPending(state,now),"task overlapped an exact appointment");
+        exact.put("excludedDates",new JSONArray().put(Planner.at(day,0)));
+        check(!SyncExchange.invalidPending(state,now),"excluded occurrence blocked a valid task");
+        state.put("fixedEvents",new JSONArray());JSONObject floating=event(day,480,600).put("floatingDurationMinutes",30);
+        state.getJSONArray("fixedEvents").put(floating);
+        check(!SyncExchange.invalidPending(state,now),"feasible floating event was pinned to a conflicting position");
+        floating.put("floatingDurationMinutes",31);check(SyncExchange.invalidPending(state,now),"fragmented floating window accepted an impossible continuous event");
+        floating.put("startMinute",570).put("endMinute",600).put("floatingDurationMinutes",30);
+        check(!SyncExchange.invalidPending(state,now),"floating event touching task end was rejected");
+    }
+    static void conflictingEventsDoNotMoveUnrelatedTasks()throws Exception{
+        LocalDate day=LocalDate.of(2026,11,3);double now=Planner.at(day,540);
+        JSONObject state=state(now);state.getJSONArray("courses").getJSONObject(0).put("totalMinutes",60);
+        state.getJSONObject("settings").put("availability",new JSONArray().put(window(day,600,720)));
+        // Two individually valid offline event additions can conflict after merge.
+        state.getJSONArray("fixedEvents").put(event(day,480,540)).put(event(day,480,540).put("floatingDurationMinutes",60));
+        Planner.replan(state,now);JSONObject task=state.getJSONArray("tasks").getJSONObject(0);
+        check(task.getDouble("start")==Planner.at(day,600),"conflicting event fixture lost separate study window");
+        check(!SyncExchange.invalidPending(state,now),"unrelated infeasible events invalidated the engine's own task");
+        SyncLedger ledger=new SyncLedger();ledger.capture(state,1000);long sequence=ledger.sequence();
+        exchange(ledger,new SyncLedger(CourseTools.copy(ledger.value)),day,Planner.at(day,615));
+        check(ledger.materialize().getJSONArray("tasks").getJSONObject(0).getString("id").equals(task.getString("id")),"no-op sync moved an ongoing task away from unrelated conflicts");
+        check(ledger.sequence()==sequence,"unrelated floating conflict caused repeated sync revisions");
+    }
     public static void main(String[] args)throws Exception{
-        restBoundaries();offlineConfirmationReplan();offlineScheduleAfterCourseEdit();
-        System.out.println("PASS "+checks+" sync schedule checks: offline confirmations, stale course drafts, retained history, floating windows and cross-day rest");
+        restBoundaries();offlineConfirmationReplan();offlineScheduleAfterCourseEdit();offlineScheduleAfterWindowEdit();windowBoundaries();conflictingEventsDoNotMoveUnrelatedTasks();
+        System.out.println("PASS "+checks+" sync schedule checks: offline confirmations, stale course/window drafts, retained history, floating windows and cross-day rest");
     }
 }
