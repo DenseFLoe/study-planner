@@ -146,7 +146,7 @@ extension PlannerState {
     /// A single queue preserves the requested order across courses. Only the event
     /// witness is reused; the existing placement path retains every original task.
     private func jointDailyFloatingPlacements(_ ordered: [ScheduledTask], earliest: Date, day: Date,
-                                              study: Set<Int>, events: [FixedEvent], obstacles: [DateInterval],
+                                              study: Set<Int>, events: [FixedEvent], obstacles: [(start: Date, end: Date)],
                                               calendar: Calendar) -> [UUID: Int]? {
         let floating = events.filter(\.isFloating)
         guard !floating.isEmpty, floating.count <= 8, ordered.count <= 600 else { return nil }

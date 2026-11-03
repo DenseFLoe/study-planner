@@ -185,9 +185,11 @@ public struct ScheduledTask: Identifiable, Codable, Equatable, Sendable {
     public var isUnconfirmed: Bool { confirmedAt == nil && (status == .planned || status == .future) }
     /// Retained history reserves time only up to confirmation. An early confirmation
     /// resolves a floating window without changing its recorded display dates.
-    var retainedHistoryInterval: DateInterval {
-        DateInterval(start: min(planningStart, confirmedAt ?? planningStart),
-                     end: min(planningEnd, confirmedAt ?? planningEnd))
+    var retainedHistoryInterval: (start: Date, end: Date) {
+        // Preserve both endpoints: DateInterval reconstructs its end from a
+        // duration, which loses an ordinary end date after an extreme start date.
+        (start: min(planningStart, confirmedAt ?? planningStart),
+         end: min(planningEnd, confirmedAt ?? planningEnd))
     }
     /// Ended tasks may already have been redistributed into the future schedule.
     /// Floating tasks remain reserved until their entire completion window ends.
