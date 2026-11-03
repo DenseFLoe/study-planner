@@ -25,18 +25,25 @@ private actor SyncStage {
     func release() { resume?.resume(); resume = nil }
 }
 
-final class CloudSyncPresentationTests: XCTestCase {
-    // Build the Thread callback outside the @MainActor test. Older toolchains
-    // otherwise retain main-actor isolation even with an explicit @Sendable closure.
-    private nonisolated static func launchOnTemporaryThread(_ process: Process) async throws {
-        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
-            Thread { @Sendable in
-                do { try process.run(); continuation.resume() }
-                catch { continuation.resume(throwing: error) }
-            }.start()
-        }
+// A concrete entry point avoids the Swift-to-Objective-C closure isolation trap
+// in Thread(block:) on the CI toolchain, while keeping the short-lived launch thread.
+private final class SSHSyncLaunchThread: Thread, @unchecked Sendable {
+    private let process: Process
+    private let continuation: CheckedContinuation<Void, Error>
+
+    init(process: Process, continuation: CheckedContinuation<Void, Error>) {
+        self.process = process
+        self.continuation = continuation
+        super.init()
     }
 
+    nonisolated override func main() {
+        do { try process.run(); continuation.resume() }
+        catch { continuation.resume(throwing: error) }
+    }
+}
+
+final class CloudSyncPresentationTests: XCTestCase {
     @MainActor private func store(state: PlannerState = PlannerState()) throws -> PlannerStore {
         let repository = try LocalRepository(inMemory: true)
         try repository.save(state)
@@ -54,7 +61,9 @@ final class CloudSyncPresentationTests: XCTestCase {
         process.standardOutput = FileHandle.nullDevice
         process.standardError = FileHandle.nullDevice
         defer { CloudSSHProcess.stop(process); try? FileManager.default.removeItem(at: directory) }
-        try await Self.launchOnTemporaryThread(process)
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+            SSHSyncLaunchThread(process: process, continuation: continuation).start()
+        }
         let tunnel = CloudSSHTunnel(process: process, directory: directory, port: 1)
         let store = try store()
         let state = store.state, ledger = SyncLedger()
