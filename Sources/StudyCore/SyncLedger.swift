@@ -51,6 +51,13 @@ public struct SyncLedger: Codable, Sendable {
         try delta.capture(edited, now: now)
         let changes = delta.changes(after: cursor)
         guard !changes.isEmpty else { return }
+        // A sync deletion may have reached disk before the editor's UI refresh.
+        // Explicit creation/restore has no live course in its baseline and is allowed.
+        for row in changes where row.kind == "courses" && !row.deleted {
+            if original[row.key] != nil, records[row.key]?.deleted == true {
+                throw CourseEditError.removed
+            }
+        }
         clock += 1
         for var row in changes {
             if !row.deleted, let before = original[row.key], let current = records[row.key], !current.deleted {

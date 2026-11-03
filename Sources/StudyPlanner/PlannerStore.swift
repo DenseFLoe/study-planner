@@ -226,9 +226,17 @@ final class PlannerStore {
         let minute = calendar.component(.hour, from: time) * 60 + calendar.component(.minute, from: time)
         return await change { try $0.recordActualStudyStart(minute: minute, now: Date(), calendar: calendar) }
     }
-    func saveCourse(_ course: Course) async -> Bool {
-        let needsReplan = self.course(course.id).map { !course.hasSameSchedulingInputs(as: $0) } ?? true
-        return await change(replan: needsReplan) { try $0.updateCourse(course) }
+    func saveCourse(_ course: Course, from baseline: Course? = nil) async -> Bool {
+        do {
+            let resolved = try resolvedCourseDraft(course, from: baseline)
+            let needsReplan = self.course(course.id).map { !resolved.hasSameSchedulingInputs(as: $0) } ?? true
+            return await change(replan: needsReplan) { try $0.updateCourse(resolved) }
+        } catch { errorMessage = "操作未保存：\(error.localizedDescription)"; return false }
+    }
+    func resolvedCourseDraft(_ edited: Course, from baseline: Course?) throws -> Course {
+        guard let baseline else { return edited }
+        guard let current = course(edited.id) else { throw CourseEditError.removed }
+        return try edited.mergingDraft(from: baseline, into: current)
     }
     func deleteCourse(_ course: Course) async -> Bool {
         var next = state

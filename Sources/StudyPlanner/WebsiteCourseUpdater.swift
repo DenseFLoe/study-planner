@@ -113,6 +113,7 @@ final class WebsiteCourseUpdater {
                 try state.importWebCourses([snapshot], deadline: max(current.deadline, Calendar.current.startOfDay(for: saveTime)), now: saveTime)
                 if let index = state.courses.firstIndex(where: { $0.id == courseID }) {
                     state.courses[index].name = current.name
+                    state.courses[index].type = current.type
                 }
             }
             guard saved else { throw WebsiteUpdateError.message("网站数据已读取，但本地未保存成功，请检查课程设置后重试。") }

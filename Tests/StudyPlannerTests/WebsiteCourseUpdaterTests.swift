@@ -215,4 +215,25 @@ final class WebsiteCourseUpdaterTests: XCTestCase {
         XCTAssertEqual(store.state.completions, confirmations)
         XCTAssertEqual(store.course(course.id)?.webCourse?.lessons.map(\.id), ["42:1", "42:3"])
     }
+
+    @MainActor func testWebsiteRefreshPreservesSchedulingModeChosenDuringFetch() async throws {
+        let (store, _, course) = try fixture()
+        let fresh = snapshot(ids: ["1", "2", "3"])
+        let updater = WebsiteCourseUpdater { _, _, _, _ in
+            var edited = try XCTUnwrap(store.course(course.id))
+            edited.type = .recorded
+            edited.minimumBlockMinutes = 25
+            let saved = await store.saveCourse(edited)
+            XCTAssertTrue(saved)
+            return fresh
+        }
+        updater.start(store: store)
+        try updater.configure(course: course, url: fresh.sourceURL, enabled: true, interval: 60)
+        await updater.tick()
+        let updated = try XCTUnwrap(store.course(course.id))
+        XCTAssertEqual(updated.type, .recorded)
+        XCTAssertEqual(updated.minimumBlockMinutes, 25)
+        XCTAssertEqual(updated.webCourse?.lessons.count, 3)
+        XCTAssertNotNil(updater.sources[course.id]?.lastSuccess)
+    }
 }

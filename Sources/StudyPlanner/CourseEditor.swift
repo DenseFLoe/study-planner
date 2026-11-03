@@ -5,6 +5,7 @@ import StudyCore
 struct CourseEditor: View {
     @Bindable var store: PlannerStore
     @State var course: Course
+    @State private var baseline: Course?
     @Environment(\.dismiss) private var dismiss
     @State private var deletePrompt = false
     @State private var message = ""
@@ -16,7 +17,12 @@ struct CourseEditor: View {
     @State private var importSheet: CourseContentImport?
     @State private var appeared = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    private var existing: Bool { store.course(course.id) != nil }
+    init(store: PlannerStore, course: Course) {
+        self.store = store
+        _course = State(initialValue: course)
+        _baseline = State(initialValue: store.course(course.id).map { _ in course })
+    }
+    private var existing: Bool { baseline != nil }
     private var logged: Int { previewState.completions.filter { $0.courseID == course.id }.reduce(0) { $0 + $1.minutes } }
     private var isManualLessonCourse: Bool { course.type == .lessonBasedRecorded && course.webCourse == nil && course.mergedSources == nil }
     private func setManualLessons(_ lessons: [ManualLesson]) {
@@ -31,9 +37,10 @@ struct CourseEditor: View {
     }
     private var previewState: PlannerState {
         var state = store.state
-        try? state.updateCourse(course)
+        try? state.updateCourse(store.resolvedCourseDraft(course, from: baseline))
         return state
     }
+    private var previewCourse: Course { previewState.courses.first { $0.id == course.id } ?? course }
     private func removeManualLesson(_ id: String) {
         if store.course(course.id)?.manualLessons?.contains(where: { $0.id == id }) != true {
             setManualLessons((course.manualLessons ?? []).filter { $0.id != id })
@@ -48,6 +55,10 @@ struct CourseEditor: View {
         } catch { message = error.localizedDescription }
     }
     private var validation: String? {
+        let course: Course
+        do { course = try store.resolvedCourseDraft(self.course, from: baseline) }
+        catch { return error.localizedDescription }
+        let isManualLessonCourse = course.type == .lessonBasedRecorded && course.webCourse == nil && course.mergedSources == nil
         if course.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { return "请填写课程名称。" }
         if isManualLessonCourse {
             guard let lessons = course.manualLessons, !lessons.isEmpty,
@@ -413,7 +424,7 @@ struct CourseEditor: View {
             if validation == nil {
                 if course.type == .lessonBasedRecorded && (course.mergedSources != nil || course.webCourse != nil || !(course.manualLessons ?? []).isEmpty) {
                     Section("课程编排预览") {
-                        LessonSchedulePreview(state: previewState, course: course)
+                        LessonSchedulePreview(state: previewState, course: previewCourse)
                     }
                 }
             }
@@ -498,7 +509,10 @@ struct CourseEditor: View {
         Task {
             defer { saving = false }
             course.name = course.name.trimmingCharacters(in: .whitespacesAndNewlines)
-            if await store.saveCourse(course) {
+            if await store.saveCourse(course, from: baseline) {
+                // A supervision-binding failure can leave this editor open after
+                // the course itself was saved; subsequent retries use that revision.
+                if let saved = store.course(course.id) { course = saved; baseline = saved }
                 let supervisor = store.playbackSupervisor
                 let previous = supervisor.application(for: course.id)
                 if supervisor.setApplication(supervisedApplication, for: course.id) {
