@@ -28,8 +28,8 @@ public final class TaskNumberIntegrityTests {
         JSONObject row=ledger.records().getJSONObject("tasks/"+task.getString("id"));row.put("deleted",deleted);payload(row,task.toString());
     }
     static void payload(JSONObject row,String json)throws Exception{row.put("payload",Base64.getEncoder().encodeToString(json.getBytes(StandardCharsets.UTF_8)));}
-    static void archive(SyncLedger ledger)throws Exception{
-        ByteArrayOutputStream bytes=new ByteArrayOutputStream();CloudSnapshot.write(bytes,ledger,CloudSnapshot.header(ledger));CloudSnapshot.read(new ByteArrayInputStream(bytes.toByteArray()));
+    static JSONObject archive(SyncLedger ledger)throws Exception{
+        ByteArrayOutputStream bytes=new ByteArrayOutputStream();CloudSnapshot.write(bytes,ledger,CloudSnapshot.header(ledger));return CloudSnapshot.read(new ByteArrayInputStream(bytes.toByteArray())).ledger.materialize();
     }
     static Object[] badValues(String field){int normal=field.equals("durationMinutes")?60:20;return new Object[]{4294967296L+normal,normal+0.5,String.valueOf(normal),true,JSONObject.NULL,MISSING};}
     static void invalidLiveNumbers()throws Exception{
@@ -87,5 +87,21 @@ public final class TaskNumberIntegrityTests {
             rejects(()->ledger.materialize(),"merged recovery truncated original task field");check(before.equals(ledger.value.toString()),"merged task rejection mutated ledger");
         }
     }
-    public static void main(String[] args)throws Exception{invalidLiveNumbers();invalidReferencedTombstones();validNumbers();existingConfirmationSemantics();ignoredHistoryAndArchivedTasks();mergedRecovery();System.out.println("Task number integrity checks passed: "+checks);}
+    static void durationSecondsArithmetic()throws Exception{
+        int[] durations={60,1441,35791394,35791395,71582789,100000000,Integer.MAX_VALUE};
+        long[] seconds={3600L,86460L,2147483640L,2147483700L,4294967340L,6000000000L,128849018820L};
+        for(int i=0;i<durations.length;i++){
+            JSONObject state=fixture("unconfirmed"),task=task(state);double start=NOW+0.25;
+            task.put("start",start).put("durationMinutes",durations[i]);double expected=start+seconds[i];
+            check(Planner.end(task)==expected,"duration seconds overflowed: "+durations[i]);
+            check(Planner.planningEnd(task)==expected,"default planning end differs from task end");
+            Planner.validate(state);SyncLedger ledger=new SyncLedger();ledger.capture(state);JSONObject restored=ledger.materialize();
+            check(task(restored).getInt("durationMinutes")==durations[i]&&Planner.end(task(restored))==expected,"ledger changed large task duration/end");
+            JSONObject archived=archive(ledger);check(Planner.end(task(archived))==expected&&task(archived).getDouble("start")==start,"archive changed duration seconds or fractional start");
+        }
+        JSONObject floating=task(fixture("unconfirmed"));floating.put("start",NOW+0.25).put("durationMinutes",Integer.MAX_VALUE).put("floatingWindowEnd",NOW+7200.25);
+        check(Planner.end(floating)==129649018820.25,"large physical end changed");
+        check(Planner.planningEnd(floating)==NOW+7200.25,"explicit floating end lost precedence");
+    }
+    public static void main(String[] args)throws Exception{durationSecondsArithmetic();invalidLiveNumbers();invalidReferencedTombstones();validNumbers();existingConfirmationSemantics();ignoredHistoryAndArchivedTasks();mergedRecovery();System.out.println("Task number integrity checks passed: "+checks);}
 }

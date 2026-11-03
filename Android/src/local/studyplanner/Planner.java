@@ -40,7 +40,7 @@ public final class Planner {
     public static String time(int m){return String.format(Locale.ROOT,"%02d:%02d",m/60,m%60);}
     public static int minute(String t){String[] a=t.trim().split(":"); if(a.length!=2)throw new IllegalArgumentException("时间格式为 HH:mm");int h=Integer.parseInt(a[0]),m=Integer.parseInt(a[1]);if(h<0||h>24||m<0||m>59||(h==24&&m!=0))throw new IllegalArgumentException("时间超出范围");return h*60+m;}
     public static int weekday(LocalDate d){return d.getDayOfWeek().getValue()%7+1;}
-    public static double end(JSONObject t){return t.optDouble("start")+60*t.optInt("durationMinutes");}
+    public static double end(JSONObject t){return t.optDouble("start")+60.0*t.optInt("durationMinutes");}
     public static boolean floating(JSONObject e){return e.has("floatingDurationMinutes")&&!e.isNull("floatingDurationMinutes");}
     public static int occupied(JSONObject e){return floating(e)?e.optInt("floatingDurationMinutes"):e.optInt("endMinute")-e.optInt("startMinute");}
     public static double planningStart(JSONObject t){return t.optDouble("floatingWindowStart",t.optDouble("start"));}
