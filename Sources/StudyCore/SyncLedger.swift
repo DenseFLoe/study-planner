@@ -85,6 +85,10 @@ public struct SyncLedger: Codable, Sendable {
     public mutating func capture(_ state: PlannerState, now: Date = Date()) throws {
         var state = state
         state.removeArchivedCourses()
+        // Canonical IDs must not silently collapse conflicting progress records.
+        guard Set(state.completions.map(\.taskID)).count == state.completions.count else {
+            throw SyncFailure.invalidData
+        }
         let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys]
         var desired: [String: SyncRecord] = [:]
         func add<T: Encodable>(_ kind: String, _ id: String, _ value: T) throws {
@@ -183,6 +187,11 @@ public struct SyncLedger: Codable, Sendable {
                 // A removed draft can still have been confirmed by the offline peer.
                 if old.confirmedAt == nil { tasks[old.id] = old }
             }
+        }
+        // Row IDs can be distinct even when two peers describe the same task.
+        // Reject ambiguous progress before Dictionary's duplicate-key precondition.
+        guard Set(state.completions.map(\.taskID)).count == state.completions.count else {
+            throw SyncFailure.invalidData
         }
         let completions = Dictionary(uniqueKeysWithValues: state.completions.map { ($0.taskID, $0) })
         for id in tasks.keys.sorted(by: { $0.uuidString < $1.uuidString }) {

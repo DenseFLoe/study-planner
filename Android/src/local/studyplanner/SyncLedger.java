@@ -45,12 +45,14 @@ public final class SyncLedger {
     }
     public void capture(JSONObject state)throws Exception{capture(state,System.currentTimeMillis());}
     public void capture(JSONObject state,long nowMillis)throws Exception{
-        Set<String> archived=new HashSet<>(),desired=new HashSet<>();
+        Set<String> archived=new HashSet<>(),desired=new HashSet<>(),confirmationTasks=new HashSet<>();
         for(JSONObject course:Planner.list(state.getJSONArray("courses")))if(course.optBoolean("isArchived"))archived.add(course.getString("id"));
         JSONObject records=records();List<JSONObject> changes=new ArrayList<>();
         for(String kind:KINDS){List<JSONObject> values=kind.equals("settings")?Collections.singletonList(state.getJSONObject(kind)):Planner.list(state.getJSONArray(kind));
             for(JSONObject source:values){
                 if(archived.contains(source.optString(kind.equals("courses")?"id":"courseID")))continue;
+                // Detect conflicts before canonical IDs collapse rows or mutate the ledger.
+                if(kind.equals("completions")&&!confirmationTasks.add(source.getString("taskID")))throw new IllegalArgumentException("同一任务存在多条完成记录");
                 JSONObject data=shallowCopy(source);
                 if(kind.equals("completions"))data.put("id",Planner.stableID("completion|"+data.getString("taskID")));
                 if(kind.equals("fixedEvents"))for(String field:new String[]{"weekdays","excludedDates"}){JSONArray a=data.optJSONArray(field);if(a!=null){List<Double> items=new ArrayList<>();for(int i=0;i<a.length();i++)items.add(a.getDouble(i));Collections.sort(items);data.put(field,new JSONArray(items));}}
@@ -90,7 +92,8 @@ public final class SyncLedger {
         Map<String,JSONObject> tasks=new TreeMap<>(),completions=new HashMap<>();
         for(JSONObject task:Planner.list(state.getJSONArray("tasks")))tasks.put(task.getString("id"),task);
         for(JSONObject record:Planner.list(state.getJSONArray("completions"))){
-            String id=record.getString("taskID");completions.put(id,record);
+            String id=record.getString("taskID");
+            if(completions.putIfAbsent(id,record)!=null)throw new IllegalArgumentException("同一任务存在多条完成记录");
             JSONObject row=records().optJSONObject("tasks/"+id);
             if(!tasks.containsKey(id)&&row!=null&&row.getBoolean("deleted")){
                 JSONObject old=payload(row);if(!old.has("confirmedAt"))tasks.put(id,old);

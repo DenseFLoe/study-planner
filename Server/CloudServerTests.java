@@ -82,6 +82,17 @@ public final class CloudServerTests {
             request(server,token,"/cloud/status",null,200);
         }finally{Files.deleteIfExists(upload);}
     }
+    static void duplicateCompletionRegression(CloudSyncServer server,String token)throws Exception{
+        SyncLedger invalid=copy(server.loadLedger());JSONObject state=invalid.materialize();
+        JSONObject record=CourseTools.copy(state.getJSONArray("completions").getJSONObject(0));
+        JSONObject row=CourseTools.copy(invalid.records().getJSONObject("completions/"+record.getString("id")));
+        record.put("id",Planner.id());row.put("id",record.getString("id")).put("payload",Base64.getEncoder().encodeToString(record.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8)));
+        invalid.merge(new JSONArray().put(row));
+        long revision=server.revision;String before=SyncLedger.canonical(server.loadLedger().materialize());
+        request(server,token,"/cloud/snapshot",packed(invalid),400);
+        check(server.revision==revision,"duplicate task confirmation committed a cloud version");
+        check(before.equals(SyncLedger.canonical(server.loadLedger().materialize())),"rejected duplicate changed cloud progress");
+    }
     public static void main(String[] args)throws Exception{
         Path directory=Files.createTempDirectory("planner-cloud-server-");String token=UUID.randomUUID().toString()+UUID.randomUUID();
         CloudSyncServer server=new CloudSyncServer(directory,"127.0.0.1",0,token);server.start();
@@ -100,6 +111,7 @@ public final class CloudServerTests {
             Future<?> b=clients.submit(()->{try{request(running,token,"/cloud/snapshot",packed(phone),200);}catch(Exception e){throw new RuntimeException(e);}});
             a.get();b.get();clients.shutdown();
             JSONObject merged=server.loadLedger().materialize();check(merged.getJSONArray("courses").length()==2,"offline addition lost");check(merged.getJSONArray("completions").length()==1,"offline confirmation lost");
+            duplicateCompletionRegression(server,token);
             long before=server.revision;request(server,token,"/cloud/snapshot",Arrays.copyOf(packed(mac),12),400);check(server.revision==before,"truncated upload committed");
             JSONObject corruptHeader=CloudSnapshot.header(base);ByteArrayOutputStream duplicate=new ByteArrayOutputStream();
             SyncLedger invalid=copy(base);invalid.records().remove("settings/settings");CloudSnapshot.write(duplicate,invalid,corruptHeader);
