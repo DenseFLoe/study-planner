@@ -1,6 +1,7 @@
 package local.studyplanner;
 
 import org.json.*;
+import java.io.*;
 import java.time.LocalDate;
 import java.util.*;
 
@@ -94,7 +95,64 @@ public final class DailyTaskOrderingTests {
         }
     }
 
+    static JSONObject dailyDurationFixture(int duration,boolean floating)throws Exception {
+        LocalDate day=LocalDate.of(2026,11,3);double now=Planner.at(day,480);
+        JSONObject state=SyncExchangeTests.fixture(now),course=state.getJSONArray("courses").getJSONObject(0);
+        state.getJSONObject("settings").put("availability",new JSONArray().put(PlannerTests.window(Planner.weekday(day),480,floating?540:1200)));
+        state.put("tasks",new JSONArray().put(Planner.task(course.getString("id"),now,60).put("lessonID","ordinary"))
+            .put(Planner.task(course.getString("id"),now+4500,duration).put("lessonID","oversized")));
+        if(floating)state.getJSONArray("fixedEvents").put(new JSONObject().put("id",Planner.id()).put("title","Reserved hour")
+            .put("startMinute",480).put("endMinute",540).put("floatingDurationMinutes",60).put("startDate",now).put("endDate",now)
+            .put("weekdays",new JSONArray()).put("excludedDates",new JSONArray()).put("color","blue").put("notes",""));
+        return state;
+    }
+
+    static void importedOversizedDurations()throws Exception {
+        for(int duration:new int[]{1441,Integer.MAX_VALUE})for(boolean floating:new boolean[]{false,true})for(boolean reverse:new boolean[]{false,true}){
+            JSONObject input=dailyDurationFixture(duration,floating);
+            if(reverse){input.getJSONArray("tasks").getJSONObject(0).put("durationMinutes",duration);input.getJSONArray("tasks").getJSONObject(1).put("durationMinutes",60);}
+            SyncLedger ledger=new SyncLedger();ledger.capture(input);
+            JSONObject state=ledger.materialize();ByteArrayOutputStream bytes=new ByteArrayOutputStream();
+            CloudSnapshot.write(bytes,ledger,CloudSnapshot.header(ledger));CloudSnapshot.read(new ByteArrayInputStream(bytes.toByteArray()));
+            List<JSONObject> tasks=PlannerTests.sortedTasks(state);check(tasks.get(reverse?0:1).getInt("durationMinutes")==duration,"ingress changed oversized duration");
+            String before=state.toString();
+            try{DailyTaskOrdering.swap(state,tasks.get(0).getString("id"),tasks.get(1).getString("id"),tasks.get(0).getDouble("start"));throw new AssertionError("Oversized daily task accepted");}
+            catch(IllegalArgumentException expected){check(expected.getMessage().equals(DailyTaskOrdering.NO_SPACE),"Oversized daily task used wrong failure");}
+            check(before.equals(state.toString()),"Oversized swap changed tasks, history, events or saved order");
+        }
+    }
+
+    static void dailyPlacementDurationBounds()throws Exception {
+        LocalDate day=LocalDate.of(2026,11,3);double midnight=Planner.at(day,0);
+        // Planner uses Asia/Shanghai; this fixture is a full 1440-minute day
+        // without an offset transition, matching the Swift UTC boundary case.
+        check(Planner.at(day.plusDays(1),0)-midnight==86400,"Full-day fixture crosses an offset transition");
+        JSONObject state=SyncExchangeTests.fixture(midnight),course=state.getJSONArray("courses").getJSONObject(0);
+        course.put("totalMinutes",1440);state.getJSONObject("settings").put("availability",new JSONArray().put(PlannerTests.window(Planner.weekday(day),0,1440)));
+        JSONObject fullDay=Planner.task(course.getString("id"),midnight,1440);state.put("tasks",new JSONArray().put(fullDay));String before=state.toString();
+        List<JSONObject> placed=DailyTaskOrdering.place(state,Collections.singletonList(fullDay),midnight);
+        check(placed!=null&&placed.size()==1&&SyncLedger.equivalent(placed.get(0),fullDay),"Full 1440-minute daily block no longer fits");
+        check(Planner.end(placed.get(0))==Planner.at(day.plusDays(1),0),"Full-day placement changed end");
+        check(DailyTaskOrdering.place(state,Collections.emptyList(),midnight).isEmpty(),"Empty daily placement changed");
+        for(int duration:new int[]{0,-1,Integer.MIN_VALUE,1441,Integer.MAX_VALUE}){
+            JSONObject invalid=new JSONObject(fullDay.toString()).put("durationMinutes",duration);
+            check(DailyTaskOrdering.place(state,Collections.singletonList(invalid),midnight)==null,"Invalid daily duration accepted: "+duration);
+        }
+        check(before.equals(state.toString()),"Direct daily placement changed input");
+    }
+
+    static void oversizedSavedOrder()throws Exception {
+        JSONObject state=dailyDurationFixture(Integer.MAX_VALUE,false);List<JSONObject> tasks=PlannerTests.sortedTasks(state);
+        List<String> keys=DailyTaskOrdering.keys(tasks);Collections.reverse(keys);
+        state.getJSONObject("settings").put("dailyTaskOrders",new JSONArray().put(new JSONObject()
+            .put("day",Planner.at(Planner.day(tasks.get(0).getDouble("start")),0)).put("keys",new JSONArray(keys))));
+        String before=state.toString();List<JSONObject> result=DailyTaskOrdering.apply(state,tasks,Collections.emptyList());
+        check(SyncLedger.equivalent(new JSONArray(result),new JSONArray(tasks)),"Impossible saved order rewrote generated tasks");
+        check(before.equals(state.toString()),"Impossible saved order changed input");
+    }
+
     public static void main(String[] args) throws Exception {
+        importedOversizedDurations();dailyPlacementDurationBounds();oversizedSavedOrder();
         jointFloatingSwap();
         JSONObject state = fixture(0);
         String original = state.toString();

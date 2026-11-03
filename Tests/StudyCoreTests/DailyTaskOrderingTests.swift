@@ -95,6 +95,85 @@ final class DailyTaskOrderingTests: XCTestCase {
         }
         XCTAssertEqual(state, before)
     }
+
+    func testImportedOversizedDurationsRejectDailySwapWithoutMutation() throws {
+        var utc = Calendar(identifier: .gregorian)
+        utc.timeZone = TimeZone(secondsFromGMT: 0)!
+        let now = utc.date(from: .init(year: 2026, month: 11, day: 3, hour: 8))!
+        for lengths in [[60, 1441], [1441, 60], [60, Int.max], [Int.max, 60]] {
+            for floating in [false, true] {
+                var state = PlannerState()
+                let course = Course(name: "Whole daily blocks", totalMinutes: 120, startDate: now, deadline: now)
+                state.courses = [course]
+                state.settings.availability = (1...7).map {
+                    .init(weekday: $0, startMinute: 480, endMinute: floating ? 540 : 1200)
+                }
+                state.tasks = [
+                    .init(courseID: course.id, start: now, durationMinutes: lengths[0], lessonID: "first"),
+                    .init(courseID: course.id, start: now.addingTimeInterval(4500), durationMinutes: lengths[1], lessonID: "second")
+                ]
+                if floating {
+                    // The floating event fills the only study window, so the
+                    // previous fast path would enter the joint-placement fallback.
+                    var event = FixedEvent(title: "Reserved hour", startMinute: 480, endMinute: 540,
+                                           startDate: now, endDate: now)
+                    event.floatingDurationMinutes = 60
+                    state.fixedEvents = [event]
+                }
+                var ledger = SyncLedger()
+                try ledger.capture(state)
+                state = try ledger.materialize()
+                _ = try CloudArchive(ledger: ledger).validated()
+                XCTAssertEqual(state.tasks.map(\.durationMinutes), lengths)
+                let before = state
+                XCTAssertThrowsError(try state.swapDailyTasks(state.tasks[0].id, state.tasks[1].id, now: now, calendar: utc)) {
+                    XCTAssertEqual($0 as? DailyTaskOrderError, .noSpace)
+                }
+                XCTAssertEqual(state, before)
+            }
+        }
+    }
+
+    func testDailyPlacementDurationBoundsKeepWholeDayBoundary() throws {
+        var utc = Calendar(identifier: .gregorian)
+        utc.timeZone = TimeZone(secondsFromGMT: 0)!
+        let midnight = utc.date(from: .init(year: 2026, month: 11, day: 3))!
+        var state = PlannerState()
+        let course = Course(name: "Full UTC day", totalMinutes: 1440, startDate: midnight, deadline: midnight)
+        state.courses = [course]
+        state.settings.availability = (1...7).map { .init(weekday: $0, startMinute: 0, endMinute: 1440) }
+        let fullDay = ScheduledTask(courseID: course.id, start: midnight, durationMinutes: 1440)
+        state.tasks = [fullDay]
+        let before = state
+        let placed = try XCTUnwrap(state.placeDailyTasks([fullDay], earliest: midnight, calendar: utc))
+        XCTAssertEqual(placed, [fullDay])
+        XCTAssertEqual(placed[0].end, utc.date(byAdding: .day, value: 1, to: midnight))
+        XCTAssertEqual(state.placeDailyTasks([], earliest: midnight, calendar: utc), [])
+        for duration in [0, -1, Int.min, 1441, Int.max] {
+            var invalid = fullDay
+            invalid.durationMinutes = duration
+            XCTAssertNil(state.placeDailyTasks([invalid], earliest: midnight, calendar: utc))
+        }
+        XCTAssertEqual(state, before)
+    }
+
+    func testSavedDailyOrderSkipsOversizedPlacementWithoutChangingTasks() {
+        var utc = Calendar(identifier: .gregorian)
+        utc.timeZone = TimeZone(secondsFromGMT: 0)!
+        let now = utc.date(from: .init(year: 2026, month: 11, day: 3, hour: 8))!
+        var state = PlannerState()
+        let course = Course(name: "Saved oversized order", totalMinutes: 120, startDate: now, deadline: now)
+        state.courses = [course]
+        state.settings.availability = (1...7).map { .init(weekday: $0, startMinute: 480, endMinute: 1200) }
+        state.tasks = [.init(courseID: course.id, start: now, durationMinutes: 60),
+                       .init(courseID: course.id, start: now.addingTimeInterval(4500), durationMinutes: Int.max)]
+        state.settings.dailyTaskOrders = [.init(day: utc.startOfDay(for: now),
+                                               keys: Array(DailyTaskOrder.keys(for: state.tasks).reversed()))]
+        let before = state
+        XCTAssertEqual(state.applyingDailyTaskOrders(to: state.tasks, calendar: utc), before.tasks)
+        XCTAssertEqual(state, before)
+    }
+
     func testFloatingWindowAndRepeatedSwaps() throws {
         var state = fixture()
         state.fixedEvents = [.init(title: "浮动事项", startMinute: 480, endMinute: 720,

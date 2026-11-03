@@ -77,6 +77,8 @@ extension PlannerState {
     func placeDailyTasks(_ ordered: [ScheduledTask], earliest: Date, calendar: Calendar,
                          floatingPlacements: [UUID: Int]? = nil) -> [ScheduledTask]? {
         guard !ordered.isEmpty else { return [] }
+        // Whole tasks must fit the minute-indexed day before any placement arithmetic.
+        guard ordered.allSatisfy({ (1...1440).contains($0.durationMinutes) }) else { return nil }
         let day = calendar.startOfDay(for: earliest)
         let engine = ScheduleEngine(calendar: calendar)
         let windows = settings.availability.filter { $0.weekday == calendar.component(.weekday, from: day) && $0.startMinute >= 0 && $0.endMinute <= 1440 && $0.startMinute < $0.endMinute }

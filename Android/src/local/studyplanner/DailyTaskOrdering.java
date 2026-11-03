@@ -16,6 +16,8 @@ public final class DailyTaskOrdering {
         return place(state,ordered,earliest,null);
     }
     private static List<JSONObject> place(JSONObject state,List<JSONObject> ordered,double earliest,Map<String,Integer> floatingPlacements)throws Exception {
+        // Whole tasks must fit the minute-indexed day before any placement arithmetic.
+        for(JSONObject task:ordered){int duration=task.getInt("durationMinutes");if(duration<1||duration>1440)return null;}
         LocalDate day=Planner.day(earliest);boolean[] study=new boolean[1440],available=new boolean[1440];
         for(JSONObject w:Planner.list(state.getJSONObject("settings").getJSONArray("availability")))if(w.optInt("weekday")==Planner.weekday(day)&&w.optInt("startMinute")>=0&&w.optInt("endMinute")<=1440&&w.optInt("startMinute")<w.optInt("endMinute"))for(int m=w.getInt("startMinute");m<w.getInt("endMinute");m++)study[m]=available[m]=true;
         List<JSONObject> events=new ArrayList<>();for(JSONObject e:Planner.list(state.getJSONArray("fixedEvents")))if(Planner.occurs(e,day))events.add(e);
