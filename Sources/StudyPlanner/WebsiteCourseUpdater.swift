@@ -115,7 +115,7 @@ final class WebsiteCourseUpdater {
                       CourseWebsite.identify(current.webCourse) == site else {
                     throw WebsiteUpdateError.message("原课程已被修改或删除，本次更新取消。")
                 }
-                try Self.validate(snapshot, replacing: current)
+                let snapshot = try Self.validate(snapshot, replacing: current)
                 try state.importWebCourses([snapshot], deadline: max(current.deadline, Calendar.current.startOfDay(for: saveTime)), now: saveTime)
                 if let index = state.courses.firstIndex(where: { $0.id == courseID }) {
                     state.courses[index].name = current.name
@@ -155,7 +155,8 @@ final class WebsiteCourseUpdater {
         }
         persist()
     }
-    static func validate(_ snapshot: WebCourseSnapshot, replacing course: Course) throws {
+    @discardableResult
+    static func validate(_ snapshot: WebCourseSnapshot, replacing course: Course) throws -> WebCourseSnapshot {
         guard let old = course.webCourse, snapshot.packageID == old.packageID,
               let site = CourseWebsite.identify(old), CourseWebsite.identify(snapshot) == site,
               snapshot.importProblem == nil else {
@@ -165,10 +166,59 @@ final class WebsiteCourseUpdater {
         guard snapshot.fetchedAt >= old.fetchedAt else {
             throw WebsiteUpdateError.message("这门课已有更新的网站数据，本次较早的读取结果未写入。")
         }
+        let snapshot = site == .xuecheng ? try retainingXuechengLessonIDs(snapshot, replacing: course) : snapshot
         let previousIDs = Set(old.lessons.map(\.id)).subtracting(deleted)
-        guard previousIDs.isSubset(of: Set(snapshot.lessons.map(\.id))) else {
-            throw WebsiteUpdateError.message("网站返回的课节变少或编号变化，需要人工核对，原课程已保留。")
+        let missing = previousIDs.subtracting(snapshot.lessons.map(\.id))
+        guard missing.isEmpty else {
+            throw WebsiteUpdateError.message("本次读取 \(snapshot.lessons.count) 节，已有 \(missing.count) 节未能对应，可能是目录未读全或编号变化。请核对网站目录后重试，原课程已保留。")
         }
+        return snapshot
+    }
+
+    /// Older live rows used a title occurrence; current rows use an accordion path.
+    /// Keep the persisted ID so task history, ordering and deletion tombstones still refer
+    /// to the same lesson. Never infer identity for provider IDs or ambiguous titles.
+    private static func retainingXuechengLessonIDs(_ snapshot: WebCourseSnapshot, replacing course: Course) throws -> WebCourseSnapshot {
+        guard let old = course.webCourse else { return snapshot }
+        let deleted = Set(course.deletedLessonIDs ?? [])
+        let oldByID = Dictionary(old.lessons.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        let knownIDs = Set(oldByID.keys).union(deleted)
+        let incomingIDs = Set(snapshot.lessons.map(\.id))
+        let incomingByName = Dictionary(grouping: snapshot.lessons, by: \.name)
+        var knownByName = Dictionary(grouping: old.lessons, by: \.name).mapValues { Set($0.map(\.id)) }
+        let ambiguous = WebsiteUpdateError.message("学丞直播课节编号变化，但同名课节无法唯一对应。请人工核对，原课程和删除记录已保留。")
+        // Deleted rows no longer have metadata. Only recognize their exact embedded title
+        // and one of our two generated suffix formats; do not guess by duration or position.
+        for id in deleted where oldByID[id] == nil {
+            let names = incomingByName.keys.filter { xuechengLiveID(id, name: $0, packageID: old.packageID) }
+            guard names.count <= 1 else { throw ambiguous }
+            if let name = names.first { knownByName[name, default: []].insert(id) }
+        }
+        var result = snapshot
+        for index in result.lessons.indices {
+            let lesson = result.lessons[index]
+            guard !knownIDs.contains(lesson.id), lesson.kind == "living",
+                  xuechengLiveID(lesson.id, name: lesson.name, packageID: snapshot.packageID),
+                  let candidates = knownByName[lesson.name], !candidates.isEmpty else { continue }
+            guard candidates.count == 1, incomingByName[lesson.name]?.count == 1,
+                  let id = candidates.first, !incomingIDs.contains(id) else { throw ambiguous }
+            guard xuechengLiveID(id, name: lesson.name, packageID: old.packageID) else { continue }
+            if let previous = oldByID[id] {
+                guard previous.kind == "living", previous.subject == lesson.subject,
+                      previous.stage == lesson.stage, previous.chapter == lesson.chapter else { continue }
+            }
+            result.lessons[index].id = id
+        }
+        return result
+    }
+
+    private static func xuechengLiveID(_ id: String, name: String, packageID: String) -> Bool {
+        let prefix = packageID + ":live:" + name + ":"
+        guard !name.isEmpty, id.hasPrefix(prefix) else { return false }
+        let suffix = String(id.dropFirst(prefix.count))
+        // Legacy occurrence (1), flat row (:0), or nested directory path (0.1.0.2:3).
+        return suffix.range(of: #"^(?:[0-9]+|(?:[0-9]+(?:\.[0-9]+)*)?:[0-9]+)$"#,
+                            options: .regularExpression) != nil
     }
     private func persist() {
         if let data = try? JSONEncoder().encode(sources) { defaults?.set(data, forKey: Self.key) }

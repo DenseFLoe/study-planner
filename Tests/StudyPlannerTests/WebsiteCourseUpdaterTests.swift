@@ -21,10 +21,10 @@ final class WebsiteCourseUpdaterTests: XCTestCase {
                                      kind: "video", published: true, durationSeconds: 3600, watchedPercent: progress,
                                      markedFinished: false, requiresDuration: true) }, issues: [])
     }
-    @MainActor private func fixture() throws -> (PlannerStore, Repository, Course) {
+    @MainActor private func fixture(_ source: WebCourseSnapshot? = nil) throws -> (PlannerStore, Repository, Course) {
         var state = PlannerState()
         state.settings.availability = []
-        try state.importWebCourses([snapshot()], deadline: Date().addingTimeInterval(86400 * 7), now: Date())
+        try state.importWebCourses([source ?? snapshot()], deadline: Date().addingTimeInterval(86400 * 7), now: Date())
         let repository = Repository()
         let store = PlannerStore(state: state, repository: repository, result: ScheduleEngine().generate(state: state, now: Date()))
         return (store, repository, state.courses[0])
@@ -283,5 +283,150 @@ final class WebsiteCourseUpdaterTests: XCTestCase {
         XCTAssertEqual(updated.minimumBlockMinutes, 25)
         XCTAssertEqual(updated.webCourse?.lessons.count, 3)
         XCTAssertNotNil(updater.sources[course.id]?.lastSuccess)
+    }
+
+    private func xuechengSnapshot(keys: [String] = ["1", "1", "1"],
+                                  names: [String] = ["阅读", "写作", "词汇"]) -> WebCourseSnapshot {
+        var value = snapshot()
+        value.packageID = "generic:88"
+        value.sourceURL = "https://ixuecheng.cn/detail?id=88&type=1"
+        value.lessons = zip(names, keys).map { name, key in
+            .init(id: "generic:88:live:" + name + ":" + key, name: name, subject: "", stage: "", chapter: "",
+                  kind: "living", published: true, durationSeconds: 3600, watchedPercent: 0,
+                  markedFinished: false, requiresDuration: true)
+        }
+        return value
+    }
+
+    @MainActor func testXuechengChangedDirectoryIDsPreserveHistoryOrderAndNewProgress() async throws {
+        let old = xuechengSnapshot()
+        let (store, _, course) = try fixture(old)
+        let ids = old.lessons.map(\.id)
+        let task = ScheduledTask(courseID: course.id, start: Date().addingTimeInterval(-7200),
+                                 durationMinutes: 20, lessonID: ids[1])
+        let saved = await store.change { state in
+            state.courses[0].lessonOrder = [ids[1], ids[0], ids[2]]
+            state.courses[0].lessonOrderCustomized = true
+            state.tasks.append(task)
+            try state.confirm(taskID: task.id, actualMinutes: 20, now: Date())
+        }
+        XCTAssertTrue(saved)
+        let confirmations = store.state.completions
+        var fresh = xuechengSnapshot(keys: ["0.1:0", "0.1:1", "0.1:2", "0.1:3"], names: ["词汇", "写作", "阅读", "新增"])
+        fresh.lessons[2].watchedPercent = 10
+        let updater = WebsiteCourseUpdater { _, _, _, _ in fresh }
+        updater.start(store: store)
+        defer { updater.stop() }
+        try updater.configure(course: course, url: fresh.sourceURL, enabled: true, interval: 60)
+        await updater.tick()
+        let updated = try XCTUnwrap(store.course(course.id))
+        XCTAssertEqual(updated.webCourse?.lessons.map(\.id), [ids[2], ids[1], ids[0], fresh.lessons[3].id])
+        XCTAssertEqual(store.state.lessonWorkItems(for: updated).map(\.id), [ids[1], ids[0], ids[2], fresh.lessons[3].id])
+        XCTAssertEqual(store.state.lessonWorkItems(for: updated).map(\.remainingMinutes), [40, 54, 60, 60])
+        XCTAssertEqual(store.state.completions, confirmations)
+        XCTAssertEqual(store.state.tasks.first(where: { $0.id == task.id })?.lessonID, ids[1])
+        XCTAssertEqual(updater.sources[course.id]?.needsAttention, false)
+        // A later directory move must still resolve against the original persisted IDs.
+        for index in fresh.lessons.indices { fresh.lessons[index].id += "0" }
+        fresh.fetchedAt = Date()
+        await updater.update(courseID: course.id)
+        XCTAssertEqual(store.course(course.id)?.webCourse?.lessons.map(\.id), updated.webCourse?.lessons.map(\.id))
+        XCTAssertEqual(store.state.completions, confirmations)
+        XCTAssertEqual(updater.sources[course.id]?.status, "更新成功")
+    }
+
+    @MainActor func testXuechengDeletionDuringReadSurvivesChangedIDs() async throws {
+        let old = xuechengSnapshot(names: ["阅读", "写作:练习", "词汇"])
+        let (store, _, course) = try fixture(old)
+        let fresh = xuechengSnapshot(keys: ["0.0:0", "0.0:1", "0.0:2"], names: old.lessons.map(\.name))
+        let deletedID = old.lessons[1].id
+        let updater = WebsiteCourseUpdater { _, _, _, _ in
+            let saved = await store.change { state in try state.removeLessons(courseID: course.id, ids: [deletedID]) }
+            XCTAssertTrue(saved)
+            return fresh
+        }
+        updater.start(store: store)
+        defer { updater.stop() }
+        await updater.update(courseID: course.id)
+        let updated = try XCTUnwrap(store.course(course.id))
+        XCTAssertEqual(updated.webCourse?.lessons.map(\.id), [old.lessons[0].id, old.lessons[2].id])
+        XCTAssertEqual(updated.deletedLessonIDs, [deletedID])
+        XCTAssertEqual(updated.totalMinutes, 120)
+        XCTAssertEqual(updater.sources[course.id]?.status, "更新成功")
+    }
+
+    @MainActor func testXuechengGeneratedIDFormatsAndPendingPublication() throws {
+        for key in ["1", ":0", "0.1:2", "0.1.0.2:3"] {
+            var old = xuechengSnapshot(keys: [key, "1", "1"])
+            old.lessons[0].published = false
+            old.lessons[0].requiresDuration = false
+            old.lessons[0].durationSeconds = nil
+            // Real website video IDs in the same course remain exact matches.
+            old.lessons[2].kind = "video"; old.lessons[2].id = "generic:88:123456"
+            let (_, _, course) = try fixture(old)
+            var fresh = xuechengSnapshot(keys: ["0.0:9", "0.0:10", "0.0:11"])
+            fresh.lessons[2] = old.lessons[2]
+            let reconciled = try WebsiteCourseUpdater.validate(fresh, replacing: course)
+            XCTAssertEqual(reconciled.lessons.map(\.id), old.lessons.map(\.id))
+            XCTAssertTrue(reconciled.lessons[0].published)
+            XCTAssertEqual(reconciled.lessons[0].durationSeconds, 3600)
+        }
+    }
+
+    @MainActor func testXuechengMissingRenamedOrAmbiguousLessonsStillPauseAtomically() async throws {
+        for scenario in 0..<5 {
+            var old = xuechengSnapshot()
+            var fresh = xuechengSnapshot(keys: ["0.0:0", "0.0:1", "0.0:2"])
+            switch scenario {
+            case 0: fresh.lessons.removeLast()
+            case 1: fresh.lessons[0].name = "改名"; fresh.lessons[0].id = "generic:88:live:改名:0.0:0"
+            case 2: old = xuechengSnapshot(keys: ["1", "2", "1"], names: ["阅读", "阅读", "词汇"])
+            case 3: fresh = xuechengSnapshot(keys: ["0.0:0", "0.0:1", "0.0:2"], names: ["阅读", "阅读", "词汇"])
+            default: fresh.lessons[0].chapter = "不同章节"
+            }
+            let (store, repo, course) = try fixture(old)
+            fresh.fetchedAt = Date()
+            let before = store.state
+            var calls = 0
+            let updater = WebsiteCourseUpdater { _, _, _, _ in calls += 1; return fresh }
+            updater.start(store: store)
+            try updater.configure(course: course, url: fresh.sourceURL, enabled: true, interval: 60)
+            await updater.tick()
+            await updater.tick(now: Date().addingTimeInterval(7200))
+            updater.stop()
+            XCTAssertEqual(calls, 1)
+            XCTAssertEqual(store.state, before)
+            XCTAssertNil(repo.saved)
+            XCTAssertEqual(updater.sources[course.id]?.needsAttention, true)
+            if scenario == 0 { XCTAssertTrue(updater.sources[course.id]?.status.contains("1 节未能对应") == true) }
+        }
+    }
+
+    @MainActor func testXuechengDeletedDuplicateTitleCannotReappearWithNewID() throws {
+        let old = xuechengSnapshot(keys: ["1", "2", "1"], names: ["阅读", "阅读", "词汇"])
+        var (_, _, course) = try fixture(old)
+        course.webCourse?.lessons.removeFirst()
+        course.deletedLessonIDs = [old.lessons[0].id]
+        let fresh = xuechengSnapshot(keys: ["0.0:0", "0.0:1", "0.0:2"], names: ["阅读", "阅读", "词汇"])
+        XCTAssertThrowsError(try WebsiteCourseUpdater.validate(fresh, replacing: course))
+        // Unchanged, explicitly identified duplicates are still safe.
+        var unchanged = old; unchanged.fetchedAt = Date()
+        XCTAssertEqual(try WebsiteCourseUpdater.validate(unchanged, replacing: course).lessons, old.lessons)
+    }
+
+    @MainActor func testXuechengDoesNotGuessProviderIDsOrUnrecognizedSyntheticFormats() throws {
+        for id in ["generic:88:1234", "generic:88:live:阅读:unknown"] {
+            var old = xuechengSnapshot()
+            old.lessons[0].id = id
+            let (_, _, course) = try fixture(old)
+            let fresh = xuechengSnapshot(keys: ["0.0:0", "0.0:1", "0.0:2"])
+            XCTAssertThrowsError(try WebsiteCourseUpdater.validate(fresh, replacing: course))
+        }
+        var old = xuechengSnapshot()
+        old.packageID = "42"; old.sourceURL = snapshot().sourceURL
+        let (_, _, course) = try fixture(old)
+        var fresh = old; fresh.fetchedAt = Date()
+        fresh.lessons[0].id = "generic:88:live:阅读:0.0:0"
+        XCTAssertThrowsError(try WebsiteCourseUpdater.validate(fresh, replacing: course))
     }
 }
