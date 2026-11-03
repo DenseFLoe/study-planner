@@ -352,7 +352,7 @@ public struct PlannerState: Codable, Equatable, Sendable {
                     changed = nextLower != lower || nextUpper != upper
                     lower = nextLower; upper = nextUpper
                 }
-                let capacityConflict = FloatingPlacement.reserve(component + [updated]) == nil
+                let capacityConflict = !fixedEventCapacityAvailable(component + [updated], on: candidate, calendar: calendar)
                 let involved = capacityConflict ? component : exactConflicts
                 for other in involved {
                     conflicts.append(.init(eventID: other.id, title: other.title, date: candidate,
@@ -376,6 +376,72 @@ public struct PlannerState: Codable, Equatable, Sendable {
             } else { fixedEvents[index] = updated }
         } else { fixedEvents.append(updated) }
     }
+
+    private func fixedEventCapacityAvailable(_ events: [FixedEvent], on day: Date, calendar: Calendar) -> Bool {
+        guard events.allSatisfy(\.hasValidTimeWindow) else { return false }
+        let nominal = FloatingPlacement.reserve(events)
+        let floating = events.filter(\.isFloating)
+        guard let first = floating.first else { return nominal != nil }
+        let engine = ScheduleEngine(calendar: calendar), dayEnd = engine.instant(day: day, minute: 1440)
+        let windows = floating.map {
+            (start: engine.instant(day: day, minute: $0.startMinute), end: engine.instant(day: day, minute: $0.endMinute))
+        }
+        var exact: [(start: Date, end: Date)] = []
+        for span in events.filter({ !$0.isFloating }).map({
+            (start: engine.instant(day: day, minute: $0.startMinute), end: engine.instant(day: day, minute: $0.endMinute))
+        }).filter({ $0.start < $0.end }).sorted(by: { $0.start < $1.start }) {
+            if let last = exact.last, span.start <= last.end {
+                exact[exact.count - 1].end = max(last.end, span.end)
+            } else { exact.append(span) }
+        }
+        func valid(_ spans: [(start: Date, end: Date)]) -> Bool {
+            guard spans.count == floating.count else { return false }
+            let order = (spans + exact).sorted { $0.start < $1.start }
+            return floating.indices.allSatisfy { index in
+                let span = spans[index], window = windows[index]
+                return span.end.timeIntervalSince(span.start) >= Double(floating[index].occupiedMinutes) * 60
+                    && span.start >= window.start && span.end <= window.end
+                    && span.start >= day && span.end <= dayEnd
+            } && zip(order, order.dropFirst()).allSatisfy { $0.end <= $1.start }
+        }
+        if let nominal {
+            let spans = floating.compactMap { event -> (start: Date, end: Date)? in
+                guard let start = nominal[event.id] else { return nil }
+                return (engine.instant(day: day, minute: start), engine.instant(day: day, minute: start + event.occupiedMinutes))
+            }
+            if valid(spans) { return true }
+        }
+        // Clock changes can shorten a nominal witness or expose extra capacity.
+        // Reuse the bounded search with no lessons; failure keeps the existing
+        // conflict path and never publishes a partial edit.
+        func minute(_ date: Date) -> Int { Int(ceil(date.timeIntervalSinceReferenceDate / 60)) }
+        let beginning = minute(day), end = minute(dayEnd)
+        var eventFree: [ScheduleFeasibilitySearch.Window] = []
+        var cursor = day
+        for span in exact where span.end > day && span.start < dayEnd {
+            let lower = max(day, span.start), upper = min(dayEnd, span.end)
+            if cursor < lower {
+                eventFree.append(.init(start: minute(cursor), end: Int(floor(lower.timeIntervalSinceReferenceDate / 60))))
+            }
+            cursor = max(cursor, upper)
+        }
+        if cursor < dayEnd { eventFree.append(.init(start: minute(cursor), end: end)) }
+        let jobs = floating.indices.map { index in
+            ScheduleFeasibilitySearch.Floating(key: day, start: minute(windows[index].start),
+                                              end: minute(windows[index].end), minutes: floating[index].occupiedMinutes)
+        }
+        guard let solution = ScheduleFeasibilitySearch.find(
+            queues: [.init(courseID: first.id, start: beginning, end: end, work: [])], study: [],
+            eventWindows: eventFree, floating: jobs, floor: beginning, initial: beginning),
+              solution.tasks.isEmpty, solution.floatingStarts.count == jobs.count else { return false }
+        let spans = jobs.indices.compactMap { index -> (start: Date, end: Date)? in
+            guard let start = solution.floatingStarts[index] else { return nil }
+            return (Date(timeIntervalSinceReferenceDate: Double(start) * 60),
+                    Date(timeIntervalSinceReferenceDate: Double(start + jobs[index].minutes) * 60))
+        }
+        return valid(spans)
+    }
+
     /// Explicit deletion removes the entire selected rule, including its history.
     public mutating func removeFixedEvent(id: UUID) {
         fixedEvents.removeAll { $0.id == id }
