@@ -106,8 +106,42 @@ public final class CourseEditingTests {
         session.save(state, edited, NOW);
         check(state.getJSONArray("completions").length() == 0 && state.getJSONArray("tasks").length() == 0, "Reviewed history was not deleted atomically");
     }
+    static void wholeCourseDeletion() throws Exception {
+        for (String change : new String[]{"zero", "partial", "full", "orphan", "renamed", "catalog", "archived", "deleted"}) {
+            JSONObject baseline = course(), state = state(baseline);
+            CourseEditing.Draft session = new CourseEditing.Draft(state, baseline);
+            if (change.equals("zero") || change.equals("partial") || change.equals("full")) {
+                JSONObject task = Planner.task(baseline.getString("id"), NOW, 60).put("lessonID", "a");
+                state.getJSONArray("tasks").put(task); Planner.confirm(state, task.getString("id"), change.equals("zero") ? 0 : change.equals("partial") ? 20 : 60, NOW + 1);
+            }
+            if (change.equals("orphan")) state.getJSONArray("completions").put(new JSONObject().put("id", "orphan").put("courseID", baseline.getString("id")).put("taskID", "gone").put("minutes", 0));
+            JSONObject current = Planner.course(state, baseline.getString("id"));
+            if (change.equals("renamed")) current.put("name", "新名称");
+            if (change.equals("catalog")) current.getJSONArray("manualLessons").getJSONObject(0).put("name", "新课节名称");
+            if (change.equals("archived")) current.put("isArchived", true);
+            if (change.equals("deleted")) Planner.removeCourse(state, baseline.getString("id"));
+            rejected(state, () -> session.remove(state), "Stale whole-course deletion accepted: " + change);
+        }
+        JSONObject baseline = course(), state = state(baseline);
+        JSONObject oldTask = Planner.task(baseline.getString("id"), NOW, 60).put("lessonID", "a");
+        state.getJSONArray("tasks").put(oldTask); Planner.confirm(state, oldTask.getString("id"), 20, NOW);
+        CourseEditing.Draft session = new CourseEditing.Draft(state, baseline);
+        JSONObject changed = CourseTools.copy(state);
+        changed.getJSONArray("completions").getJSONObject(0).put("studyDate", Planner.at(DAY.minusDays(1), 0));
+        rejected(changed, () -> session.remove(changed), "Changed study date was deleted without review");
+        // Regenerated pending plans and another course's records do not invalidate this delete.
+        state.getJSONArray("tasks").put(Planner.task(baseline.getString("id"), NOW + 7200, 60).put("lessonID", "b"));
+        JSONObject other = course().put("name", "保留课程"); state.getJSONArray("courses").put(other);
+        JSONObject otherTask = Planner.task(other.getString("id"), NOW + 14400, 60).put("lessonID", "a");
+        state.getJSONArray("tasks").put(otherTask); Planner.confirm(state, otherTask.getString("id"), 30, NOW + 1);
+        String retained = SyncLedger.canonical(otherTask);
+        session.remove(state);
+        check(Planner.course(state, baseline.getString("id")) == null && state.getJSONArray("courses").length() == 1, "Reviewed course not deleted");
+        check(state.getJSONArray("tasks").length() == 1 && retained.equals(SyncLedger.canonical(state.getJSONArray("tasks").getJSONObject(0))), "Unrelated tasks changed");
+        check(state.getJSONArray("completions").length() == 1 && state.getJSONArray("completions").getJSONObject(0).getString("courseID").equals(other.getString("id")), "Unrelated history removed");
+    }
     public static void main(String[] args) throws Exception {
-        displayAndProgress(); conflictingAndDeleted(); schedulingAndDeletion(); defaultsAndIdenticalEdits(); manualEditorDeletionHistory();
+        displayAndProgress(); conflictingAndDeleted(); schedulingAndDeletion(); defaultsAndIdenticalEdits(); manualEditorDeletionHistory(); wholeCourseDeletion();
         System.out.println("CourseEditingTests: " + checks + " checks passed");
     }
 }

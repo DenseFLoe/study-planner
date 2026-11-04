@@ -10,9 +10,11 @@ public final class CourseEditing {
     public static final class Draft {
         private final JSONObject baseline;
         private final LessonOrderDraft deletionGuard;
+        private final String removalBaseline;
 
         public Draft(JSONObject state, JSONObject original) throws Exception {
             baseline = original == null ? null : CourseTools.copy(original);
+            removalBaseline = original == null ? null : removalSignature(state, original);
             deletionGuard = original != null && original.optJSONArray("manualLessons") != null &&
                 Planner.isManualLessonCourse(original, original.optString("type"))
                 ? new LessonOrderDraft(state, original.getString("id")) : null;
@@ -31,6 +33,28 @@ public final class CourseEditing {
             }
             CourseTools.updateCourse(state, resolved, now);
         }
+
+        public void remove(JSONObject state) throws Exception {
+            JSONObject current = baseline == null ? null : Planner.course(state, baseline.getString("id"));
+            if (current == null) throw new IllegalArgumentException("这门课程已不存在，请关闭编辑窗口查看最新课程。");
+            if (!removalBaseline.equals(removalSignature(state, current)))
+                throw new IllegalArgumentException("课程或学习记录在编辑期间已更新，未执行删除。请重新打开课程，核对最新记录后再删除。");
+            Planner.removeCourse(state, current.getString("id"));
+        }
+    }
+
+    private static String removalSignature(JSONObject state, JSONObject course) throws Exception {
+        String id = course.getString("id");
+        JSONObject tasks = new JSONObject(), records = new JSONObject(); Set<String> confirmed = new HashSet<>();
+        // Include orphan and zero-minute records too: deleting a course removes them all.
+        for (JSONObject record : Planner.list(state.getJSONArray("completions")))
+            if (record.optString("courseID").equals(id)) {
+                records.put(record.getString("id"), record); confirmed.add(record.optString("taskID"));
+            }
+        for (JSONObject task : Planner.list(state.getJSONArray("tasks")))
+            if (task.optString("courseID").equals(id) && (!Planner.pending(task) || confirmed.contains(task.optString("id"))))
+                tasks.put(task.getString("id"), task);
+        return SyncLedger.canonical(new JSONObject().put("course", course).put("tasks", tasks).put("completions", records));
     }
 
     static IllegalArgumentException conflict() {
