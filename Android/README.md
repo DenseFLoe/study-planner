@@ -46,8 +46,11 @@
 
 ```sh
 ./Android/test.sh
+bash Android/check-api.sh       # 完整原生源码编译检查，Linux/macOS 均可，不需要签名
 ./Android/build.sh
 ```
+
+`check-api.sh` 优先使用 `JAVA_HOME`，Linux 也可从 PATH 中的 `javac` 找到 JDK；缺少 SDK 时从 Google 下载固定版本 Android 35 平台并校验 SHA-256，只缓存到被 Git 忽略的 `Android/tools/api35/`。已有 SDK 可通过 `STUDYPLANNER_ANDROID_PLATFORM_JAR` 指定 `android.jar`。该检查已纳入 `Scripts/test-ci.sh`，会编译完整界面、同步和核心代码，防止仅在桌面 JSON-java 中存在的 API 混入 Android；不会生成 APK、读取签名密钥或修改系统安装。界面触摸、系统生命周期与签名安装仍需另行验收。
 
 签名密码可通过 `STUDYPLANNER_KEYSTORE_PASSWORD` 环境变量提供；本机发布构建也可从 macOS 钥匙串的 `local.studyplanner.android.signing` / `release` 项读取。请勿将个人日程、设备备份、签名密钥或密码提交到仓库。`.gitignore` 已排除构建产物、工具目录、备份和签名材料。
 
