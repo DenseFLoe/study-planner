@@ -59,7 +59,7 @@ final class SyncExchange {
             if(task.optBoolean("replacesConfirmedBlock"))generation=id;
             else if(counts.get(slot)>1&&UUID.fromString(id).version()==5){
                 // Recognize older salted IDs only for colliding slots, keeping normal reads linear.
-                String base="task|"+task.getString("courseID")+"|"+(long)task.getDouble("start")+"|"+task.getInt("durationMinutes")+(task.has("lessonID")?"|"+task.optString("lessonID"):"");
+                String base="task|"+task.getString("courseID")+"|"+(long)task.getDouble("start")+"|"+task.getInt("durationMinutes")+(Planner.hasLessonID(task)?"|"+task.optString("lessonID"):"");
                 if(!id.equals(Planner.stableID(base))){
                     List<String> confirmed=new ArrayList<>();for(JSONObject other:tasks)if(Planner.hasConfirmationTime(other)&&other.getString("courseID").equals(task.getString("courseID"))&&!other.getString("id").equals(id))confirmed.add(other.getString("id"));Collections.sort(confirmed);
                     if(id.equals(Planner.stableID(base+"|confirmed|"+String.join(",",confirmed))))generation=id;
@@ -101,7 +101,7 @@ final class SyncExchange {
                     ||!Planner.eligible(course,Planner.day(task.getDouble("start"))))return true;
                 pending.add(task);totals.put(id,totals.getOrDefault(id,0)+task.getInt("durationMinutes"));
                 if(actualStart!=null&&Planner.day(task.getDouble("start")).equals(Planner.day(now))&&task.getDouble("start")<actualStart)return true;
-                if(task.has("lessonID"))lessons.computeIfAbsent(id,key->new HashMap<>()).merge(task.getString("lessonID"),task.getInt("durationMinutes"),Integer::sum);
+                if(Planner.hasLessonID(task))lessons.computeIfAbsent(id,key->new HashMap<>()).merge(task.getString("lessonID"),task.getInt("durationMinutes"),Integer::sum);
             }
             // Use the same retained-history and early-confirmation boundaries as replan.
             boolean retained=!Planner.pending(task)||(Planner.planningEnd(task)<=now&&!(actualStart!=null&&Planner.day(task.getDouble("start")).equals(Planner.day(now))));

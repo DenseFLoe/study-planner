@@ -6,7 +6,7 @@ final class OptionalTaskFieldsTests: XCTestCase {
         let task = ScheduledTask(courseID: UUID(), start: Date(timeIntervalSinceReferenceDate: 815_846_400), durationMinutes: 60)
         let encoder = JSONEncoder(), decoder = JSONDecoder()
         var payload = try XCTUnwrap(JSONSerialization.jsonObject(with: encoder.encode(task)) as? [String: Any])
-        for key in ["confirmedAt", "floatingWindowStart", "floatingWindowEnd"] { payload[key] = NSNull() }
+        for key in ["confirmedAt", "floatingWindowStart", "floatingWindowEnd", "lessonID", "lessonName"] { payload[key] = NSNull() }
         let restored = try decoder.decode(ScheduledTask.self, from: JSONSerialization.data(withJSONObject: payload))
         XCTAssertEqual(restored, task); XCTAssertTrue(restored.isUnconfirmed); XCTAssertFalse(restored.isFloating)
         XCTAssertEqual(restored.planningStart, task.start); XCTAssertEqual(restored.planningEnd, task.end)

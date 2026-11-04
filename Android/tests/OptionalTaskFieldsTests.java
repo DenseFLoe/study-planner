@@ -62,8 +62,32 @@ public final class OptionalTaskFieldsTests {
         ConfirmationDraft.Undo undo=new ConfirmationDraft.Undo(merged,first(merged));undo.apply(merged,NOW+3600);
         check(Planner.pending(first(merged))&&merged.getJSONArray("completions").length()==0,"Real confirmation could not be undone");
     }
+    static void nullLessonSyncAndRecovery()throws Exception{
+        JSONObject state=fixture(),task=first(state);task.put("lessonID",JSONObject.NULL).put("lessonName",JSONObject.NULL);
+        String before=SyncLedger.canonical(state);
+        check(!Planner.hasLessonID(task),"Null lesson ID became a real lesson");
+        check(!SyncExchange.invalidPending(state,NOW),"Valid whole-course null lesson task needs replanning");
+        check(before.equals(SyncLedger.canonical(state)),"Sync validation mutated null fields");
+        SyncLedger ledger=new SyncLedger();ledger.capture(state,1000);
+        JSONObject restored=SyncExchange.repairMergedSchedule(ledger,NOW);
+        check(first(restored).getString("id").equals(task.getString("id"))&&first(restored).isNull("lessonID"),"Cloud repair rewrote a valid null lesson task");
+        JSONObject absent=CourseTools.copy(task);absent.remove("lessonID");absent.remove("lessonName");
+        check(SyncExchange.taskSlot(task).equals(SyncExchange.taskSlot(absent)),"Null and absent lesson IDs create different sync slots");
+        JSONObject real=CourseTools.copy(task).put("lessonID","whole");
+        check(Planner.hasLessonID(real)&&!SyncExchange.taskSlot(task).equals(SyncExchange.taskSlot(real)),"Real lesson ID lost its identity");
+
+        JSONObject course=state.getJSONArray("courses").getJSONObject(0);String courseID=course.getString("id");
+        state.put("tasks",new JSONArray());
+        for(int offset:new int[]{-7200,-3600})state.getJSONArray("tasks").put(Planner.task(courseID,NOW+offset,60)
+            .put("lessonID",JSONObject.NULL).put("confirmedAt",NOW).put("status","missed"));
+        state.getJSONArray("tasks").put(Planner.task(courseID,NOW+3600,120));
+        JSONObject nullResult=ScheduleHealth.assess(state,NOW,120);
+        check(nullResult.getJSONArray("recovery").getJSONObject(0).getInt("plannedMinutes")==120,"Null IDs collapsed two missed whole-course blocks into one");
+        for(JSONObject item:Planner.list(state.getJSONArray("tasks")))item.remove("lessonID");
+        check(SyncLedger.equivalent(nullResult,ScheduleHealth.assess(state,NOW,120)),"Null and absent lesson IDs produce different recovery forecasts");
+    }
     public static void main(String[]args)throws Exception{
-        optionalSemantics();backupAndReplan();confirmationAndLedgerRecovery();
+        optionalSemantics();backupAndReplan();confirmationAndLedgerRecovery();nullLessonSyncAndRecovery();
         System.out.println("Optional task fields: "+checks+" checks passed");
     }
 }

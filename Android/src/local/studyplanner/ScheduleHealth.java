@@ -40,9 +40,9 @@ final class ScheduleHealth {
         for(JSONObject t:Planner.list(state.getJSONArray("tasks")))if(Planner.hasConfirmationTime(t)&&Planner.day(t.optDouble("confirmedAt")).equals(Planner.day(now))){
             reviewed+=t.optInt("durationMinutes");credited+=t.optInt("completedMinutes");JSONObject c=Planner.course(state,t.optString("courseID"));
             if(c==null||c.optBoolean("isArchived"))continue;int cap=Planner.remaining(state,c);
-            if(t.has("lessonID"))for(Planner.Work w:Planner.lessonWorkAll(state,c))if(w.lessonID.equals(t.optString("lessonID"))){cap=w.minutes;break;}
+            if(Planner.hasLessonID(t))for(Planner.Work w:Planner.lessonWorkAll(state,c))if(w.lessonID.equals(t.optString("lessonID"))){cap=w.minutes;break;}
             int debt=Math.max(0,Math.min(cap,t.optInt("durationMinutes")-t.optInt("completedMinutes"))),old=debts.getOrDefault(key(t),0);
-            debts.put(key(t),t.has("lessonID")?Math.max(old,debt):Math.min(cap,old+debt));
+            debts.put(key(t),Planner.hasLessonID(t)?Math.max(old,debt):Math.min(cap,old+debt));
         }
         for(JSONObject day:Planner.list(array(state,"androidDayPlans"))){int n=day.optInt("plannedMinutes");if(n>0){count++;total+=n;peak=Math.max(peak,n);if(n>Math.max(30,warning))heavy++;}}
         Map<LocalDate,Integer> recovery=new TreeMap<>();List<JSONObject> tasks=Planner.list(state.getJSONArray("tasks"));tasks.sort(Comparator.comparingDouble(t->t.optDouble("start")));

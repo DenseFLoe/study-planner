@@ -109,7 +109,7 @@ final class SchedulePreferenceOptimizer {
                 int window=0;
                 for(int t:rows.get(d)){
                     int c=owners[t];if(!allowed[c][d])return null;
-                    if(tasks.get(t).has("lessonID")){if(t<=lastLesson[c])return null;lastLesson[c]=t;}
+                    if(Planner.hasLessonID(tasks.get(t))){if(t<=lastLesson[c])return null;lastLesson[c]=t;}
                     double seconds=sizes[t]*60.0;List<Planner.Span> spans=days.get(d).free;
                     while(window<spans.size()&&Math.max(cursor,spans.get(window).a)+seconds>spans.get(window).b)window++;
                     if(window>=spans.size())return null;
