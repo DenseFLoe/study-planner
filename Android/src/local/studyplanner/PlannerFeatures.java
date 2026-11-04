@@ -100,21 +100,22 @@ final class PlannerFeatures {
  void coursesHeader(PlannerUi.Flow actions){actions.addView(app.button("继续未完成导入",app::pendingCourseImports));actions.addView(app.button("合并课程",this::merge));actions.addView(app.button("从网站抓取全部课程",()->app.startActivityForResult(new Intent(app,CourseImportActivity.class).putExtra("mode","website"),MainActivity.IMPORT_COURSES)));actions.addView(app.button("从夸克网盘分享导入",()->app.startActivityForResult(new Intent(app,CourseImportActivity.class).putExtra("mode","netdisk"),MainActivity.IMPORT_COURSES)));}
  void courseCatalog(LinearLayout parent){
   JSONObject snapshot=app.state;EditText query=app.field(parent,"搜索名称、备注或截止日期（可组合关键词）",app.courseQuery,false);
+  CourseCatalog.Scope[] scopes=CourseCatalog.Scope.values();Spinner scope=app.spinner(parent,"排程状态",new String[]{scopes[0].title,scopes[1].title,scopes[2].title},app.courseScope.ordinal());
   TextView count=app.text("正在读取课程…",12,app.muted);parent.addView(count);
   PlannerUi.Flow top=new PlannerUi.Flow(app),bottom=new PlannerUi.Flow(app);parent.addView(top);LinearLayout rows=app.col();parent.addView(rows);parent.addView(bottom);
   Button[] previous=new Button[2],next=new Button[2];CourseCatalog.Page[] result={null};
   Runnable controls=()->{for(int i=0;i<2;i++){previous[i].setEnabled(result[0]!=null&&result[0].index>0);next[i].setEnabled(result[0]!=null&&result[0].index+1<result[0].pageCount);}};
   LatestWork<CourseCatalog.Page> work=new LatestWork<>(app.worker,app::runOnUiThread,value->{
    if(app.isDestroyed()||app.body!=parent||app.state!=snapshot)return;result[0]=value;app.coursePage=value.index;rows.removeAllViews();
-   count.setText(value.count==0?"没有匹配的课程，可清空或缩短关键词":value.count+" 门课程 · 第 "+(value.index+1)+" / "+value.pageCount+" 页 · 按截止日期排序");
+   count.setText(value.count==0?"当前范围没有匹配课程，可切换状态或清除筛选":value.count+" 门课程 · 第 "+(value.index+1)+" / "+value.pageCount+" 页 · 按截止日期排序");
    app.run(()->{for(CourseCatalog.Row row:value.rows){JSONObject course=Planner.course(snapshot,row.id);if(course!=null)app.courseCard(rows,course,row.completedMinutes);}});
    controls.run();query.requestRectangleOnScreen(new android.graphics.Rect(0,0,query.getWidth(),query.getHeight()),true);
   },error->{if(!app.isDestroyed()&&app.body==parent)count.setText("读取课程失败："+error.getMessage());});
   CourseCatalog[] index={null};Runnable[] pending={null};
   Runnable search=()->{
    if(pending[0]!=null)app.handler.removeCallbacks(pending[0]);work.clear();result[0]=null;rows.removeAllViews();controls.run();count.setText("正在读取课程…");
-   String term=app.courseQuery;int page=app.coursePage;
-   pending[0]=()->work.submit(()->{if(index[0]==null)index[0]=new CourseCatalog(snapshot);return index[0].find(term,page);});app.handler.postDelayed(pending[0],200);
+   String term=app.courseQuery;int page=app.coursePage;CourseCatalog.Scope range=app.courseScope;
+   pending[0]=()->work.submit(()->{if(index[0]==null)index[0]=new CourseCatalog(snapshot);return index[0].find(term,range,page);});app.handler.postDelayed(pending[0],200);
   };
   for(int i=0;i<2;i++){previous[i]=app.button("上一页",()->{app.coursePage--;search.run();});next[i]=app.button("下一页",()->{app.coursePage++;search.run();});PlannerUi.Flow navigation=i==0?top:bottom;navigation.addView(previous[i]);navigation.addView(next[i]);}
   app.closeCatalog=()->{work.close();if(pending[0]!=null)app.handler.removeCallbacks(pending[0]);};
@@ -122,7 +123,13 @@ final class PlannerFeatures {
    public void beforeTextChanged(CharSequence s,int start,int count,int after){}
    public void onTextChanged(CharSequence s,int start,int before,int count){app.courseQuery=s.toString();app.coursePage=0;search.run();}
    public void afterTextChanged(Editable value){}
-  });search.run();
+  });
+  scope.setOnItemSelectedListener(new android.widget.AdapterView.OnItemSelectedListener(){
+   public void onItemSelected(android.widget.AdapterView<?> parent,View view,int position,long id){if(app.courseScope!=scopes[position]){app.courseScope=scopes[position];app.coursePage=0;search.run();}}
+   public void onNothingSelected(android.widget.AdapterView<?> parent){}
+  });
+  top.addView(app.button("清除筛选",()->{app.courseScope=CourseCatalog.Scope.ALL;app.coursePage=0;scope.setSelection(0);query.setText("");search.run();}));
+  search.run();
  }
  static final double[] DAILY_WEIGHTS={1,1.5,2,3};
  static final String[] DAILY_WEIGHT_NAMES={"标准","多学50%（1.5倍）","多学一倍（2倍）","多学两倍（3倍）"};

@@ -39,6 +39,22 @@ public final class CourseCatalogTests {
         check(first.rows.get(0).completedMinutes == 0, "Previously returned page retained mutable progress");
         CourseCatalog.Page noCourses = new CourseCatalog(PlannerTests.empty()).find("", 0);
         check(noCourses.count == 0 && noCourses.rows.isEmpty(), "Empty planner produced cards");
+        JSONObject scoped = fixture();
+        for (JSONObject course : Planner.list(scoped.getJSONArray("courses")))
+            course.put("autoScheduleEnabled", course.optInt("initialCompletedMinutes") % 3 != 0);
+        String scopeBefore = SyncLedger.canonical(scoped);
+        CourseCatalog scopedCatalog = new CourseCatalog(scoped);
+        CourseCatalog.Page paused = scopedCatalog.find("", CourseCatalog.Scope.PAUSED, 99);
+        check(paused.count == 17 && paused.index == 0 && paused.rows.size() == 17, "Paused scope failed to clamp a previous page");
+        check(scopedCatalog.find("", CourseCatalog.Scope.AUTOMATIC, 0).count == 34, "Automatic scope includes paused or archived courses");
+        check(scopedCatalog.find("重点", CourseCatalog.Scope.PAUSED, 0).count == 9, "Keyword and scheduling-state filters did not combine");
+        check(scopedCatalog.find("", CourseCatalog.Scope.ALL, 2).rows.size() == 11, "Returning to all courses lost a page");
+        check(scopedCatalog.find("missing", CourseCatalog.Scope.PAUSED, 99).pageCount == 0, "Empty scoped search has phantom pages");
+        check(SyncLedger.canonical(scoped).equals(scopeBefore), "Filtering changed automatic scheduling or progress");
+        JSONObject legacy = PlannerTests.empty(), legacyCourse = PlannerTests.course("旧课程", 60, DAY, DAY, 60);
+        legacyCourse.remove("autoScheduleEnabled"); legacy.getJSONArray("courses").put(legacyCourse);
+        check(new CourseCatalog(legacy).find("", CourseCatalog.Scope.AUTOMATIC, 0).count == 1, "Legacy missing setting must default to automatic");
+        check(new CourseCatalog(legacy).find("", CourseCatalog.Scope.PAUSED, 0).count == 0, "Legacy course appeared paused");
         System.out.println("Course catalog: " + checks + " checks passed");
     }
 }

@@ -35,6 +35,7 @@ public class MainActivity extends Activity {
     String settingsSection="";
     String courseQuery="",eventQuery="";int coursePage=0,eventPage=0;Runnable closeCatalog;
     FixedEventCatalog.Scope eventScope=FixedEventCatalog.Scope.CURRENT;
+    CourseCatalog.Scope courseScope=CourseCatalog.Scope.ALL;
     static final int EXPORT_BACKUP=101,IMPORT_BACKUP=102,SCAN_PAIRING_QR=103,IMPORT_COURSES=104,IMPORT_SSH_KEY=105;
     JSONObject state; String syncSummary=""; LinearLayout root,body,nav; int page=0; LocalDate selected=LocalDate.now(Planner.ZONE),month=selected.withDayOfMonth(1),lastDay=selected;
     final int ink=0xff191919,blue=0xff07c160,muted=0xff555555,bg=0xffededed;

@@ -5,6 +5,11 @@ import java.util.*;
 
 /** Worker-only index and progress cache for one read-only planner snapshot. */
 final class CourseCatalog {
+    enum Scope {
+        ALL("全部课程"), AUTOMATIC("自动排程"), PAUSED("已暂停");
+        final String title;
+        Scope(String title) { this.title = title; }
+    }
     static final int PAGE_SIZE = 20;
     private final JSONObject state;
     private final List<JSONObject> courses;
@@ -29,9 +34,14 @@ final class CourseCatalog {
                 course.optString("notes") + " " + Planner.date(course.optDouble("deadline"))));
     }
     Page find(String query, int requestedPage) {
+        return find(query, Scope.ALL, requestedPage);
+    }
+    Page find(String query, Scope scope, int requestedPage) {
         String normalized = TaskSearch.normalize(query); String[] terms = normalized.isEmpty() ? new String[0] : normalized.split("\\s+");
         List<JSONObject> matches = new ArrayList<>();
         for (JSONObject course : courses) {
+            boolean automatic = course.optBoolean("autoScheduleEnabled", true);
+            if (scope == Scope.AUTOMATIC && !automatic || scope == Scope.PAUSED && automatic) continue;
             String text = searchText.get(course.optString("id")); boolean found = true;
             for (String term : terms) if (!text.contains(term)) { found = false; break; }
             if (found) matches.add(course);
