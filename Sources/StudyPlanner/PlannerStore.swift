@@ -116,6 +116,7 @@ final class PlannerStore {
                         backupReason: String? = "修改前自动备份", deletedCourseID: UUID? = nil,
                         clearError: Bool = true,
                         fixedEventEdit: FixedEventEdit? = nil,
+                        lessonOrderDraft: LessonOrderDraft? = nil,
                         preparation: (@Sendable (inout PlannerState) throws -> ScheduleResult)? = nil) async -> Bool {
         guard !orderSaveBusy, let repository, isReady else { return false }
         let previous = state
@@ -142,6 +143,9 @@ final class PlannerStore {
                 if let fixedEventEdit {
                     saved = try await repository.saveFixedEventForInteraction(fixedEventEdit,
                                                                              from: previous, now: now)
+                } else if let lessonOrderDraft {
+                    saved = try await repository.saveLessonOrderForInteraction(lessonOrderDraft,
+                                                                              from: previous, now: now)
                 } else {
                     saved = try await repository.saveChangesForInteraction(plannedState, from: previous)
                 }
@@ -156,6 +160,18 @@ final class PlannerStore {
                 pendingEventConflicts = conflicts
                 return false
             } catch {
+                // A conflicting sync may already be on disk while the editor's
+                // displayed state is still old. Keep its draft and refresh only
+                // the store so explicit Reload can start from that latest data.
+                if lessonOrderDraft != nil, error is LessonOrderEditError,
+                   let latest = try? repository.load() {
+                    let (assessment, load) = await Task.detached(priority: .userInitiated) {
+                        (ScheduleEngine().assessSavedPlan(state: latest, now: now),
+                         StudyLoadAnalyzer().assess(state: latest, now: now))
+                    }.value
+                    state = latest; result = assessment; studyLoad = load
+                    if let local = repository as? LocalRepository, let ledger = try? local.loadLedger() { syncLedger = ledger }
+                }
                 if clearError || errorMessage == nil { errorMessage = "操作未保存：\(error.localizedDescription)" }
                 return false
             }
@@ -254,6 +270,13 @@ final class PlannerStore {
             let needsReplan = self.course(course.id).map { !resolved.hasSameSchedulingInputs(as: $0) } ?? true
             return await change(replan: needsReplan) { try $0.updateCourse(resolved) }
         } catch { errorMessage = "操作未保存：\(error.localizedDescription)"; return false }
+    }
+    @discardableResult
+    func saveLessonOrder(_ draft: LessonOrderDraft, now: Date = Date()) async -> Bool {
+        await commit(state, replan: true, now: now, lessonOrderDraft: draft) {
+            try draft.apply(to: &$0)
+            return $0.replan(now: now)
+        }
     }
     func resolvedCourseDraft(_ edited: Course, from baseline: Course?) throws -> Course {
         guard let baseline else { return edited }

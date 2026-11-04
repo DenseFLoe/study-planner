@@ -5,31 +5,21 @@ struct LessonOrderEditor: View {
     @Bindable var store: PlannerStore
     let course: Course
     @Environment(\.dismiss) private var dismiss
-    @State private var order: [String]
+    @State private var draft: LessonOrderDraft
     @State private var selected = Set<String>()
     @State private var destination = 1
     @State private var message = ""
-    @State private var deleted = Set<String>()
     @State private var deletePrompt = false
+    @State private var reloadPrompt = false
 
     init(store: PlannerStore, course: Course) {
         self.store = store
         self.course = course
-        _order = State(initialValue: store.state.lessonWorkItems(for: course).map(\.id))
+        _draft = State(initialValue: LessonOrderDraft(course: course, state: store.state))
     }
 
-    private var originalOrder: [String] { store.state.lessonWorkItems(for: course).map(\.id) }
-    private var websiteOrder: [String]? {
-        guard let website = course.webCourse else { return nil }
-        return LessonOrdering.resolved(ids: originalOrder, preferred: website.lessons.map(\.id)).filter { !deleted.contains($0) }
-    }
     private var editedCourse: Course { previewState.courses.first { $0.id == course.id } ?? course }
-    private var previewState: PlannerState {
-        var copy = store.state
-        if !deleted.isEmpty { try? copy.removeLessons(courseID: course.id, ids: deleted) }
-        if let index = copy.courses.firstIndex(where: { $0.id == course.id }) { copy.courses[index].lessonOrder = order }
-        return copy
-    }
+    private var previewState: PlannerState { (try? draft.preview()) ?? store.state }
     private var lessons: [LessonWorkItem] { previewState.lessonWorkItems(for: editedCourse) }
 
     var body: some View {
@@ -37,7 +27,7 @@ struct LessonOrderEditor: View {
             HStack {
                 VStack(alignment: .leading, spacing: 4) {
                     Text("调整课节顺序与删除").font(.title2.bold())
-                    Text(course.name).font(.callout).foregroundStyle(.secondary)
+                    Text(draft.course.name).font(.callout).foregroundStyle(.secondary)
                 }
                 Spacer()
                 Button("关闭") { dismiss() }
@@ -57,12 +47,12 @@ struct LessonOrderEditor: View {
                     .frame(maxHeight: .infinity)
                     Divider()
                     HStack {
-                        if let websiteOrder {
-                            Button("按网站顺序") { order = websiteOrder }
+                        if let websiteOrder = draft.websiteOrder {
+                            Button("按网站顺序") { draft.order = websiteOrder }
                         }
-                        Button("智能排序") { order = LessonOrdering.intelligent(lessons).map(\.id) }
+                        Button("智能排序") { draft.order = LessonOrdering.intelligent(lessons).map(\.id) }
                         Button("按名称排序") {
-                            order = lessons.sorted {
+                            draft.order = lessons.sorted {
                                 let comparison = NetdiskTitles.naturalCompare($0.name, $1.name)
                                 return comparison == .orderedSame ? $0.id < $1.id : comparison == .orderedAscending
                             }.map(\.id)
@@ -76,7 +66,7 @@ struct LessonOrderEditor: View {
                         Spacer()
                         Button("删除所选课节", role: .destructive) { deletePrompt = true }.disabled(selected.isEmpty)
                         Button("移到最前") { move(before: 0) }.disabled(selected.isEmpty)
-                        Button("移到最后") { move(before: order.count) }.disabled(selected.isEmpty)
+                        Button("移到最后") { move(before: draft.order.count) }.disabled(selected.isEmpty)
                     }
                     HStack {
                         Text("插入到第")
@@ -85,10 +75,10 @@ struct LessonOrderEditor: View {
                             .textFieldStyle(.roundedBorder)
                         Text("位前")
                         Button("移动所选课节") { move(before: destination - 1) }
-                            .disabled(selected.isEmpty || !(1...order.count + 1).contains(destination))
+                            .disabled(selected.isEmpty || !(1...draft.order.count + 1).contains(destination))
                         Spacer()
                     }
-                    Text("1 表示最前；\(order.count + 1) 表示末尾。多选课节会按当前相对顺序一起移动。")
+                    Text("1 表示最前；\(draft.order.count + 1) 表示末尾。多选课节会按当前相对顺序一起移动。")
                         .font(.caption2).foregroundStyle(.tertiary)
                 }
                 .frame(maxWidth: .infinity)
@@ -103,38 +93,28 @@ struct LessonOrderEditor: View {
             }
             if !message.isEmpty { Text(message).font(.caption).foregroundStyle(.red) }
             HStack {
-                Text(deleted.isEmpty ? "保存后会重新安排未确认任务。" : "待删除 \(deleted.count) 节；保存后生效，并重新排程。")
+                Text(draft.deleted.isEmpty ? "保存后会重新安排未确认任务。" : "待删除 \(draft.deleted.count) 节；保存后生效，并重新排程。")
                     .font(.caption).foregroundStyle(.secondary)
                 Spacer()
+                Button("重新载入最新课节") { reloadPrompt = true }
+                    .disabled(store.orderSaveBusy)
                 Button("取消") { dismiss() }.keyboardShortcut(.cancelAction)
                 Button("保存并重新排程") {
                     Task {
-                        let updatedOrder = order
-                        let followsWebsite = websiteOrder == updatedOrder
-                        if await store.change({ state in
-                            if !deleted.isEmpty { try state.removeLessons(courseID: course.id, ids: deleted) }
-                            guard let index = state.courses.firstIndex(where: { $0.id == course.id && !$0.isArchived }) else {
-                                throw WebCourseImportError.invalid("课程已不存在，请重新打开。")
-                            }
-                            state.courses[index].lessonOrder = updatedOrder
-                            state.courses[index].lessonOrderCustomized = !followsWebsite
-                        }) { dismiss() }
+                        let saving = draft
+                        if await store.saveLessonOrder(saving) { dismiss() }
                         else { message = store.errorMessage ?? "保存失败" }
                     }
                 }
                 .buttonStyle(.borderedProminent)
                 .keyboardShortcut(.defaultAction)
-                .disabled(order == originalOrder && deleted.isEmpty)
+                .disabled(!draft.hasChanges || store.orderSaveBusy)
             }
         }
         .confirmationDialog("删除所选的 \(selected.count) 节课？", isPresented: $deletePrompt, titleVisibility: .visible) {
             Button("删除所选课节", role: .destructive) {
                 do {
-                    let next = deleted.union(selected)
-                    var check = store.state
-                    try check.removeLessons(courseID: course.id, ids: next)
-                    deleted = next
-                    order.removeAll { selected.contains($0) }
+                    try draft.removeLessons(selected)
                     selected.removeAll()
                     message = ""
                 } catch { message = error.localizedDescription }
@@ -143,6 +123,22 @@ struct LessonOrderEditor: View {
         } message: {
             Text("保存后将删除这些课节的全部安排和完成记录，重算总学习量，并保留其他课节。取消或关闭窗口不会保存删除。请至少保留一节。")
         }
+        .confirmationDialog("重新载入最新课节并放弃当前草稿？", isPresented: $reloadPrompt, titleVisibility: .visible) {
+            Button("放弃草稿并重新载入", role: .destructive) {
+                guard let current = store.course(course.id), !current.isArchived else {
+                    message = LessonOrderEditError.removed.localizedDescription
+                    return
+                }
+                draft = LessonOrderDraft(course: current, state: store.state)
+                selected.removeAll()
+                destination = 1
+                message = ""
+            }
+            Button("继续编辑", role: .cancel) {}
+        } message: {
+            Text("将丢弃尚未保存的排序和待删除选择，使用最新课程重新开始。")
+        }
+        .disabled(store.orderSaveBusy)
         .padding(22)
         .frame(width: 940, height: 690)
         .onAppear { store.websiteUpdater.beginEditing(course.id) }
@@ -179,7 +175,7 @@ struct LessonOrderEditor: View {
     }
 
     private func move(before index: Int) {
-        order = LessonOrdering.move(order, selected: selected, before: index)
-        destination = min(max(1, destination), order.count + 1)
+        draft.order = LessonOrdering.move(draft.order, selected: selected, before: index)
+        destination = min(max(1, destination), draft.order.count + 1)
     }
 }

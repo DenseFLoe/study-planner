@@ -21,6 +21,8 @@ public protocol PlannerRepository {
     @MainActor func saveChangesForInteraction(_ state: PlannerState, from baseline: PlannerState) async throws -> PlannerState
     @MainActor func saveFixedEventForInteraction(_ edit: FixedEventEdit,
                                                from baseline: PlannerState, now: Date) async throws -> PlannerState
+    @MainActor func saveLessonOrderForInteraction(_ draft: LessonOrderDraft,
+                                                from baseline: PlannerState, now: Date) async throws -> PlannerState
 }
 
 extension PlannerRepository {
@@ -38,6 +40,13 @@ extension PlannerRepository {
         var next = baseline
         try edit.apply(to: &next, now: now)
         _ = next.replan(now: now)
+        return try await saveChangesForInteraction(next, from: baseline)
+    }
+    @MainActor public func saveLessonOrderForInteraction(_ draft: LessonOrderDraft,
+                                                        from baseline: PlannerState, now: Date) async throws -> PlannerState {
+        var next = baseline
+        try draft.apply(to: &next)
+        if next != baseline { _ = next.replan(now: now) }
         return try await saveChangesForInteraction(next, from: baseline)
     }
 }
@@ -183,6 +192,25 @@ public final class LocalRepository: PlannerRepository {
             _ = latest.replan(now: now)
             return latest
         }
+    }
+
+    public func saveLessonOrder(_ draft: LessonOrderDraft, now: Date = Date()) throws -> PlannerState {
+        try update { latest, _ in
+            let previous = latest
+            try draft.apply(to: &latest)
+            if latest != previous { _ = latest.replan(now: now) }
+            return latest
+        }
+    }
+
+    @MainActor public func saveLessonOrderForInteraction(_ draft: LessonOrderDraft,
+                                                        from baseline: PlannerState, now: Date) async throws -> PlannerState {
+        let container = container, backup = migrationBackupURL, outbox = cloudOutboxURL
+        defer { discardCachedModels() }
+        return try await Task.detached(priority: .userInitiated) {
+            let worker = LocalRepository(container: container, migrationBackupURL: backup, cloudOutboxURL: outbox)
+            return try worker.saveLessonOrder(draft, now: now)
+        }.value
     }
 
     @MainActor public func saveFixedEventForInteraction(_ edit: FixedEventEdit,
