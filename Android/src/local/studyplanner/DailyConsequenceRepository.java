@@ -16,7 +16,7 @@ final class DailyConsequenceRepository {
         if(!file.exists())return empty();
         try{
             if(Files.size(file.toPath())>MAX_BYTES)throw new IOException("预报历史过大");
-            JSONObject journal=new JSONObject(new String(Files.readAllBytes(file.toPath()),StandardCharsets.UTF_8));JSONArray days=journal.getJSONArray("days");
+            JSONObject journal=BoundedJSONFile.read(new FileInputStream(file),MAX_BYTES,"预报历史");JSONArray days=journal.getJSONArray("days");
             Set<String> ids=new HashSet<>(),dates=new HashSet<>();if(journal.getInt("version")!=1||days.length()>31)throw new IOException("预报历史版本无效");
             for(JSONObject day:Planner.list(days)){
                 if(day.getInt("goalMinutes")<0||day.getInt("confirmedAtCapture")<0||day.getInt("warningMinutes")<30||!Double.isFinite(day.getDouble("capturedAt"))||day.getString("revision").isEmpty()||day.getJSONArray("forecasts").length()>5||!ids.add(day.getString("id"))||!dates.add(Planner.date(day.getDouble("date"))))throw new IOException("预报历史内容无效");

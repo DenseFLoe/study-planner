@@ -32,7 +32,7 @@ public final class PlannerBackupFile {
 
     public static PlannerBackupFile read(InputStream input) throws Exception { return read(input, MAX_BYTES); }
     static PlannerBackupFile read(InputStream input, long maximum) throws Exception {
-        JSONObject value = readObject(input, maximum);
+        JSONObject value = BoundedJSONFile.read(input, maximum, "备份文件");
         if (value.has("format") || value.has("state")) {
             if (Planner.exactProgressInteger(value.opt("format")) != 1 || !CloudSnapshot.validID(value.getString("id")) ||
                     !(value.get("createdAt") instanceof Number) || !Double.isFinite(value.getDouble("createdAt")) || !(value.get("reason") instanceof String))
@@ -46,30 +46,8 @@ public final class PlannerBackupFile {
     /** Startup migration keeps all legacy fields until the existing open migration runs. */
     public static JSONObject readLegacyState(InputStream input) throws Exception { return readLegacyState(input, MAX_BYTES); }
     static JSONObject readLegacyState(InputStream input, long maximum) throws Exception {
-        JSONObject value = readObject(input, maximum);
+        JSONObject value = BoundedJSONFile.read(input, maximum, "备份文件");
         Planner.validate(value);
-        return value;
-    }
-
-    private static JSONObject readObject(InputStream input, long maximum) throws Exception {
-        if (input == null) throw new IOException("无法打开备份文件");
-        StringBuilder text = new StringBuilder(); int depth = 0; boolean quoted = false, escaped = false;
-        try (Reader reader = new BufferedReader(new InputStreamReader(new CloudSnapshot.LimitedInput(input, maximum),
-                StandardCharsets.UTF_8.newDecoder().onMalformedInput(CodingErrorAction.REPORT).onUnmappableCharacter(CodingErrorAction.REPORT)))) {
-            char[] buffer = new char[8192]; int count;
-            while ((count = reader.read(buffer)) != -1) {
-                for (int i = 0; i < count; i++) {
-                    char c = buffer[i];
-                    if (quoted) { if (escaped) escaped = false; else if (c == '\\') escaped = true; else if (c == '"') quoted = false; }
-                    else if (c == '"') quoted = true;
-                    else if (c == '{' || c == '[') { if (++depth > 64) throw new IOException("备份嵌套层级过深"); }
-                    else if (c == '}' || c == ']') depth--;
-                }
-                text.append(buffer, 0, count);
-            }
-        }
-        JSONTokener tokens = new JSONTokener(text.toString()); JSONObject value = new JSONObject(tokens);
-        if (tokens.nextClean() != 0) throw new IOException("备份文件含有多余内容");
         return value;
     }
 
