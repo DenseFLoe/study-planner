@@ -191,7 +191,7 @@ public class MainActivity extends Activity {
         if(!t.optString("lessonName").isEmpty())box.addView(text(t.optString("lessonName"),16,ink));
         if(Planner.pending(t)){
             PlannerUi.Flow actions=new PlannerUi.Flow(this);
-            actions.addView(taskAction(Planner.planningStart(t)>Planner.now()?"提前完成":"全部完成",()->mutate(s->Planner.confirm(s,t.optString("id"),t.optInt("durationMinutes"),Planner.now()),Planner.confirmationRequiresReplan(t,t.optInt("durationMinutes"),Planner.now()),null)));
+            actions.addView(taskAction(Planner.planningStart(t)>Planner.now()?"提前完成":"全部完成",()->run(()->confirmTasks(new ConfirmationDraft(Collections.singletonList(t)),Collections.singletonMap(t.getString("id"),t.getInt("durationMinutes")),Collections.singletonMap(t.getString("id"),Planner.day(Planner.now())),null))));
             actions.addView(taskAction("部分/未完成",()->completion(t)));
             box.addView(actions);
             new PlannerFeatures(this).taskDrag(box,actions,t);
@@ -202,8 +202,44 @@ public class MainActivity extends Activity {
             box.addView(result);
         }
     }
-    void completion(JSONObject t){LinearLayout form=col();form.setPadding(dp(20),dp(8),dp(20),0);EditText actual=field(form,"实际完成分钟（0 = 未完成）",""+t.optInt("durationMinutes"),true);EditText studyDate=dateField(form,"实际学习日期（补录请核对）",Planner.date(Math.min(t.optDouble("start"),Planner.now())));AlertDialog d=new AlertDialog.Builder(this).setTitle("确认学习进度").setView(form).setNegativeButton("取消",null).setPositiveButton("确认",null).create();d.setOnShowListener(v->d.getButton(-1).setOnClickListener(x->run(()->{int n=Integer.parseInt(actual.getText().toString());if(n<0||n>t.getInt("durationMinutes"))throw new Exception("实际时长超出计划范围");mutate(s->Planner.confirm(s,t.getString("id"),n,Planner.now(),LocalDate.parse(value(studyDate))),Planner.confirmationRequiresReplan(t,n,Planner.now()),d::dismiss);})));d.show();}
-    void review(){LinearLayout list=col();list.setPadding(dp(16),0,dp(16),dp(16));Map<String,EditText> values=new LinkedHashMap<>(),studyDates=new LinkedHashMap<>();for(JSONObject t:Planner.review(state,Planner.now())){JSONObject c=Planner.course(state,t.optString("courseID"));EditText e=field(list,Planner.date(t.optDouble("start"))+" "+Planner.clock(Planner.planningStart(t))+(Planner.floatingTask(t)?"–"+Planner.clock(Planner.planningEnd(t))+" 内浮动":"")+" · "+c.optString("name")+(t.optString("lessonName").isEmpty()?"":" / "+t.optString("lessonName"))+"（最多 "+t.optInt("durationMinutes")+" 分钟）","",true);e.setHint("留空暂不确认，0 表示未完成");values.put(t.optString("id"),e);studyDates.put(t.optString("id"),dateField(list,"实际学习日期（补录请核对）",Planner.date(Math.min(t.optDouble("start"),Planner.now()))));}ScrollView sv=new ScrollView(this);sv.addView(list);AlertDialog d=new AlertDialog.Builder(this).setTitle("逐项确认实际学习分钟").setView(sv).setNegativeButton("稍后",null).setPositiveButton("保存已填写项",null).create();d.setOnShowListener(v->d.getButton(-1).setOnClickListener(x->run(()->{Map<String,Integer> filled=new HashMap<>();for(Map.Entry<String,EditText> e:values.entrySet()){String a=e.getValue().getText().toString().trim();if(!a.isEmpty())filled.put(e.getKey(),Integer.parseInt(a));}if(filled.isEmpty())throw new Exception("请至少填写一项");boolean needsReplan=false;for(JSONObject task:Planner.review(state,Planner.now()))if(filled.containsKey(task.optString("id"))&&Planner.confirmationRequiresReplan(task,filled.get(task.optString("id")),Planner.now()))needsReplan=true;mutate(s->{double now=Planner.now();for(Map.Entry<String,Integer> e:filled.entrySet())Planner.confirm(s,e.getKey(),e.getValue(),now,LocalDate.parse(value(studyDates.get(e.getKey()))));},needsReplan,d::dismiss);})));d.show();}
+    void confirmTasks(ConfirmationDraft draft,Map<String,Integer> minutes,Map<String,LocalDate> studyDates,Runnable done){
+        // Copy all widget values on the UI thread; the worker only touches immutable inputs.
+        Map<String,Integer> filled=new LinkedHashMap<>(minutes);Map<String,LocalDate> dates=new LinkedHashMap<>(studyDates);
+        mutate(s->{double now=Planner.now();if(draft.apply(s,filled,dates,now))Planner.replan(s,now);},false,done);
+    }
+    void completion(JSONObject t){run(()->{
+        ConfirmationDraft draft=new ConfirmationDraft(Collections.singletonList(t));String id=t.getString("id");
+        LinearLayout form=col();form.setPadding(dp(20),dp(8),dp(20),0);
+        EditText actual=field(form,"实际完成分钟（0 = 未完成）",""+t.optInt("durationMinutes"),true);
+        EditText studyDate=dateField(form,"实际学习日期（补录请核对）",Planner.date(Math.min(t.optDouble("start"),Planner.now())));
+        AlertDialog d=new AlertDialog.Builder(this).setTitle("确认学习进度").setView(form).setNegativeButton("取消",null).setPositiveButton("确认",null).create();
+        d.setOnShowListener(v->d.getButton(-1).setOnClickListener(x->run(()->{
+            int n=Integer.parseInt(value(actual));LocalDate date=LocalDate.parse(value(studyDate));
+            confirmTasks(draft,Collections.singletonMap(id,n),Collections.singletonMap(id,date),d::dismiss);
+        })));d.show();
+    });}
+    void review(){run(()->{
+        List<JSONObject> displayed=Planner.review(state,Planner.now());ConfirmationDraft draft=new ConfirmationDraft(displayed);
+        LinearLayout list=col();list.setPadding(dp(16),0,dp(16),dp(16));
+        Map<String,EditText> values=new LinkedHashMap<>(),studyDates=new LinkedHashMap<>();
+        for(JSONObject t:displayed){
+            JSONObject c=Planner.course(state,t.optString("courseID"));
+            EditText e=field(list,Planner.date(t.optDouble("start"))+" "+Planner.clock(Planner.planningStart(t))+(Planner.floatingTask(t)?"–"+Planner.clock(Planner.planningEnd(t))+" 内浮动":"")+" · "+c.optString("name")+(t.optString("lessonName").isEmpty()?"":" / "+t.optString("lessonName"))+"（最多 "+t.optInt("durationMinutes")+" 分钟）","",true);
+            e.setHint("留空暂不确认，0 表示未完成");values.put(t.optString("id"),e);
+            studyDates.put(t.optString("id"),dateField(list,"实际学习日期（补录请核对）",Planner.date(Math.min(t.optDouble("start"),Planner.now()))));
+        }
+        ScrollView sv=new ScrollView(this);sv.addView(list);
+        AlertDialog d=new AlertDialog.Builder(this).setTitle("逐项确认实际学习分钟").setView(sv).setNegativeButton("稍后",null).setPositiveButton("保存已填写项",null).create();
+        d.setOnShowListener(v->d.getButton(-1).setOnClickListener(x->run(()->{
+            Map<String,Integer> filled=new LinkedHashMap<>();Map<String,LocalDate> dates=new LinkedHashMap<>();
+            for(Map.Entry<String,EditText> e:values.entrySet())if(!value(e.getValue()).isEmpty()){
+                filled.put(e.getKey(),Integer.parseInt(value(e.getValue())));
+                dates.put(e.getKey(),LocalDate.parse(value(studyDates.get(e.getKey()))));
+            }
+            if(filled.isEmpty())throw new IllegalArgumentException("请至少填写一项");
+            confirmTasks(draft,filled,dates,d::dismiss);
+        })));d.show();
+    });}
     void showReviewNotice(){if(!reviewShown&&!Planner.review(state,Planner.now()).isEmpty()){reviewShown=true;render();}}
     void courses()throws Exception{body.addView(title("课程管理"));CompressedPreviewPanel.render(this,body);body.addView(text("学习量、截止日期与课程进度",13,muted));PlannerUi.Flow courseActions=new PlannerUi.Flow(this);body.addView(courseActions);courseActions.addView(button("＋ 添加课程",()->courseEditor(null)));new PlannerFeatures(this).coursesHeader(courseActions);List<JSONObject> cs=Planner.list(state.getJSONArray("courses"));cs.sort(Comparator.comparingDouble(c->c.optDouble("deadline")));for(JSONObject c:cs)if(!c.optBoolean("isArchived")){LinearLayout box=card(body);cardBorder(box,color(c.optString("color")));TextView courseName=text(c.getString("name"),19,ink);courseName.setTypeface(null,Typeface.BOLD);box.addView(courseName);int done=Planner.completed(state,c),total=c.getInt("totalMinutes");box.addView(text(hours(done)+" / "+hours(total)+" · 截止 "+Planner.date(c.getDouble("deadline")),13,muted));ProgressBar p=new ProgressBar(this,null,android.R.attr.progressBarStyleHorizontal);p.setMax(Math.max(1,total));p.setProgress(done);box.addView(p);int days=(int)Math.max(1,java.time.temporal.ChronoUnit.DAYS.between(LocalDate.now(Planner.ZONE),Planner.day(c.getDouble("deadline")))+1);box.addView(text("剩余 "+hours(Planner.remaining(state,c))+" · 按截止日期日均约 "+(int)Math.ceil(Planner.remaining(state,c)/(double)days)+" 分钟（不含每日加量）",13,muted));if(!c.optString("notes").isEmpty())box.addView(text(c.optString("notes"),13,ink));new PlannerFeatures(this).dailyWeightControl(box,c);PlannerUi.Flow actions=new PlannerUi.Flow(this);box.addView(actions);if("不定时录播课程".equals(c.optString("type")))actions.addView(button("调整课节顺序",()->new PlannerFeatures(this).lessonOrder(c)));actions.addView(button("编排预览",()->run(()->new PlannerFeatures(this).preview(state,c))));if(c.optJSONObject("netdisk")!=null)actions.addView(button("网盘课节与文件",()->new PlannerFeatures(this).netdiskFiles(c)));actions.addView(button("编辑课程",()->courseEditor(c)));}}
     EditText field(LinearLayout p,String label,String value,boolean number){p.addView(text(label,13,muted));EditText e=new EditText(this);e.setText(value);e.setTextSize(16);e.setSingleLine(true);e.setPadding(dp(6),dp(8),dp(6),dp(8));if(number)e.setInputType(InputType.TYPE_CLASS_NUMBER|InputType.TYPE_NUMBER_FLAG_DECIMAL);p.addView(e,new LinearLayout.LayoutParams(-1,-2));return e;}
