@@ -57,6 +57,11 @@ final class FixedEventCatalogPanel {
                 if (app.eventScope != scopes[position]) { app.eventScope = scopes[position]; app.eventPage = 0; search.run(); }
             }
             public void onNothingSelected(AdapterView<?> parent) {}
-        }); search.run();
+        });
+        top.addView(app.button("清除筛选", () -> {
+            app.eventScope = FixedEventCatalog.Scope.CURRENT; app.eventPage = 0;
+            scope.setSelection(0); query.setText(""); search.run();
+        }));
+        search.run();
     }
 }

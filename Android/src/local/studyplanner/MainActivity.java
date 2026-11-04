@@ -56,7 +56,7 @@ public class MainActivity extends Activity {
     }};
     interface Change{void run(JSONObject s)throws Exception;}
     interface Checked{void run()throws Exception;}
-    @Override public void onCreate(Bundle b){super.onCreate(b);getWindow().setStatusBarColor(bg);getWindow().setNavigationBarColor(Color.WHITE);getWindow().getDecorView().setSystemUiVisibility(View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR|View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR);storage=new AtomicFile(new File(getFilesDir(),"planner-v1.json"));if(b!=null){pendingCourseResult=b.getParcelable("pendingCourseResult");restoredSettingsDraft=b.getString("studySettingsDraft");selected=LocalDate.parse(b.getString("selected",selected.toString()));month=selected.withDayOfMonth(1);page=b.getInt("page",0);settingsSection=b.getString("settingsSection","");calendarExpanded=b.getBoolean("calendarExpanded",false);month=LocalDate.parse(b.getString("month",month.toString()));}PlannerRuntime runtime=PlannerRuntime.get(this);database=runtime.database;worker=runtime.worker;
+    @Override public void onCreate(Bundle b){super.onCreate(b);getWindow().setStatusBarColor(bg);getWindow().setNavigationBarColor(Color.WHITE);getWindow().getDecorView().setSystemUiVisibility(View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR|View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR);storage=new AtomicFile(new File(getFilesDir(),"planner-v1.json"));if(b!=null){restoreCatalogNavigation(b);pendingCourseResult=b.getParcelable("pendingCourseResult");restoredSettingsDraft=b.getString("studySettingsDraft");selected=LocalDate.parse(b.getString("selected",selected.toString()));month=selected.withDayOfMonth(1);page=b.getInt("page",0);settingsSection=b.getString("settingsSection","");calendarExpanded=b.getBoolean("calendarExpanded",false);month=LocalDate.parse(b.getString("month",month.toString()));}PlannerRuntime runtime=PlannerRuntime.get(this);database=runtime.database;worker=runtime.worker;
         syncRefresh=new DeferredRefresh<>(worker,this::runOnUiThread,()->ready&&!busy&&!isDestroyed(),
             ()->{JSONObject latest=database.load();Planner.refreshDiagnostics(latest,Planner.now());return new SyncRead(latest,syncSummary(database.metadata()));},
             latest->{state=latest.state;syncSummary=latest.summary;render();resumeCourseResult();},
@@ -89,8 +89,19 @@ public class MainActivity extends Activity {
             if(settingsDraft!=null&&settingsDraft.isDirty())b.putString("studySettingsDraft",settingsDraft.snapshot().toString());
             else if(restoredSettingsDraft!=null)b.putString("studySettingsDraft",restoredSettingsDraft);
         }catch(Exception error){android.util.Log.w("StudyPlanner","Unable to retain settings draft",error);}
+        b.putString("courseQuery",courseQuery);b.putString("courseScope",courseScope.name());b.putInt("coursePage",coursePage);
+        b.putString("eventQuery",eventQuery);b.putString("eventScope",eventScope.name());b.putInt("eventPage",eventPage);
         b.putString("selected",selected.toString());b.putInt("page",page);b.putString("settingsSection",settingsSection);
         b.putBoolean("calendarExpanded",calendarExpanded);b.putString("month",month.toString());
+    }
+    private void restoreCatalogNavigation(Bundle saved){
+        courseQuery=saved.getString("courseQuery","");eventQuery=saved.getString("eventQuery","");
+        coursePage=Math.max(0,saved.getInt("coursePage",0));eventPage=Math.max(0,saved.getInt("eventPage",0));
+        // Stable names survive enum reordering; a newer/removed scope falls back.
+        try{courseScope=CourseCatalog.Scope.valueOf(saved.getString("courseScope",CourseCatalog.Scope.ALL.name()));}
+        catch(IllegalArgumentException ignored){courseScope=CourseCatalog.Scope.ALL;coursePage=0;}
+        try{eventScope=FixedEventCatalog.Scope.valueOf(saved.getString("eventScope",FixedEventCatalog.Scope.CURRENT.name()));}
+        catch(IllegalArgumentException ignored){eventScope=FixedEventCatalog.Scope.CURRENT;eventPage=0;}
     }
     @Override public void onDestroy(){if(closeCatalog!=null)closeCatalog.run();if(syncRefresh!=null)syncRefresh.close();handler.removeCallbacks(ticker);if(consequences!=null)consequences.close();unregisterReceiver(syncReceiver);super.onDestroy();}
     @Override public void onBackPressed(){if(busy){Toast.makeText(this,"正在保存，请稍后",Toast.LENGTH_SHORT).show();return;}if(page==3&&!settingsSection.isEmpty()&&settingsMenu!=null){settingsMenu.show("");}else if(page!=0){page=0;render();}else super.onBackPressed();}
