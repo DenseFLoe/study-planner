@@ -127,7 +127,7 @@ final class FloatingEventTests: XCTestCase {
         _ = s.replan(now: date(13), calendar: cal)
         var ledger = SyncLedger()
         try ledger.capture(s)
-        try JSONEncoder().encode(ledger).write(to: URL(fileURLWithPath: "/tmp/study-floating-swift-fixture.json"))
+        try JSONEncoder().encode(ledger).write(to: CrossLanguageFixture.url("study-floating-swift-fixture.json"))
         let row = try XCTUnwrap(ledger.records["fixedEvents/" + s.fixedEvents[0].id.uuidString])
         XCTAssertEqual(try JSONDecoder().decode(FixedEvent.self, from: row.payload).floatingDurationMinutes, 60)
         let task = try XCTUnwrap(s.tasks.first)

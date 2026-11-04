@@ -26,15 +26,9 @@ jobs:
         with:
           node-version: '22'
           package-manager-cache: false
-      - name: Run independent Java and Android checks
-        run: bash Scripts/test-java-ci.sh
-      - name: Run portable Swift core and file persistence checks
-        # Official Swift 6.0.3 Jammy image; includes the zlib development headers.
-        # The Java checks above generate the Android parity fixtures first.
-        run: |
-          docker run --rm --volume "$PWD:/workspace" --workdir /workspace \
-            swift@sha256:95f6ef898992dc840b35517e780f6f6db9661432775ab0b33cc0a531ea749bdb \
-            swift test --jobs 2
+      - name: Run portable Swift, Java and Android interoperability checks
+        # Pinned official Swift image; fresh fixtures shared across every stage.
+        run: bash Scripts/test-portable-ci.sh
 
       - name: Verify Android APK packaging
         run: bash Android/test-package.sh

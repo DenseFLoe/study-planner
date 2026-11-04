@@ -231,9 +231,9 @@ Android 与服务端在读取备份或同步设置时，先检查分钟、星期
 
 ## 验证
 
-新增 `bash Scripts/test-ci.sh` 统一运行服务端、Swift、Android 及跨语言往返测试，自动准备并校验 JSON-java 依赖。GitHub Actions 在提交和拉取请求时执行同一入口，不上传构建产物。另有独立 Ubuntu 任务先运行 `bash Scripts/test-java-ci.sh`，验证服务端、Android 核心及真实 Android API 编译，再用固定摘要的官方 Swift 6.0.3 容器运行全部 `StudyCoreTests` 及备份、学习记录文件、压缩结果缓存的 Foundation 存储测试，并读取 Android 生成的样本；随后使用一次性临时密钥实际构建并验签 Android APK，核对资源、DEX、版本与空白初始数据，结束后删除临时 APK 和密钥；不使用发布密钥，不上传或安装。该任务无需等 macOS 执行器。完整 Swift、SwiftData、界面与跨语言往返检查仍在原 macOS 任务运行。需要真实手机、SSH 服务器或真实网站的测试仍须单独准备环境，不代表真机验收。
+新增 `bash Scripts/test-ci.sh` 统一运行服务端、Swift、Android 及跨语言往返测试，自动准备并校验 JSON-java 依赖。GitHub Actions 在提交和拉取请求时执行同一入口，不上传构建产物。另有独立 Ubuntu 任务运行 `bash Scripts/test-portable-ci.sh`，用固定摘要的官方 Swift 6.0.3 容器先生成本轮样本，再验证服务端、Android 核心及真实 Android API 编译、Java 同步往返，以及全部 `StudyCoreTests` 和 Foundation 文件存储测试；最后由 Java 读取 Swift 云端快照。同步确认、浮动事项、合并记录与文件备份的互读样本在隔离目录共享，缺失样本立即失败；随后使用一次性临时密钥实际构建并验签 Android APK，核对资源、DEX、版本与空白初始数据，结束后删除临时 APK 和密钥；不使用发布密钥，不上传或安装。该任务无需等 macOS 执行器。完整 Swift、SwiftData、界面与跨语言往返检查仍在原 macOS 任务运行。需要真实手机、SSH 服务器或真实网站的测试仍须单独准备环境，不代表真机验收。
 
-Linux 开发环境具备 Swift 6 和 zlib 开发头文件后，可直接运行 `swift test --jobs 2`。Linux 包包含 `StudyCore`、不依赖 SwiftData 的文件存储代码及其测试，使用固定版本的 [Swift Crypto](https://github.com/apple/swift-crypto/tree/3.9.1) 实现 CryptoKit 接口；Mac 的依赖和应用目标保持原样。先运行 Android 测试可补齐跨平台样本；需要 Swift→Java→Swift 顺序生成的往返样本仍由 Mac 完整入口验证。
+Linux 开发环境具备 Swift 6 和 zlib 开发头文件后，可直接运行 `swift test --jobs 2`。Linux 包包含 `StudyCore`、不依赖 SwiftData 的文件存储代码及其测试，使用固定版本的 [Swift Crypto](https://github.com/apple/swift-crypto/tree/3.9.1) 实现 CryptoKit 接口；Mac 的依赖和应用目标保持原样。具备 Docker、JDK 11 和 Node.js 的 Linux 环境可运行 `bash Scripts/test-portable-ci.sh`，完整执行 Swift→Java→Swift 及云端快照往返；每次创建并清理独立样本目录，避免读取上次遗留的通过结果。只需独立 Java/Android 检查时仍可使用 `bash Scripts/test-java-ci.sh`。
 
 Mac CI 在测试成功后运行 `bash Scripts/test-dmg-ci.sh`，调用现有脚本生成调试 DMG 并验证签名、镜像、SHA-256 和打包源码提交。文件只保留在临时执行器内，不上传、不安装；日常 `build-dmg.sh` 的默认 Release 构建方式不变。该检查验证打包流程，实际安装与原生交互仍需单独验收。
 

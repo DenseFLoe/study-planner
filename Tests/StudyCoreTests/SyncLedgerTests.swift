@@ -130,8 +130,8 @@ final class SyncLedgerTests: XCTestCase {
         stale.payload = try JSONEncoder().encode(task); stale.version += 100
         stale.modifiedAt = Int64(now.timeIntervalSince1970 * 1000) + 2000
         try ledger.merge([stale])
-        try JSONEncoder().encode(ledger).write(to: URL(fileURLWithPath: "/tmp/study-confirmation-swift-fixture.json"))
-        let reply = URL(fileURLWithPath: "/tmp/study-confirmation-java-fixture.json")
+        try JSONEncoder().encode(ledger).write(to: CrossLanguageFixture.url("study-confirmation-swift-fixture.json"))
+        let reply = CrossLanguageFixture.url("study-confirmation-java-fixture.json")
         if FileManager.default.fileExists(atPath: reply.path) {
             let phone = try JSONDecoder().decode(SyncLedger.self, from: Data(contentsOf: reply))
             try ledger.merge(phone.changes(after: 0))
@@ -197,7 +197,7 @@ final class SyncLedgerTests: XCTestCase {
         XCTAssertEqual(Set(s.tasks.map(\.id)).count, s.tasks.count)
     }
     func testWireFixtureAndJavaResponse() throws {
-        let floatingPath = URL(fileURLWithPath: "/tmp/study-floating-java-fixture.json")
+        let floatingPath = CrossLanguageFixture.url("study-floating-java-fixture.json")
         if FileManager.default.fileExists(atPath: floatingPath.path) {
             let ledger = try JSONDecoder().decode(SyncLedger.self, from: Data(contentsOf: floatingPath))
             let state = try ledger.materialize()
@@ -206,13 +206,13 @@ final class SyncLedgerTests: XCTestCase {
         }
         var s = fixture(); s.courses[0].id = UUID(uuidString: "AAAAAAAA-AAAA-4AAA-8AAA-AAAAAAAAAAAA")!
         var l = SyncLedger(); l.device = "MAC-FIXTURE"; try l.capture(s, now: Date(timeIntervalSince1970: 1))
-        try JSONEncoder().encode(l).write(to: URL(fileURLWithPath: "/tmp/study-sync-swift-fixture.json"))
+        try JSONEncoder().encode(l).write(to: CrossLanguageFixture.url("study-sync-swift-fixture.json"))
         if let directory = ProcessInfo.processInfo.environment["STUDY_CLOUD_FIXTURE_DIR"] {
             let backup = PlannerBackup(state: s, reason: "Swift backup fixture", now: Date(timeIntervalSinceReferenceDate: 815_184_000))
             try JSONEncoder().encode(backup).write(to: URL(fileURLWithPath: directory).appendingPathComponent("swift-file-backup.json"))
         }
         XCTAssertEqual(stablePlannerID("task|AAAAAAAA-AAAA-4AAA-8AAA-AAAAAAAAAAAA|800000000|60").uuidString, "897861BE-3B8A-5F5C-84D2-6194FA9D75CD")
-        let path = URL(fileURLWithPath: "/tmp/study-sync-java-fixture.json")
+        let path = CrossLanguageFixture.url("study-sync-java-fixture.json")
         if FileManager.default.fileExists(atPath: path.path) {
             let java = try JSONDecoder().decode(SyncLedger.self, from: Data(contentsOf: path))
             try l.merge(java.changes(after: 0))

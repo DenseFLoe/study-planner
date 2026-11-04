@@ -10,7 +10,7 @@ final class AppReviewRegressionTests: XCTestCase {
     var today: Date { calendar.date(from: DateComponents(year: 2026, month: 10, day: 3))! }
 
     func testMergedConfirmationJavaRoundTrip() throws {
-        let path = URL(fileURLWithPath: "/tmp/study-merge-regression-java.json")
+        let path = CrossLanguageFixture.url("study-merge-regression-java.json")
         guard FileManager.default.fileExists(atPath: path.path) else { throw XCTSkip("Run Android/test.sh after the Swift merge fixture is generated") }
         let ledger = try JSONDecoder().decode(SyncLedger.self, from: Data(contentsOf: path))
         let state = try ledger.materialize(), course = try XCTUnwrap(state.courses.first)
@@ -139,7 +139,7 @@ final class AppReviewRegressionTests: XCTestCase {
                     XCTAssertEqual(sequence, mac.sequence, "Repeated capture must not credit progress twice")
                     XCTAssertEqual(try phone.materialize().completedMinutes(for: merged), 60)
                     if !nested && replaceDraft && macWins {
-                        try JSONEncoder().encode(mac).write(to: URL(fileURLWithPath: "/tmp/study-merge-regression-swift.json"))
+                        try JSONEncoder().encode(mac).write(to: CrossLanguageFixture.url("study-merge-regression-swift.json"))
                     }
                 }
             }

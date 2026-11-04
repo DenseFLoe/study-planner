@@ -6,6 +6,7 @@ import java.time.*;
 import java.util.*;
 
 public final class AppReviewRegressionTests {
+    static Path fixture(String name){return Paths.get(System.getenv().getOrDefault("STUDY_CLOUD_FIXTURE_DIR","/tmp"),name);}
     static int checks;
     static final LocalDate TODAY=LocalDate.of(2026,10,3);
     static void check(boolean condition,String message){checks++;if(!condition)throw new AssertionError(message);}
@@ -127,11 +128,11 @@ public final class AppReviewRegressionTests {
             check(Planner.list(result.getJSONArray("tasks")).stream().anyMatch(t->t.optString("id").equals(task.optString("id"))&&t.has("confirmedAt")&&t.optInt("completedMinutes")==60),"Merge did not recover confirmed task history");
             mac.capture(result);long sequence=mac.sequence();mac.capture(mac.materialize());check(sequence==mac.sequence(),"Repeated merge capture changed progress");
         }
-        if(Files.exists(Paths.get("/tmp/study-merge-regression-swift.json"))){
-            SyncLedger swift=new SyncLedger(new JSONObject(new String(Files.readAllBytes(Paths.get("/tmp/study-merge-regression-swift.json")),"UTF-8")));
+        if(Files.exists(fixture("study-merge-regression-swift.json"))){
+            SyncLedger swift=new SyncLedger(new JSONObject(new String(Files.readAllBytes(fixture("study-merge-regression-swift.json")),"UTF-8")));
             JSONObject state=swift.materialize(),merged=state.getJSONArray("courses").getJSONObject(0);
             check(Planner.completed(state,merged)==60,"Java could not preserve the Swift merged confirmation");
-            swift.capture(state);Files.write(Paths.get("/tmp/study-merge-regression-java.json"),swift.value.toString().getBytes("UTF-8"));
+            swift.capture(state);Files.write(fixture("study-merge-regression-java.json"),swift.value.toString().getBytes("UTF-8"));
         }
     }
 
