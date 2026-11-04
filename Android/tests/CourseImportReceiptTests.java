@@ -144,9 +144,37 @@ public final class CourseImportReceiptTests {
         Store store = new Store();
         check(remaining.commit(store, () -> NOW).removed && store.value.getJSONArray("courses").length() == 1, "Discard damaged a different import");
     }
+    static void revisedDeadline(Path directory) throws Exception {
+        Path path = write(directory, payload().put("deadline", Planner.at(DAY.minusDays(1), 0)).toString());
+        CourseImportReceipt receipt = new CourseImportReceipt(directory.toFile(), path.toString());
+        CourseImportReceipt.Preview preview = receipt.preview(); byte[] bytes = Files.readAllBytes(path); Store store = new Store();
+        try { receipt.commit(store, () -> NOW, preview.fingerprint()); throw new AssertionError("Expired deadline accepted"); }
+        catch (IllegalArgumentException expected) { check(store.saves == 0 && Files.exists(path), "Expired deadline consumed capture"); }
+        for (double invalid : new double[]{Double.NaN, Double.POSITIVE_INFINITY, Planner.at(DAY.minusDays(1), 0), Planner.at(DAY.plusYears(10).plusDays(1), 0)}) {
+            try { receipt.commit(store, () -> NOW, preview.fingerprint(), invalid); throw new AssertionError("Invalid revised deadline accepted"); }
+            catch (IOException | IllegalArgumentException expected) { check(store.saves == 0 && Arrays.equals(bytes, Files.readAllBytes(path)), "Invalid date changed capture or saved partial state"); }
+        }
+        double desired = Planner.at(DAY.plusDays(30), 0);
+        try { receipt.commit(store, () -> Planner.at(DAY.plusDays(1), 0), preview.fingerprint(), Planner.at(DAY, 0)); throw new AssertionError("Yesterday's revised date accepted after midnight"); }
+        catch (IllegalArgumentException expected) { check(store.saves == 0 && receipt.exists(), "Date was not checked against commit clock"); }
+        try { receipt.commit(store, () -> NOW, null, desired); throw new AssertionError("Unreviewed override accepted"); }
+        catch (IOException expected) { check(store.saves == 0 && receipt.exists(), "Override bypassed review"); }
+        byte[] wrong = preview.fingerprint(); wrong[0] ^= 1;
+        try { receipt.commit(store, () -> NOW, wrong, desired); throw new AssertionError("Date override bypassed file fingerprint"); }
+        catch (IOException expected) { check(store.saves == 0 && receipt.exists(), "Changed review saved with revised date"); }
+        CourseImportReceipt.Result saved = receipt.commit(store, () -> NOW, preview.fingerprint(), desired);
+        JSONObject imported = saved.state.getJSONArray("courses").getJSONObject(0);
+        check(saved.removed && imported.getDouble("deadline") == desired, "Revised date did not recover pending import");
+        check(preview.deadline.equals(DAY.minusDays(1).toString()), "Date override changed original preview");
+        double start = imported.getDouble("startDate"); String id = imported.getString("id");
+        path = write(directory, payload().toString()); receipt = new CourseImportReceipt(directory.toFile(), path.toString()); preview = receipt.preview();
+        saved = receipt.commit(store, () -> NOW + 60, preview.fingerprint(), Planner.at(DAY.plusDays(60), 0));
+        check(saved.state.getJSONArray("courses").length() == 1 && Planner.course(saved.state, id).getDouble("deadline") == desired &&
+            Planner.course(saved.state, id).getDouble("startDate") == start, "Reviewed deadline rewrote an existing course's dates");
+    }
     public static void main(String[] args) throws Exception {
         Path directory = Files.createTempDirectory("study-import-receipt-");
-        try { successfulRetry(directory); invalidPayloads(directory); pathScope(directory); atomicStaging(directory); staleRetry(directory); reviewedImports(directory); reviewedDiscard(directory); }
+        try { successfulRetry(directory); invalidPayloads(directory); pathScope(directory); atomicStaging(directory); staleRetry(directory); reviewedImports(directory); reviewedDiscard(directory); revisedDeadline(directory); }
         finally { try (Stream<Path> files = Files.walk(directory)) { for (Path path : (Iterable<Path>)files.sorted(Comparator.reverseOrder())::iterator) Files.deleteIfExists(path); } }
         System.out.println("CourseImportReceiptTests: " + checks + " checks passed");
     }

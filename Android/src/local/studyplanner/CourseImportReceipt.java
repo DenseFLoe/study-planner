@@ -116,12 +116,17 @@ final class CourseImportReceipt {
         return commit(store, clock, null);
     }
     Result commit(StateMutation.Store<JSONObject> store, DoubleSupplier clock, byte[] reviewedFingerprint) throws Exception {
+        return commit(store, clock, reviewedFingerprint, null);
+    }
+    Result commit(StateMutation.Store<JSONObject> store, DoubleSupplier clock, byte[] reviewedFingerprint, Double reviewedDeadline) throws Exception {
+        if (reviewedDeadline != null && (reviewedFingerprint == null || !Double.isFinite(reviewedDeadline)))
+            throw new IOException("请核对导入结果并选择有效的新课程截止日期。");
         Payload input = read();
         if (reviewedFingerprint != null && !MessageDigest.isEqual(reviewedFingerprint, input.fingerprint))
             throw new IOException("导入文件在核对后发生变化，未保存。请重新查看未完成的导入。");
         JSONObject payload = input.data; List<JSONObject> snapshots = Planner.list(payload.getJSONArray("snapshots"));
         if (snapshots.isEmpty()) throw new IOException("导入结果没有选中的课程。");
-        double deadline = payload.getDouble("deadline");
+        double deadline = reviewedDeadline == null ? payload.getDouble("deadline") : reviewedDeadline;
         JSONObject state = StateMutation.apply(store, latest -> { double now = clock.getAsDouble(); WebCourseImport.save(latest, snapshots, deadline, now); Planner.replan(latest, now); });
         return new Result(state, file.delete() || !file.exists());
     }

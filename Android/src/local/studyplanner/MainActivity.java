@@ -132,7 +132,8 @@ public class MainActivity extends Activity {
         CourseImportReceipt receipt=new CourseImportReceipt(getCacheDir(),path);
         busy=true;ProgressDialog progress=ProgressDialog.show(this,"","正在读取并保存课程…",true,false);
         worker.execute(()->{try{
-            CourseImportReceipt.Result saved=receipt.commit(database,Planner::now,data.getByteArrayExtra("captureReviewFingerprint"));
+            CourseImportReceipt.Result saved=receipt.commit(database,Planner::now,data.getByteArrayExtra("captureReviewFingerprint"),
+                data.hasExtra("captureReviewDeadline")?data.getDoubleExtra("captureReviewDeadline",Double.NaN):null);
             runOnUiThread(()->{busy=false;progress.dismiss();if(isDestroyed())return;
                 state=saved.state;page=1;render();if(!saved.removed)alert("课程已导入","课程已保存，但临时导入文件未能清理。请勿重复导入同一份旧结果。");resumeSyncRefresh();
             });
@@ -163,7 +164,9 @@ public class MainActivity extends Activity {
     }
     void showPendingCourseImport(File file,CourseImportReceipt.Preview preview){
         LinearLayout form=col(),rows=col();form.setPadding(dp(16),0,dp(16),0);
-        form.addView(text(preview.count()+" 门课程 · 总量 "+hours(preview.totalMinutes)+"\n新课程截止日期："+preview.deadline+"\n已有课程保留当前起止日期和本地学习记录；保存时再次检查课程更新。",13,muted));
+        form.addView(text(preview.count()+" 门课程 · 总量 "+hours(preview.totalMinutes)+"\n已有课程保留当前起止日期和本地学习记录；保存时再次检查课程更新。",13,muted));
+        EditText deadline=dateField(form,"新课程截止日期（可调整）",preview.deadline);
+        if(LocalDate.parse(preview.deadline).isBefore(LocalDate.now(Planner.ZONE)))form.addView(text("原截止日期已过期，请先调整后继续导入。",13,0xffa56618));
         TextView position=text("",12,muted);form.addView(position);ScrollView scroll=new ScrollView(this);scroll.addView(rows);form.addView(scroll,new LinearLayout.LayoutParams(-1,dp(300)));
         PlannerUi.Flow navigation=new PlannerUi.Flow(this);form.addView(navigation);int[] page={0};Button[] buttons=new Button[2];
         Runnable render=()->{rows.removeAllViews();position.setText("第 "+(page[0]+1)+" / "+preview.pageCount()+" 页");
@@ -172,14 +175,21 @@ public class MainActivity extends Activity {
         };
         buttons[0]=button("上一页",()->{page[0]--;render.run();});buttons[1]=button("下一页",()->{page[0]++;render.run();});navigation.addView(buttons[0]);navigation.addView(buttons[1]);render.run();
         AlertDialog dialog=new AlertDialog.Builder(this).setTitle("核对未完成的导入").setView(form).setNegativeButton("暂不导入",null)
-            .setPositiveButton("继续导入",(d,w)->run(()->receiveCourses(new Intent().putExtra("captureFile",file.getAbsolutePath()).putExtra("captureReviewFingerprint",preview.fingerprint()))))
+            .setPositiveButton("继续导入",null)
             .setNeutralButton("删除这份结果",null).create();
-        dialog.setOnShowListener(d->dialog.getButton(AlertDialog.BUTTON_NEUTRAL).setOnClickListener(v->{
+        dialog.setOnShowListener(d->{
+            dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(v->{if(busy)return;run(()->{
+                double desired=dateValue(deadline);LocalDate chosen=Planner.day(desired),today=LocalDate.now(Planner.ZONE);
+                if(chosen.isBefore(today)||chosen.isAfter(today.plusYears(10)))throw new IllegalArgumentException("截止日期须在今天起十年以内，请调整后再导入。");
+                receiveCourses(new Intent().putExtra("captureFile",file.getAbsolutePath())
+                    .putExtra("captureReviewFingerprint",preview.fingerprint()).putExtra("captureReviewDeadline",desired));dialog.dismiss();
+            });});
+            dialog.getButton(AlertDialog.BUTTON_NEUTRAL).setOnClickListener(v->{
             if(busy)return;
             new AlertDialog.Builder(this).setTitle("删除这份未完成的导入？")
                 .setMessage("这份抓取结果包含 "+preview.count()+" 门课程。删除后需要重新抓取；已经保存的课程、进度和日程不会删除。")
                 .setNegativeButton("保留",null).setPositiveButton("删除临时结果",(confirm,w)->discardCourseImport(file,preview,dialog)).show();
-        }));dialog.show();
+        });});dialog.show();
     }
     void discardCourseImport(File file,CourseImportReceipt.Preview preview,AlertDialog review){
         if(busy)return;busy=true;ProgressDialog progress=ProgressDialog.show(this,"","正在删除临时抓取结果…",true,false);
