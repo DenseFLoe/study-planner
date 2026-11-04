@@ -299,6 +299,7 @@ public class MainActivity extends Activity {
     }
     void calendar()throws Exception{
         CalendarDay agenda=new CalendarDay(state,selected);
+        Map<String,ConfirmationDraft.Undo> undoByTask=ConfirmationDraft.Undo.captureRecorded(state,agenda.tasks);
         calendarSearch();
         LinearLayout c=card(body),bar=row();weighted(bar,title(month.getYear()+" 年 "+month.getMonthValue()+" 月"));bar.addView(pill("今天",()->{selected=LocalDate.now(Planner.ZONE);month=selected.withDayOfMonth(1);render();}));bar.addView(pill("‹",()->moveCalendar(-1)));bar.addView(pill("›",()->moveCalendar(1)));c.addView(bar);
         Set<LocalDate> marked=agenda.taskDates;LinearLayout week=row();for(String w:new String[]{"一","二","三","四","五","六","日"}){TextView v=text(w,12,muted);v.setGravity(Gravity.CENTER);weighted(week,v);}c.addView(week);
@@ -311,7 +312,7 @@ public class MainActivity extends Activity {
         catch(DailyConsequences.CalculationException e){confirmedText="无法计算（分钟数合计超出范围，记录已保留）";}
         body.addView(text("待学 "+hours(planned)+"   已确认 "+confirmedText+"   固定 "+events.size()+" 项",12,muted));
         body.addView(button("复制当天安排",this::copyDayAgenda));
-        List<JSONObject> timeline=agenda.timeline;for(JSONObject item:timeline){if(item.has("courseID"))taskCard(body,item,agenda.course(item.getString("courseID")));else eventCard(body,item,false);}if(timeline.isEmpty())card(body).addView(text("这一天没有待进行的安排",15,muted));boolean label=false;for(JSONObject t:tasks)if(!Planner.pending(t)){if(!label){body.addView(title("完成记录"));label=true;}taskCard(body,t,agenda.course(t.getString("courseID")));}for(JSONObject e:agenda.skipped){
+        List<JSONObject> timeline=agenda.timeline;for(JSONObject item:timeline){if(item.has("courseID"))taskCard(body,item,agenda.course(item.getString("courseID")),null);else eventCard(body,item,false);}if(timeline.isEmpty())card(body).addView(text("这一天没有待进行的安排",15,muted));boolean label=false;for(JSONObject t:tasks)if(!Planner.pending(t)){if(!label){body.addView(title("完成记录"));label=true;}taskCard(body,t,agenda.course(t.getString("courseID")),undoByTask.get(t.getString("id")));}for(JSONObject e:agenda.skipped){
             LinearLayout skipped=card(body);cardBorder(skipped,color(e.optString("color","orange")));skipped.addView(text(e.optString("title")+" · 本日已临时移除",16,muted));
             skipped.addView(text(Planner.time(e.optInt("startMinute"))+" — "+Planner.time(e.optInt("endMinute"))+" · 本日不占用时间，其他日期照常安排",12,muted));
             final LocalDate date=selected;
@@ -332,7 +333,7 @@ public class MainActivity extends Activity {
         startCard.addView(button("生成新课表",()->run(()->{int minute=Planner.minute(value(startTime));if(minute>=1440)throw new Exception("实际开课时间须为 00:00–23:59");mutate(s->Planner.recordActualStudyStart(s,minute,Planner.now()),true,()->{selected=LocalDate.now(Planner.ZONE);month=selected.withDayOfMonth(1);});})));
         body.addView(pill("重新排程",()->mutate(s->{},true,null)));
     }
-    void taskCard(LinearLayout parent,JSONObject t,JSONObject c)throws Exception{
+    void taskCard(LinearLayout parent,JSONObject t,JSONObject c,ConfirmationDraft.Undo undo)throws Exception{
         String courseColor=c==null?"blue":c.optString("color");
         LinearLayout box=card(parent);cardBorder(box,color(courseColor));
         if(Planner.floatingTask(t))floatingStyle(box,color(courseColor));
@@ -347,10 +348,9 @@ public class MainActivity extends Activity {
             box.addView(actions);
             new PlannerFeatures(this).taskDrag(box,actions,t);
         }else{
-            ConfirmationDraft.Undo undo=new ConfirmationDraft.Undo(state,t);
             LinearLayout result=row();
             weighted(result,text(t.optString("status").equals("missed")?"未完成 · 已保留剩余学习量":"已确认 "+t.optInt("completedMinutes")+" 分钟",13,muted));
-            if(c!=null)result.addView(pill("撤销",()->mutate(s->undo.apply(s,Planner.now()),true,null)));
+            if(c!=null&&undo!=null)result.addView(pill("撤销",()->mutate(s->undo.apply(s,Planner.now()),true,null)));
             box.addView(result);
         }
     }

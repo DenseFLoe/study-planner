@@ -17,9 +17,32 @@ public final class ConfirmationDraft {
         private final String taskID, task, records;
 
         public Undo(JSONObject state, JSONObject displayed) throws Exception {
+            this(displayed, records(state, displayed.getString("id")));
+        }
+
+        private Undo(JSONObject displayed, String capturedRecords) throws Exception {
             taskID = displayed.getString("id");
             task = SyncLedger.canonical(displayed);
-            records = records(state, taskID);
+            records = capturedRecords;
+        }
+
+        /** Capture every displayed historical card with one pass over all completion records. */
+        public static Map<String, Undo> captureRecorded(JSONObject state, Collection<JSONObject> displayed) throws Exception {
+            Map<String, JSONObject> tasks = new LinkedHashMap<>(), records = new HashMap<>();
+            for (JSONObject task : displayed) if (!Planner.pending(task)) tasks.put(task.getString("id"), task);
+            if (tasks.isEmpty()) return Collections.emptyMap();
+            for (JSONObject record : Planner.list(state.getJSONArray("completions"))) {
+                String taskID = record.optString("taskID");
+                if (!tasks.containsKey(taskID)) continue;
+                JSONObject rows = records.computeIfAbsent(taskID, key -> new JSONObject());
+                rows.put(record.getString("id"), record);
+            }
+            Map<String, Undo> result = new LinkedHashMap<>();
+            for (Map.Entry<String, JSONObject> entry : tasks.entrySet()) {
+                JSONObject rows = records.get(entry.getKey());
+                result.put(entry.getKey(), new Undo(entry.getValue(), SyncLedger.canonical(rows == null ? new JSONObject() : rows)));
+            }
+            return Collections.unmodifiableMap(result);
         }
 
         private static String records(JSONObject state, String id) throws Exception {

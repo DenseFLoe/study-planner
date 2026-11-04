@@ -92,10 +92,14 @@ public final class ConfirmationDraftTests {
                 "Floating confirmation ignored reserved window end");
         }
     }
-    static void staleUndo() throws Exception {
+    static ConfirmationDraft.Undo undo(JSONObject state, boolean batch) throws Exception {
+        return batch ? ConfirmationDraft.Undo.captureRecorded(state, Planner.list(state.getJSONArray("tasks"))).get("a")
+            : new ConfirmationDraft.Undo(state, task(state, 0));
+    }
+    static void staleUndo(boolean batch) throws Exception {
         for (String change : new String[]{"reconfirmed", "date", "minutes", "removedRecord", "removedTask", "undone"}) {
             JSONObject state = fixture(); Planner.confirm(state, "a", 20, NOW);
-            ConfirmationDraft.Undo undo = new ConfirmationDraft.Undo(state, task(state, 0));
+            ConfirmationDraft.Undo undo = undo(state, batch);
             if (change.equals("reconfirmed")) {
                 Planner.undoConfirmation(state, "a", NOW + 1); Planner.confirm(state, "a", 20, NOW + 2);
             }
@@ -108,7 +112,7 @@ public final class ConfirmationDraftTests {
         }
         for (int actual : new int[]{0, 20, 60}) {
             JSONObject state = fixture(); Planner.confirm(state, "a", actual, NOW);
-            ConfirmationDraft.Undo undo = new ConfirmationDraft.Undo(state, task(state, 0));
+            ConfirmationDraft.Undo undo = undo(state, batch);
             Planner.confirm(state, "b", 30, NOW + 1);
             state.getJSONArray("courses").getJSONObject(0).put("name", "同步后的名称");
             String other = SyncLedger.canonical(task(state, 1));
@@ -118,8 +122,40 @@ public final class ConfirmationDraftTests {
             check(state.getJSONArray("courses").getJSONObject(0).getString("name").equals("同步后的名称"), "Undo replaced unrelated course metadata");
         }
     }
+    static void indexedUndoCapture() throws Exception {
+        JSONObject state=fixture();Planner.confirm(state,"a",20,NOW);
+        class CountedRecord extends JSONObject {
+            int taskReads;
+            @Override public String optString(String key){if(key.equals("taskID"))taskReads++;return super.optString(key);}
+        }
+        List<JSONObject> displayed=new ArrayList<>();List<CountedRecord> records=new ArrayList<>();JSONArray all=new JSONArray();
+        for(int i=0;i<2000;i++){
+            CountedRecord record=new CountedRecord();record.put("id","record-"+i).put("taskID","task-"+i).put("minutes",1);
+            all.put(record);records.add(record);
+            if(i<1000)displayed.add(Planner.task("course",NOW,1).put("id","task-"+i).put("confirmedAt",NOW+60).put("status","completed").put("completedMinutes",1));
+        }
+        displayed.add(task(state,1));state.put("completions",all);String before=SyncLedger.canonical(state);
+        Map<String,ConfirmationDraft.Undo> captured=ConfirmationDraft.Undo.captureRecorded(state,displayed);
+        check(captured.size()==1000&&!captured.containsKey("b"),"Batch captured pending or missing historical cards");
+        check(records.stream().allMatch(record->record.taskReads==1),"Completion records were rescanned for each card");
+        check(before.equals(SyncLedger.canonical(state)),"Capturing cards changed state");
+        try{captured.clear();throw new AssertionError("Captured actions mutable");}catch(UnsupportedOperationException expected){checks++;}
+        for(CountedRecord record:records)record.taskReads=0;
+        check(ConfirmationDraft.Undo.captureRecorded(state,Collections.singletonList(task(state,1))).isEmpty(),"Pending-only capture produced undo actions");
+        check(records.stream().allMatch(record->record.taskReads==0),"Pending-only day still scanned all completions");
+
+        JSONObject original=fixture();Planner.confirm(original,"a",20,NOW);
+        ConfirmationDraft.Undo frozen=ConfirmationDraft.Undo.captureRecorded(original,Planner.list(original.getJSONArray("tasks"))).get("a");
+        JSONObject late=CourseTools.copy(original.getJSONArray("completions").getJSONObject(0)).put("id",Planner.id()).put("minutes",5);
+        original.getJSONArray("completions").put(late);
+        rejected(original,()->frozen.apply(original,NOW+1));
+        ConfirmationDraft.Undo allRecords=ConfirmationDraft.Undo.captureRecorded(original,Planner.list(original.getJSONArray("tasks"))).get("a");
+        original.getJSONArray("completions").put(0,late).put(1,CourseTools.copy(late).put("id",Planner.stableID("completion|a")).put("minutes",20));
+        allRecords.apply(original,NOW+2);
+        check(Planner.pending(task(original,0))&&original.getJSONArray("completions").length()==0,"Capture lost multiple records or depended on array order");
+    }
     public static void main(String[] args) throws Exception {
-        staleTasks(); validationAndAtomicity(); preservedProgressAndDates(); currentTimeAndFloating(); staleUndo();
+        staleTasks(); validationAndAtomicity(); preservedProgressAndDates(); currentTimeAndFloating(); staleUndo(false); staleUndo(true); indexedUndoCapture();
         System.out.println("ConfirmationDraftTests: " + checks + " checks passed");
     }
 }
