@@ -1,4 +1,5 @@
 import Foundation
+import CoreFoundation
 
 /// One same-origin JSON response captured by the injected sniffer.
 public struct CapturedResponse: Sendable, Equatable {

@@ -1,5 +1,9 @@
 import Foundation
+#if canImport(CryptoKit)
 import CryptoKit
+#else
+import Crypto
+#endif
 
 /// What the plan needs to know about a netdisk course. It is stored with the course and synced,
 /// so the numbers here are all plain scalars.

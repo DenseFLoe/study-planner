@@ -1,5 +1,9 @@
 import Foundation
+#if canImport(CryptoKit)
 import CryptoKit
+#else
+import Crypto
+#endif
 
 /// Shared wire format v1. Payload is base64 JSON using the existing 2001 UTC epoch.
 public struct SyncRecord: Codable, Equatable, Sendable {

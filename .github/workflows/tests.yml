@@ -9,6 +9,7 @@ permissions:
 
 jobs:
   linux-tests:
+    # Preserve the existing check name for any branch-protection rules.
     name: Java and Android (Linux)
     runs-on: ubuntu-latest
     timeout-minutes: 30
@@ -27,6 +28,13 @@ jobs:
           package-manager-cache: false
       - name: Run independent Java and Android checks
         run: bash Scripts/test-java-ci.sh
+      - name: Run portable Swift core checks
+        # Official Swift 6.0.3 Jammy image; includes the zlib development headers.
+        # The Java checks above generate the Android parity fixtures first.
+        run: |
+          docker run --rm --volume "$PWD:/workspace" --workdir /workspace \
+            swift@sha256:95f6ef898992dc840b35517e780f6f6db9661432775ab0b33cc0a531ea749bdb \
+            swift test --jobs 2
 
   tests:
     name: Swift, Java and Android

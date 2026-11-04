@@ -40,7 +40,11 @@ final class SchedulePreferenceTests: XCTestCase {
             XCTAssertEqual(work.reduce(0) { $0 + $1.durationMinutes }, state.remainingMinutes(for: course), file: file, line: line)
             if let lessons = course.manualLessons { XCTAssertEqual(work.map(\.lessonID), lessons.map { Optional($0.id) }, file: file, line: line) }
         }
+        #if os(Linux)
+        let helper = ScheduleEngineTests(name: "schedule validation helper", testClosure: { _ in })
+        #else
         let helper = ScheduleEngineTests()
+        #endif
         helper.assertValid(result, state, now: date(0, 480), file: file, line: line)
     }
 

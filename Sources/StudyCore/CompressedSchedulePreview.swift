@@ -1,6 +1,10 @@
 import Foundation
 import CoreFoundation
+#if canImport(CryptoKit)
 import CryptoKit
+#else
+import Crypto
+#endif
 
 /// A bounded, derived display result. It is never fed into the ordinary scheduler.
 public struct CompressedSchedulePreview: Codable, Equatable, Sendable {
