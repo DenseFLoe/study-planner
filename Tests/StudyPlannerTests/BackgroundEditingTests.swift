@@ -4,11 +4,27 @@ import StudyPersistence
 @testable import StudyPlanner
 
 final class BackgroundEditingTests: XCTestCase {
+    @MainActor func testDeletionReviewRejectsNewProgressBeforeSavingOrRotatingBackup() async throws {
+        let original = fixture(), course = original.courses[0]
+        let review = CourseDeletionDraft(reviewed: course, state: original)
+        var latest = original
+        let task = try XCTUnwrap(latest.tasks.first { $0.courseID == course.id })
+        try latest.confirm(taskID: task.id, actualMinutes: 20, now: Date())
+        let repository = Repository(), backups = PlannerBackupRepository(inMemory: true, limit: 1)
+        let recovery = PlannerBackup(state: original, reason: "较早恢复点")
+        try await backups.save(recovery)
+        let store = store(latest, repository, backups: backups)
+        let deleted = await store.deleteCourse(review)
+        XCTAssertFalse(deleted); XCTAssertEqual(store.state, latest); XCTAssertNil(repository.saved)
+        XCTAssertTrue(store.errorMessage?.contains("未执行删除") == true)
+        let entries = try await backups.entries()
+        XCTAssertEqual(entries.map(\.id), [recovery.id])
+    }
     @MainActor func testStorageConflictRefreshesLatestStateWithoutPublishingRejectedDraft() async {
         let original = fixture()
         var latest = original
         latest.courses[0].notes = "另一端刚保存的备注"
-        let errors: [Error] = [ConfirmationEditError.changed, CourseEditError.conflictingChanges,
+        let errors: [Error] = [ConfirmationEditError.changed, CourseEditError.conflictingChanges, CourseDeletionError.changed,
                                FixedEventEditError.removalChanged]
         for error in errors {
             let repository = Repository()

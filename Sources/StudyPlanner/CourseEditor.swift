@@ -8,6 +8,7 @@ struct CourseEditor: View {
     @State private var baseline: Course?
     @Environment(\.dismiss) private var dismiss
     @State private var deletePrompt = false
+    @State private var deletionReview: CourseDeletionDraft?
     @State private var message = ""
     @State private var supervisedApplication: SupervisedApplication?
     @State private var page = CourseEditorPage.overview
@@ -147,15 +148,16 @@ struct CourseEditor: View {
         }
         .confirmationDialog("删除这门课程？所有安排和完成记录都会删除，可从自动备份撤销。", isPresented: $deletePrompt) {
             Button("删除课程", role: .destructive) {
+                guard let review = deletionReview else { return }
+                saving = true
                 Task {
-                    saving = true
                     defer { saving = false }
-                    if await store.deleteCourse(course) {
-                        _ = store.playbackSupervisor.setApplication(nil, for: course.id)
+                    if await store.deleteCourse(review) {
+                        _ = store.playbackSupervisor.setApplication(nil, for: review.course.id)
                         dismiss()
                     } else { message = store.errorMessage ?? "删除失败" }
                 }
-            }
+            }.disabled(saving || store.orderSaveBusy)
         }
     }
 
@@ -434,7 +436,14 @@ struct CourseEditor: View {
     private var footer: some View {
         HStack(spacing: 12) {
             if existing && page == .overview {
-                Button("删除课程", role: .destructive) { deletePrompt = true }
+                Button("删除课程", role: .destructive) {
+                    guard let baseline else { return }
+                    let review = CourseDeletionDraft(reviewed: baseline, state: store.state)
+                    do {
+                        try review.validate(in: store.state)
+                        deletionReview = review; deletePrompt = true
+                    } catch { message = error.localizedDescription }
+                }.disabled(saving || store.orderSaveBusy)
             } else if page != .overview {
                 Button("返回") { goBack() }.disabled(backHistory.isEmpty)
             }

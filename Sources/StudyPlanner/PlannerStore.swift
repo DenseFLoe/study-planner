@@ -115,6 +115,7 @@ final class PlannerStore {
     private func commit(_ next: PlannerState, replan: Bool, now: Date = Date(),
                         backupReason: String? = "修改前自动备份", deletedCourseID: UUID? = nil,
                         clearError: Bool = true,
+                        courseDeletionDraft: CourseDeletionDraft? = nil,
                         fixedEventEdit: FixedEventEdit? = nil,
                         fixedOccurrenceEdit: FixedEventOccurrenceEdit? = nil,
                         lessonOrderDraft: LessonOrderDraft? = nil,
@@ -143,7 +144,9 @@ final class PlannerStore {
                 }
                 let saved: PlannerState
                 attemptedStorage = true
-                if let fixedEventEdit {
+                if let courseDeletionDraft {
+                    saved = try await repository.deleteCourseForInteraction(courseDeletionDraft, from: previous, now: now)
+                } else if let fixedEventEdit {
                     saved = try await repository.saveFixedEventForInteraction(fixedEventEdit,
                                                                              from: previous, now: now)
                 } else if let fixedOccurrenceEdit {
@@ -170,7 +173,7 @@ final class PlannerStore {
                 // the store so explicit Reload can start from that latest data.
                 let needsLatestState = (lessonOrderDraft != nil && error is LessonOrderEditError)
                     || (attemptedStorage && (error is ConfirmationEditError
-                        || error is CourseEditError || error is FixedEventEditError))
+                        || error is CourseEditError || error is FixedEventEditError || error is CourseDeletionError))
                 if needsLatestState,
                    let latest = try? repository.load() {
                     let (assessment, load) = await Task.detached(priority: .userInitiated) {
@@ -292,9 +295,15 @@ final class PlannerStore {
         return try edited.mergingDraft(from: baseline, into: current)
     }
     func deleteCourse(_ course: Course) async -> Bool {
-        var next = state
-        next.removeCourse(id: course.id)
-        return await commit(next, replan: true, backupReason: "删除课程前", deletedCourseID: course.id)
+        await deleteCourse(CourseDeletionDraft(reviewed: course, state: state))
+    }
+    func deleteCourse(_ draft: CourseDeletionDraft) async -> Bool {
+        let now = Date()
+        return await commit(state, replan: true, now: now, backupReason: "删除课程前",
+                            deletedCourseID: draft.course.id, courseDeletionDraft: draft) {
+            try draft.apply(to: &$0)
+            return $0.replan(now: now)
+        }
     }
     @discardableResult
     func saveEvent(_ event: FixedEvent, from baseline: FixedEvent? = nil, skippingDates: Set<Date> = [],

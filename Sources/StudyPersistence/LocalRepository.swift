@@ -19,6 +19,8 @@ public protocol PlannerRepository {
     @MainActor func saveForInteraction(_ state: PlannerState) async throws
     func saveChanges(_ state: PlannerState, from baseline: PlannerState) throws -> PlannerState
     @MainActor func saveChangesForInteraction(_ state: PlannerState, from baseline: PlannerState) async throws -> PlannerState
+    @MainActor func deleteCourseForInteraction(_ draft: CourseDeletionDraft,
+                                               from baseline: PlannerState, now: Date) async throws -> PlannerState
     @MainActor func saveFixedEventForInteraction(_ edit: FixedEventEdit,
                                                from baseline: PlannerState, now: Date) async throws -> PlannerState
     @MainActor func saveFixedOccurrenceForInteraction(_ edit: FixedEventOccurrenceEdit,
@@ -28,6 +30,13 @@ public protocol PlannerRepository {
 }
 
 extension PlannerRepository {
+    @MainActor public func deleteCourseForInteraction(_ draft: CourseDeletionDraft,
+                                                     from baseline: PlannerState, now: Date) async throws -> PlannerState {
+        var next = baseline
+        try draft.apply(to: &next)
+        _ = next.replan(now: now)
+        return try await saveChangesForInteraction(next, from: baseline)
+    }
     @MainActor public func saveFixedOccurrenceForInteraction(_ edit: FixedEventOccurrenceEdit,
                                                             from baseline: PlannerState, now: Date) async throws -> PlannerState {
         var next = baseline
@@ -191,6 +200,24 @@ public final class LocalRepository: PlannerRepository {
         return try await Task.detached(priority: .userInitiated) {
             let worker = LocalRepository(container: container, migrationBackupURL: backup, cloudOutboxURL: outbox)
             return try worker.saveChanges(state, from: baseline)
+        }.value
+    }
+
+    public func deleteCourse(_ draft: CourseDeletionDraft, now: Date = Date()) throws -> PlannerState {
+        try update { latest, _ in
+            try draft.apply(to: &latest)
+            _ = latest.replan(now: now)
+            return latest
+        }
+    }
+
+    @MainActor public func deleteCourseForInteraction(_ draft: CourseDeletionDraft,
+                                                     from baseline: PlannerState, now: Date) async throws -> PlannerState {
+        let container = container, backup = migrationBackupURL, outbox = cloudOutboxURL
+        defer { discardCachedModels() }
+        return try await Task.detached(priority: .userInitiated) {
+            let worker = LocalRepository(container: container, migrationBackupURL: backup, cloudOutboxURL: outbox)
+            return try worker.deleteCourse(draft, now: now)
         }.value
     }
 
