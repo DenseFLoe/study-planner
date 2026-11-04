@@ -3,6 +3,24 @@ import StudyCore
 @testable import StudyPersistence
 
 final class PlannerBackupRepositoryTests: XCTestCase {
+    func testBoundedReaderEnforcesLimitDuringReadAndLeavesFollowingBytesUnread() throws {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: url) }
+        let contents = Data(repeating: 65, count: 200_000)
+        try contents.write(to: url)
+        let file = try FileHandle(forReadingFrom: url)
+        defer { try? file.close() }
+        XCTAssertEqual(try PlannerBackupRepository.readBoundedData(from: file, limit: contents.count), contents)
+        try file.seek(toOffset: 0)
+        XCTAssertThrowsError(try PlannerBackupRepository.readBoundedData(from: file, limit: 100_000))
+        XCTAssertEqual(try file.offset(), 100_001, "Stop after the bounded lookahead, without loading the rest of a growing file")
+        try file.seek(toOffset: 0)
+        XCTAssertThrowsError(try PlannerBackupRepository.readBoundedData(from: file, limit: 0))
+        XCTAssertEqual(try file.offset(), 1)
+        try file.seekToEnd()
+        XCTAssertEqual(try PlannerBackupRepository.readBoundedData(from: file, limit: 0), Data())
+    }
+
     func testListSummariesKeepEachBackupsDeletionMetadataAndLeaveContentsReadable() async throws {
         for inMemory in [false, true] {
             let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)

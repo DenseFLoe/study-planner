@@ -122,7 +122,7 @@ struct DataBackupView: View {
                 }.value
                 reviewedState = store.state
                 confirmingRestore = true
-            } catch { message = "备份无法读取或格式不受支持，当前数据未改动。" }
+            } catch { message = "备份无法读取、格式不受支持或超过 64 MiB 上限，当前数据未改动。" }
         }
     }
 }

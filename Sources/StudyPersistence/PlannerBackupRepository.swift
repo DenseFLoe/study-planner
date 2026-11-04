@@ -86,8 +86,20 @@ public actor PlannerBackupRepository {
     public nonisolated static func read(_ url: URL) throws -> PlannerBackup {
         let attributes = try FileManager.default.attributesOfItem(atPath: url.path)
         guard let size = attributes[.size] as? NSNumber, size.intValue <= maximumBytes else { throw SyncFailure.invalidData }
-        let data = try Data(contentsOf: url)
-        guard data.count <= maximumBytes else { throw SyncFailure.invalidData }
+        let file = try FileHandle(forReadingFrom: url)
+        defer { try? file.close() }
+        let data = try readBoundedData(from: file, limit: maximumBytes)
         return try JSONDecoder().decode(PlannerBackup.self, from: data).validated()
+    }
+
+    /// Enforce the cap while reading, including when the file grows after stat.
+    nonisolated static func readBoundedData(from file: FileHandle, limit: Int) throws -> Data {
+        guard limit >= 0 else { throw SyncFailure.invalidData }
+        var data = Data()
+        while let part = try file.read(upToCount: min(64 * 1024, limit - data.count + 1)), !part.isEmpty {
+            guard part.count <= limit - data.count else { throw SyncFailure.invalidData }
+            data.append(part)
+        }
+        return data
     }
 }
