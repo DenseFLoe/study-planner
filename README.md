@@ -21,6 +21,10 @@ macOS 14 及以上（Apple Silicon）可使用 macOS 版本；Android 8.0 及以
 
 也可在 Xcode 中打开 `Package.swift`，选择 StudyPlanner 运行。`build-app.sh` 与 `build-dmg.sh` 默认 Release；传入 `debug` 可构建调试版。本机构建使用临时 ad-hoc 签名，尚未制作 Developer ID 公证的对外发行版本。
 
+macOS 的「学习日程 → 关于学习日程」显示当前运行应用的版本、构建号、源码标识、构建时间（UTC）和配置。源码标识来自打包时写入的 Git 提交；有未提交修改时附加 `-modified-<源码指纹前12位>`，DMG 文件名也使用该标识，避免覆盖同一提交的干净构建。若打包过程中源码或提交发生变化，构建会停止，待编辑完成后重新运行即可。直接从 Xcode / SwiftPM 运行、或旧包缺少这些信息时显示「未记录」，不会把当前仓库的版本误当成已安装版本。
+
+排查版本时也可运行已安装应用的可执行文件并传入 `--version`：它只打印版本、完整提交、源码指纹和构建信息，不打开窗口、数据库或同步。打包标识回归检查：`python3 Scripts/test-build-metadata.py`；显示逻辑检查：`./Scripts/test.sh --filter AppBuildInfoTests`。
+
 隔离预览：运行 `.build/debug/StudyPlanner --demo`，所有示例操作仅使用内存数据库。不会改动正式数据库。
 
 两端构建版本统一从 `Scripts/version.env` 读取，目前为 1.6.3（构建号 18）。本轮继续保留可选私人云同步：两端上传包含操作时间和删除标记的完整 gzip 数据包，服务器逐条合并并保留最近十版。默认关闭，无需提供服务器信息即可构建；原热点同步继续保留。对应入口与验收边界见 [Android 功能对照](Android/FEATURE_PARITY.md) 和 [云同步部署说明](Server/README.md)。本地包为 `dist/学习日程-macOS-<短SHA>.dmg` 及同名 `.dmg.sha256`、`dist/学习日程-安卓版.apk`、`dist/学习日程-云同步服务端.tar.gz`；Android 沿用已有本地签名。

@@ -46,6 +46,9 @@ struct StudyPlannerApp: App {
                 .onAppear { delegate.connect(store) }
         }.defaultSize(width: 1280, height: 820)
         .commands {
+            CommandGroup(replacing: .appInfo) {
+                Button("关于学习日程") { AppBuildInfo.current.showAboutPanel() }
+            }
             CommandGroup(replacing: .newItem) {}
             CommandMenu("学习计划") {
                 Button("重新计算未来计划") { Task { await store.replan() } }.keyboardShortcut("r")
@@ -73,6 +76,10 @@ struct StudyPlannerApp: App {
 @main enum NetdiskProbeMain {
     static func main() async {
         let arguments = CommandLine.arguments
+        if arguments.contains("--version") {
+            print(AppBuildInfo.current.diagnosticDescription)
+            return
+        }
         if let index = arguments.firstIndex(of: "--cloud-verify-archive"), arguments.indices.contains(index + 1) {
             do {
                 let data = try Data(contentsOf: URL(fileURLWithPath: arguments[index + 1]))

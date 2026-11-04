@@ -21,7 +21,9 @@ app="$dist_dir/学习日程.app"
 # 复用现有应用构建脚本；生成的 .app 保留在 dist，供其他构建产物继续使用。
 "$PWD/Scripts/build-app.sh" "$configuration" "$app"
 
-sha="$(git rev-parse --short HEAD)"
+# Name the image after the source embedded in this app, even if HEAD moves
+# after compilation. Modified builds cannot overwrite the clean commit's DMG.
+sha="$(/usr/libexec/PlistBuddy -c 'Print :StudyPlannerSourceIdentifier' "$app/Contents/Info.plist")"
 base="学习日程-macOS-$sha"
 dmg="$dist_dir/$base.dmg"
 checksum="$dmg.sha256"

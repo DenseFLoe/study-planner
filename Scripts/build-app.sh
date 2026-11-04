@@ -1,10 +1,13 @@
 #!/bin/zsh
 set -euo pipefail
 cd "${0:A:h:h}"
+configuration="${1:-release}"
+metadata="$(mktemp "${TMPDIR:-/tmp}/study-planner-build.XXXXXX")"
+trap 'rm -f "$metadata"' EXIT
+python3 Scripts/build-metadata.py capture "$PWD" "$configuration" "$metadata"
 source "$PWD/Scripts/version.env"
 export CLANG_MODULE_CACHE_PATH="${TMPDIR:-/tmp}/study-planner-clang"
 export SWIFTPM_MODULECACHE_OVERRIDE="${TMPDIR:-/tmp}/study-planner-swift"
-configuration="${1:-release}"
 swift build --disable-sandbox -c "$configuration"
 app="${2:-$PWD/dist/学习日程.app}"
 mkdir -p "$app/Contents/MacOS"
@@ -40,5 +43,6 @@ PLIST
 mkdir -p "$app/Contents/Resources"
 swift Scripts/make-icon.swift "$PWD/dist/StudyPlanner.iconset"
 python3 Scripts/package-icon.py "$PWD/dist/StudyPlanner.iconset" "$app/Contents/Resources/AppIcon.icns"
+python3 Scripts/build-metadata.py stamp "$PWD" "$metadata" "$app/Contents/Info.plist"
 codesign --force --sign - "$app"
 echo "应用已生成：$app"

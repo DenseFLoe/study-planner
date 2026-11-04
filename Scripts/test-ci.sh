@@ -5,6 +5,7 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 # Fast packaging/dependency checks run before toolchain builds or downloads.
+python3 Scripts/test-build-metadata.py
 node Android/tests/crawlers.test.js
 
 json_jar="Android/tools/json.jar"
