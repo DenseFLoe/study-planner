@@ -53,6 +53,22 @@ final class CourseCatalogSearchTests: XCTestCase {
         XCTAssertEqual(CourseCatalogSearch.matches(query: "2026-11-05", courses: [value], timeZone: TimeZone(secondsFromGMT: 8 * 3600)!), [value])
         XCTAssertTrue(CourseCatalogSearch.matches(query: "2026-11-05", courses: [value], timeZone: utc).isEmpty)
     }
+    func testSelectedOnlySearchExcludesMissingAndArchivedAndPreservesOtherSelections() {
+        let first = course("化工 原理", notes: "重点"), second = course("英语 阅读", notes: "重点"), other = course("未选择")
+        var archived = course("归档 重点"); archived.isArchived = true
+        let courses = [other, archived, second, first]
+        let chosen: Set<UUID> = [first.id, second.id, archived.id, UUID()]
+        let result = CourseCatalogSearch.matches(query: "", courses: courses, includedIDs: chosen)
+        XCTAssertEqual(Set(result.map(\.id)), [first.id, second.id])
+        XCTAssertEqual(CourseCatalogSearch.matches(query: "化工 重点", courses: courses, includedIDs: chosen), [first])
+        XCTAssertTrue(CourseCatalogSearch.matches(query: "", courses: courses, includedIDs: []).isEmpty)
+        XCTAssertEqual(chosen.count, 4)
+        XCTAssertEqual(CourseCatalogSearch.matches(query: "", courses: courses).count, 3)
+        let afterDeletion = courses.filter { $0.id != first.id }
+        XCTAssertEqual(CourseCatalogSearch.matches(query: "", courses: afterDeletion, includedIDs: chosen), [second])
+        XCTAssertEqual(courses, [other, archived, second, first])
+    }
+
     func testLargeCatalogSearchPreservesSourceAndFindsCrossFieldMatches() {
         let courses = (0..<10_000).map { index in
             course("科目 \(index)", notes: index.isMultiple(of: 100) ? "target" : "其他")

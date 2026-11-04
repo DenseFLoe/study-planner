@@ -12,7 +12,8 @@ public enum CourseCatalogOrder: String, CaseIterable, Identifiable, Sendable {
 
 public enum CourseCatalogSearch {
     public static func matches(query: String, courses: [Course], scope: CourseCatalogScope = .all,
-                               order: CourseCatalogOrder = .deadline, timeZone: TimeZone = .current) -> [Course] {
+                               order: CourseCatalogOrder = .deadline, includedIDs: Set<UUID>? = nil,
+                               timeZone: TimeZone = .current) -> [Course] {
         let terms = query.precomposedStringWithCompatibilityMapping.split(whereSeparator: \.isWhitespace).map(String.init)
         let dateLabel = DateFormatter()
         dateLabel.locale = Locale(identifier: "en_US_POSIX")
@@ -20,6 +21,7 @@ public enum CourseCatalogSearch {
         dateLabel.timeZone = timeZone; dateLabel.dateFormat = "yyyy-MM-dd"
         return courses.filter { course in
             guard !course.isArchived else { return false }
+            if let includedIDs, !includedIDs.contains(course.id) { return false }
             if scope == .automatic && !course.autoScheduleEnabled { return false }
             if scope == .paused && course.autoScheduleEnabled { return false }
             guard !terms.isEmpty else { return true }

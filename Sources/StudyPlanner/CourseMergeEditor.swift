@@ -11,6 +11,17 @@ struct CourseMergeEditor: View {
     @State private var displayedInput: PreviewInput?
     @State private var previewError = ""
     @State private var saving = false
+    @State private var query = ""
+    @State private var selectedOnly = false
+    @State private var matchedSources: [Course] = []
+    @State private var displayedSourcesInput: SourcesInput?
+    @State private var selectionNotice = ""
+
+    private struct SourcesInput: Equatable, Sendable {
+        let courses: [Course]
+        let query: String
+        let includedIDs: Set<UUID>?
+    }
 
     private struct PreviewInput: Equatable, Sendable {
         let state: PlannerState
@@ -19,19 +30,34 @@ struct CourseMergeEditor: View {
         var canPreview: Bool { selected.count >= 2 && !name.isEmpty }
     }
 
-    private var sources: [Course] {
-        store.courses.sorted { NetdiskTitles.naturalCompare($0.name, $1.name) == .orderedAscending }
+    private var availableIDs: Set<UUID> {
+        Set(store.state.courses.lazy.filter { !$0.isArchived }.map(\.id))
     }
     var body: some View {
         let input = PreviewInput(state: store.state, selected: selected,
                                  name: name.trimmingCharacters(in: .whitespacesAndNewlines))
         let current = displayedInput == input ? preview : nil
+        let sourcesInput = SourcesInput(courses: store.state.courses, query: query,
+                                        includedIDs: selectedOnly ? selected : nil)
+        let sources = displayedSourcesInput == sourcesInput ? matchedSources : []
         VStack(alignment: .leading, spacing: 16) {
             Text("合并已添加的课程").font(.title2.bold())
             TextField("合并后的课程名称", text: $name).textFieldStyle(.roundedBorder)
             HStack(alignment: .top, spacing: 20) {
                 VStack(alignment: .leading) {
                     Text("选择课程（已选 \(selected.count) 门）").font(.headline)
+                    TextField("搜索名称、备注或截止日期", text: $query).textFieldStyle(.roundedBorder)
+                    Toggle("只看已选课程", isOn: $selectedOnly).toggleStyle(.checkbox)
+                    HStack {
+                        Button("清除筛选") { query = ""; selectedOnly = false }
+                        Button("取消全部选择") { selected.removeAll() }.disabled(selected.isEmpty)
+                    }.controlSize(.small)
+                    if displayedSourcesInput != sourcesInput {
+                        ProgressView("正在筛选课程…").controlSize(.small)
+                    } else {
+                        Text(sources.isEmpty ? "当前筛选没有课程" : "匹配 \(sources.count) 门 · 按截止日期排列")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
                     ScrollView {
                         LazyVStack(alignment: .leading, spacing: 12) {
                             ForEach(sources) { course in
@@ -40,7 +66,8 @@ struct CourseMergeEditor: View {
                                 })) {
                                     VStack(alignment: .leading) {
                                         Text(course.name)
-                                        Text(hours(course.totalMinutes)).font(.caption).foregroundStyle(.secondary)
+                                        Text("总量 \(hours(course.totalMinutes)) · 截止 \(course.deadline.formatted(date: .abbreviated, time: .omitted))")
+                                            .font(.caption).foregroundStyle(.secondary)
                                     }
                                 }.toggleStyle(.checkbox)
                             }
@@ -66,6 +93,9 @@ struct CourseMergeEditor: View {
                     }
                 }.frame(maxWidth: .infinity)
             }
+            Text("筛选不取消选择，合并全部已选课程；可用“只看已选课程”核对。")
+                .font(.caption).foregroundStyle(.secondary)
+            if !selectionNotice.isEmpty { Text(selectionNotice).font(.caption).foregroundStyle(.secondary) }
             if let current {
                 Text("合计 \(hours(current.course.totalMinutes)) · 截止 \(current.course.deadline.formatted(date: .abbreviated, time: .omitted))")
                     .font(.callout)
@@ -86,7 +116,23 @@ struct CourseMergeEditor: View {
                     }
                 }.buttonStyle(.borderedProminent).disabled(current == nil)
             }
-        }.padding(24).frame(width: 800, height: 590).disabled(saving)
+        }.padding(24).frame(width: 800, height: 650).disabled(saving)
+            .onChange(of: availableIDs, initial: true) { _, latest in
+                let removed = selected.subtracting(latest).count
+                guard removed > 0 else { return }
+                selected.formIntersection(latest)
+                selectionNotice = "\(removed) 门课程已删除或归档，已取消选择；其他选择和合并名称仍保留。"
+            }
+            .task(id: sourcesInput) {
+                displayedSourcesInput = nil
+                do { try await Task.sleep(for: .milliseconds(200)) } catch { return }
+                let result = await Task.detached(priority: .userInitiated) {
+                    CourseCatalogSearch.matches(query: sourcesInput.query, courses: sourcesInput.courses,
+                                                includedIDs: sourcesInput.includedIDs)
+                }.value
+                guard !Task.isCancelled else { return }
+                matchedSources = result; displayedSourcesInput = sourcesInput
+            }
             .task(id: input) {
                 preview = nil; previewError = ""; displayedInput = nil
                 guard input.canPreview else { displayedInput = input; return }
