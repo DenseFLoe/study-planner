@@ -4,6 +4,7 @@ import org.json.*;
 import java.io.*;
 import java.nio.charset.*;
 import java.nio.file.*;
+import java.security.*;
 import java.util.*;
 import java.util.function.DoubleSupplier;
 
@@ -49,17 +50,52 @@ final class CourseImportReceipt {
             return result;
         } finally { Files.deleteIfExists(temporary.toPath()); }
     }
-    private JSONObject read() throws Exception {
+    private static final class Payload {
+        final JSONObject data; final byte[] fingerprint;
+        Payload(JSONObject data, byte[] fingerprint) { this.data = data; this.fingerprint = fingerprint; }
+    }
+    private Payload read() throws Exception {
         if (!file.isFile()) throw new IOException("导入结果已不存在，请重新抓取课程。");
         if (file.length() > MAX_BYTES) throw new IOException("导入结果超过大小上限，原文件已保留。");
-        StringBuilder text = new StringBuilder();
-        try (Reader reader = new BufferedReader(new InputStreamReader(new CloudSnapshot.LimitedInput(new FileInputStream(file), MAX_BYTES),
+        StringBuilder text = new StringBuilder(); MessageDigest digest = MessageDigest.getInstance("SHA-256");
+        try (Reader reader = new BufferedReader(new InputStreamReader(new DigestInputStream(new CloudSnapshot.LimitedInput(new FileInputStream(file), MAX_BYTES), digest),
                 StandardCharsets.UTF_8.newDecoder().onMalformedInput(CodingErrorAction.REPORT).onUnmappableCharacter(CodingErrorAction.REPORT)))) {
             char[] buffer = new char[8192]; int count; while ((count = reader.read(buffer)) != -1) text.append(buffer, 0, count);
         }
         JSONTokener tokens = new JSONTokener(text.toString()); JSONObject result = new JSONObject(tokens);
         if (tokens.nextClean() != 0) throw new IOException("导入结果含有多余内容，原文件已保留。");
-        return result;
+        return new Payload(result, digest.digest());
+    }
+    static final class Preview {
+        static final int PAGE_SIZE = 100;
+        private final List<String> rows;
+        private final byte[] fingerprint;
+        final String deadline;
+        final long totalMinutes;
+        Preview(List<String> rows, byte[] fingerprint, String deadline, long totalMinutes) {
+            this.rows = Collections.unmodifiableList(rows); this.fingerprint = fingerprint;
+            this.deadline = deadline; this.totalMinutes = totalMinutes;
+        }
+        byte[] fingerprint() { return fingerprint.clone(); }
+        int count() { return rows.size(); }
+        int pageCount() { return (rows.size() - 1) / PAGE_SIZE + 1; }
+        List<String> page(int index) {
+            if (index < 0 || index >= pageCount()) return Collections.emptyList();
+            int start = index * PAGE_SIZE; return rows.subList(start, Math.min(rows.size(), start + PAGE_SIZE));
+        }
+    }
+    Preview preview() throws Exception {
+        Payload payload = read(); List<String> rows = new ArrayList<>(); long total = 0;
+        for (JSONObject raw : Planner.list(payload.data.getJSONArray("snapshots"))) {
+            JSONObject snapshot = WebCourseImport.sanitize(raw); String problem = WebCourseImport.problem(snapshot);
+            if (problem != null) throw new IOException(snapshot.optString("name") + "：" + problem);
+            int minutes = WebCourseImport.total(snapshot); total += minutes;
+            double fetched = snapshot.getDouble("fetchedAt");
+            rows.add(snapshot.getString("name") + "\n" + snapshot.getJSONArray("lessons").length() + " 节 · 总量 " + minutes +
+                " 分钟 · 网站已学 " + WebCourseImport.completed(snapshot) + " 分钟\n抓取时间 " + Planner.date(fetched) + " " + Planner.clock(fetched));
+        }
+        if (rows.isEmpty()) throw new IOException("导入结果没有选中的课程。");
+        return new Preview(rows, payload.fingerprint, Planner.date(payload.data.getDouble("deadline")), total);
     }
     static final class Result {
         final JSONObject state;
@@ -67,7 +103,13 @@ final class CourseImportReceipt {
         Result(JSONObject state, boolean removed) { this.state = state; this.removed = removed; }
     }
     Result commit(StateMutation.Store<JSONObject> store, DoubleSupplier clock) throws Exception {
-        JSONObject payload = read(); List<JSONObject> snapshots = Planner.list(payload.getJSONArray("snapshots"));
+        return commit(store, clock, null);
+    }
+    Result commit(StateMutation.Store<JSONObject> store, DoubleSupplier clock, byte[] reviewedFingerprint) throws Exception {
+        Payload input = read();
+        if (reviewedFingerprint != null && !MessageDigest.isEqual(reviewedFingerprint, input.fingerprint))
+            throw new IOException("导入文件在核对后发生变化，未保存。请重新查看未完成的导入。");
+        JSONObject payload = input.data; List<JSONObject> snapshots = Planner.list(payload.getJSONArray("snapshots"));
         if (snapshots.isEmpty()) throw new IOException("导入结果没有选中的课程。");
         double deadline = payload.getDouble("deadline");
         JSONObject state = StateMutation.apply(store, latest -> { double now = clock.getAsDouble(); WebCourseImport.save(latest, snapshots, deadline, now); Planner.replan(latest, now); });

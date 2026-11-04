@@ -97,9 +97,36 @@ public final class CourseImportReceiptTests {
         }
         Files.delete(file);
     }
+    static void reviewedImports(Path directory) throws Exception {
+        JSONObject payload = payload(); JSONArray snapshots = new JSONArray();
+        JSONObject capture = payload.getJSONArray("snapshots").getJSONObject(0);
+        for (int i = 0; i < 205; i++) snapshots.put(CourseTools.copy(capture).put("packageID", "preview-" + i).put("name", "待核对课程 " + i));
+        payload.put("snapshots", snapshots);
+        Path file = write(directory, payload.toString()); byte[] original = Files.readAllBytes(file);
+        CourseImportReceipt receipt = new CourseImportReceipt(directory.toFile(), file.toString());
+        CourseImportReceipt.Preview preview = receipt.preview();
+        check(preview.count() == 205 && preview.pageCount() == 3, "Preview lost courses or pagination");
+        check(preview.page(0).size() == 100 && preview.page(1).size() == 100 && preview.page(2).size() == 5, "Preview exceeds page size or truncates courses");
+        check(preview.page(-1).isEmpty() && preview.page(3).isEmpty(), "Preview accepts invalid page");
+        check(preview.page(2).get(4).contains("待核对课程 204") && preview.page(0).get(0).contains("抓取时间 2026-11-04 08:00"), "Preview lacks names or capture time");
+        check(preview.deadline.equals("2026-11-11") && preview.totalMinutes == 205L * WebCourseImport.total(capture), "Preview lost deadline or total workload");
+        check(Arrays.equals(Files.readAllBytes(file), original), "Preview modified its pending file");
+        try { preview.page(0).clear(); throw new AssertionError("Preview rows are mutable"); }
+        catch (UnsupportedOperationException expected) { checks++; }
+        byte[] fingerprint = preview.fingerprint(); fingerprint[0] ^= 1;
+        check(!Arrays.equals(fingerprint, preview.fingerprint()), "Preview exposed its mutable fingerprint");
+        payload.put("deadline", Planner.at(DAY.plusDays(8), 0)); Files.write(file, payload.toString().getBytes(StandardCharsets.UTF_8));
+        Store store = new Store();
+        try { receipt.commit(store, () -> NOW, preview.fingerprint()); throw new AssertionError("Unreviewed file contents imported"); }
+        catch (IOException expected) { check(store.saves == 0 && Files.exists(file) && expected.getMessage().contains("核对后发生变化"), "Changed file was saved or consumed"); }
+        Files.delete(file);
+        file = write(directory, payload().toString()); receipt = new CourseImportReceipt(directory.toFile(), file.toString()); preview = receipt.preview();
+        CourseImportReceipt.Result result = receipt.commit(store, () -> NOW, preview.fingerprint());
+        check(result.removed && store.value.getJSONArray("courses").length() == 1, "Reviewed unchanged import did not save and consume file");
+    }
     public static void main(String[] args) throws Exception {
         Path directory = Files.createTempDirectory("study-import-receipt-");
-        try { successfulRetry(directory); invalidPayloads(directory); pathScope(directory); atomicStaging(directory); staleRetry(directory); }
+        try { successfulRetry(directory); invalidPayloads(directory); pathScope(directory); atomicStaging(directory); staleRetry(directory); reviewedImports(directory); }
         finally { try (Stream<Path> files = Files.walk(directory)) { for (Path path : (Iterable<Path>)files.sorted(Comparator.reverseOrder())::iterator) Files.deleteIfExists(path); } }
         System.out.println("CourseImportReceiptTests: " + checks + " checks passed");
     }

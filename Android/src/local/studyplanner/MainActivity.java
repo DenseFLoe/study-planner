@@ -130,7 +130,7 @@ public class MainActivity extends Activity {
         CourseImportReceipt receipt=new CourseImportReceipt(getCacheDir(),path);
         busy=true;ProgressDialog progress=ProgressDialog.show(this,"","正在读取并保存课程…",true,false);
         worker.execute(()->{try{
-            CourseImportReceipt.Result saved=receipt.commit(database,Planner::now);
+            CourseImportReceipt.Result saved=receipt.commit(database,Planner::now,data.getByteArrayExtra("captureReviewFingerprint"));
             runOnUiThread(()->{busy=false;progress.dismiss();if(isDestroyed())return;
                 state=saved.state;page=1;render();if(!saved.removed)alert("课程已导入","课程已保存，但临时导入文件未能清理。请勿重复导入同一份旧结果。");resumeSyncRefresh();
             });
@@ -147,10 +147,30 @@ public class MainActivity extends Activity {
             else{
                 String[] labels=new String[files.size()];java.text.SimpleDateFormat format=new java.text.SimpleDateFormat("yyyy-MM-dd HH:mm",Locale.CHINA);format.setTimeZone(java.util.TimeZone.getTimeZone(Planner.ZONE));
                 for(int i=0;i<labels.length;i++)labels[i]=format.format(new java.util.Date(files.get(i).lastModified()))+" · "+files.get(i).length()/1024+" KB";
-                new AlertDialog.Builder(this).setTitle("选择未完成的导入").setItems(labels,(d,index)->run(()->receiveCourses(new Intent().putExtra("captureFile",files.get(index).getAbsolutePath())))).setNegativeButton("取消",null).show();
+                new AlertDialog.Builder(this).setTitle("选择未完成的导入").setItems(labels,(d,index)->reviewPendingCourseImport(files.get(index))).setNegativeButton("取消",null).show();
             }
             resumeSyncRefresh();
         });});
+    }
+    void reviewPendingCourseImport(File file){
+        if(busy||!ready)return;busy=true;ProgressDialog progress=ProgressDialog.show(this,"","正在读取待导入课程…",true,false);
+        worker.execute(()->{try{
+            CourseImportReceipt.Preview preview=new CourseImportReceipt(getCacheDir(),file.getAbsolutePath()).preview();
+            runOnUiThread(()->{busy=false;progress.dismiss();if(isDestroyed())return;showPendingCourseImport(file,preview);resumeSyncRefresh();});
+        }catch(Exception error){runOnUiThread(()->{busy=false;progress.dismiss();if(isDestroyed())return;alert("无法预览导入",error.getMessage()+"\n没有修改日程。");resumeSyncRefresh();});}});
+    }
+    void showPendingCourseImport(File file,CourseImportReceipt.Preview preview){
+        LinearLayout form=col(),rows=col();form.setPadding(dp(16),0,dp(16),0);
+        form.addView(text(preview.count()+" 门课程 · 总量 "+hours(preview.totalMinutes)+"\n新课程截止日期："+preview.deadline+"\n已有课程保留当前起止日期和本地学习记录；保存时再次检查课程更新。",13,muted));
+        TextView position=text("",12,muted);form.addView(position);ScrollView scroll=new ScrollView(this);scroll.addView(rows);form.addView(scroll,new LinearLayout.LayoutParams(-1,dp(300)));
+        PlannerUi.Flow navigation=new PlannerUi.Flow(this);form.addView(navigation);int[] page={0};Button[] buttons=new Button[2];
+        Runnable render=()->{rows.removeAllViews();position.setText("第 "+(page[0]+1)+" / "+preview.pageCount()+" 页");
+            for(String description:preview.page(page[0]))rows.addView(text(description,14,ink));
+            buttons[0].setEnabled(page[0]>0);buttons[1].setEnabled(page[0]+1<preview.pageCount());scroll.scrollTo(0,0);
+        };
+        buttons[0]=button("上一页",()->{page[0]--;render.run();});buttons[1]=button("下一页",()->{page[0]++;render.run();});navigation.addView(buttons[0]);navigation.addView(buttons[1]);render.run();
+        new AlertDialog.Builder(this).setTitle("核对未完成的导入").setView(form).setNegativeButton("暂不导入",null)
+            .setPositiveButton("继续导入",(d,w)->run(()->receiveCourses(new Intent().putExtra("captureFile",file.getAbsolutePath()).putExtra("captureReviewFingerprint",preview.fingerprint())))).show();
     }
     int dp(int n){return (int)(n*getResources().getDisplayMetrics().density+.5f);}
     LinearLayout col(){LinearLayout v=new LinearLayout(this);v.setOrientation(1);return v;}
