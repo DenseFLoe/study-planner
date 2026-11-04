@@ -89,5 +89,23 @@ public final class WebImportRegressionTests {
   WebCourseImport.save(state,Collections.singletonList(fresh),deadline,now+3);course=Planner.course(state,id);
   check(course.getString("name").equals("归档前自定义名")&&!course.optBoolean("isArchived"),"Reimport lost archived course custom name");
  }
- public static void main(String[] args)throws Exception{fixtures();identity();privacy();customCourseNames();System.out.println("WebImportRegressionTests: "+checks+" checks passed");}
+ static void staleCaptures()throws Exception{
+  JSONObject older=capture("stale.example",3600),newer=CourseTools.copy(older).put("fetchedAt",now+60);
+  newer.getJSONArray("lessons").getJSONObject(0).put("watchedPercent",50);
+  for(boolean archived:new boolean[]{false,true}){
+   JSONObject state=PlannerTests.empty();WebCourseImport.save(state,Collections.singletonList(newer),deadline,now+60);
+   JSONObject course=state.getJSONArray("courses").getJSONObject(0);String id=course.getString("id");course.put("isArchived",archived).put("notes","保留本机备注");
+   String before=SyncLedger.canonical(state);
+   try{WebCourseImport.save(state,Arrays.asList(capture("new.example",3600),older),deadline,now+120);throw new AssertionError("Older capture replaced newer website data");}
+   catch(IllegalArgumentException expected){check(expected.getMessage().contains("较新的抓取结果"),"Stale import lacks actionable reason");}
+   check(SyncLedger.canonical(state).equals(before),"Stale batch partially changed state or revived archived course");
+   WebCourseImport.save(state,Collections.singletonList(newer),deadline,now+120);
+   check(Planner.completed(state,Planner.course(state,id))==30,"Equal capture lost known website progress");
+   JSONObject fresh=CourseTools.copy(newer).put("fetchedAt",now+180);fresh.getJSONArray("lessons").getJSONObject(0).put("watchedPercent",75);
+   WebCourseImport.save(state,Collections.singletonList(fresh),deadline,now+180);
+   check(Planner.completed(state,Planner.course(state,id))==45,"New capture failed to update progress");
+   check(Planner.course(state,id).getString("notes").equals("保留本机备注"),"Refresh lost custom notes");
+  }
+ }
+ public static void main(String[] args)throws Exception{fixtures();identity();privacy();customCourseNames();staleCaptures();System.out.println("WebImportRegressionTests: "+checks+" checks passed");}
 }

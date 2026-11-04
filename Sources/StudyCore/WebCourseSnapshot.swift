@@ -254,6 +254,9 @@ extension PlannerState {
             guard matches.count <= 1 else { throw WebCourseImportError.invalid("已有多个课程绑定同一课程包，请先整理重复课程。") }
             let index = matches.first
             let course = index.map { next[$0] } ?? Course(name: snapshot.name, totalMinutes: 1, startDate: now, deadline: deadline)
+            if let previous = course.webCourse, previous.fetchedAt > snapshot.fetchedAt {
+                throw WebCourseImportError.invalid(snapshot.name + "：已有较新的抓取结果，未导入旧结果。请重新抓取并核对设备时间。")
+            }
             var snapshot = snapshot
             snapshot.lessons.removeAll { course.deletedLessonIDs?.contains($0.id) == true }
             let logged = completions.filter { $0.courseID == course.id }.reduce(0) { $0 + $1.minutes }

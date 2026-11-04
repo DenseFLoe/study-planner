@@ -83,9 +83,23 @@ public final class CourseImportReceiptTests {
         Store store = new Store(); CourseImportReceipt.Result imported = new CourseImportReceipt(directory.toFile(), file.getAbsolutePath()).commit(store, () -> NOW);
         check(imported.removed && store.value.getJSONArray("courses").getJSONObject(0).getString("name").equals("中文课程 😀"), "Staged capture did not round-trip into planner");
     }
+    static void staleRetry(Path directory) throws Exception {
+        JSONObject original = payload(), fresh = CourseTools.copy(original.getJSONArray("snapshots").getJSONObject(0)).put("fetchedAt", NOW + 60);
+        fresh.getJSONArray("lessons").getJSONObject(0).put("watchedPercent", 50);
+        Store store = new Store();
+        WebCourseImport.save(store.value, Collections.singletonList(fresh), original.getDouble("deadline"), NOW + 60);
+        Path file = write(directory, original.toString()); String before = SyncLedger.canonical(store.value);
+        try { new CourseImportReceipt(directory.toFile(), file.toString()).commit(store, () -> NOW + 120); throw new AssertionError("Stale retry replaced newer course"); }
+        catch (IllegalArgumentException expected) {
+            check(expected.getMessage().contains("较新的抓取结果"), "Stale retry did not explain freshness conflict");
+            check(store.saves == 0 && SyncLedger.canonical(store.value).equals(before), "Stale retry changed durable planner");
+            check(Files.exists(file), "Stale retry consumed the file needed for review");
+        }
+        Files.delete(file);
+    }
     public static void main(String[] args) throws Exception {
         Path directory = Files.createTempDirectory("study-import-receipt-");
-        try { successfulRetry(directory); invalidPayloads(directory); pathScope(directory); atomicStaging(directory); }
+        try { successfulRetry(directory); invalidPayloads(directory); pathScope(directory); atomicStaging(directory); staleRetry(directory); }
         finally { try (Stream<Path> files = Files.walk(directory)) { for (Path path : (Iterable<Path>)files.sorted(Comparator.reverseOrder())::iterator) Files.deleteIfExists(path); } }
         System.out.println("CourseImportReceiptTests: " + checks + " checks passed");
     }

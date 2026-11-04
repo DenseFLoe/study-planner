@@ -92,6 +92,32 @@ final class WebImportRegressionTests: XCTestCase {
         }
     }
 
+    func testOlderCapturesRejectWholeBatchWhileSameAndNewerCapturesRemainUsable() throws {
+        let older = try snapshot()
+        var newer = older
+        newer.fetchedAt = now.addingTimeInterval(60)
+        newer.lessons[0].watchedPercent = 50
+        for archived in [false, true] {
+            var state = PlannerState()
+            try state.importWebCourses([newer], deadline: now, now: now)
+            state.courses[0].isArchived = archived
+            state.courses[0].notes = "保留本机备注"
+            let before = state
+            XCTAssertThrowsError(try state.importWebCourses([snapshot(host: "new.example"), older], deadline: now, now: now)) { error in
+                XCTAssertTrue(error.localizedDescription.contains("较新的抓取结果"))
+            }
+            XCTAssertEqual(state, before, "A stale capture must not partially save the batch or revive an archived course")
+            try state.importWebCourses([newer], deadline: now, now: now)
+            XCTAssertEqual(state.completedMinutes(for: state.courses[0]), 30)
+            var fresh = newer
+            fresh.fetchedAt = now.addingTimeInterval(120)
+            fresh.lessons[0].watchedPercent = 75
+            try state.importWebCourses([fresh], deadline: now, now: now)
+            XCTAssertEqual(state.completedMinutes(for: state.courses[0]), 45)
+            XCTAssertEqual(state.courses[0].notes, "保留本机备注")
+        }
+    }
+
     func testSafeURLRemovesAuthenticationAndKeepsPublicXuechengLocator() throws {
         let privateURL = "https://SYNTHETIC_USER:SYNTHETIC_PASSWORD@ixuecheng.cn/detail?id=88&type=1&token=SYNTHETIC_CREDENTIAL&session=SYNTHETIC_SESSION#SYNTHETIC_FRAGMENT"
         XCTAssertEqual(WebCourseIdentity.safeURL(privateURL), "https://ixuecheng.cn/detail?id=88&type=1")
