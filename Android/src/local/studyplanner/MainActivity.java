@@ -277,6 +277,26 @@ public class MainActivity extends Activity {
     Button taskAction(String label,Runnable action){Button b=pill(label,action);b.setPadding(dp(8),dp(4),dp(8),dp(4));return b;}
     int color(String c){switch(c){case "green":return 0xff168875;case "purple":return 0xff8b60ba;case "orange":return 0xffc17d30;case "pink":return 0xffc45f92;default:return 0xff2766c3;}}
     String hours(long n){return String.format(Locale.CHINA,"%.1f 小时",n/60.0);}
+    void copyDayAgenda(){
+        if(busy||!ready)return;
+        JSONObject snapshot=state;LocalDate date=selected;
+        busy=true;ProgressDialog progress=ProgressDialog.show(this,"","正在整理当天安排…",true,false);
+        worker.execute(()->{try{
+            String text=DayAgendaText.make(snapshot,date);
+            runOnUiThread(()->{
+                busy=false;progress.dismiss();if(isDestroyed())return;
+                try{
+                    android.content.ClipboardManager clipboard=(android.content.ClipboardManager)getSystemService(CLIPBOARD_SERVICE);
+                    clipboard.setPrimaryClip(ClipData.newPlainText("学习日程 · "+date,text));
+                    Toast.makeText(this,"已复制 "+date+" 的安排",Toast.LENGTH_SHORT).show();
+                }catch(Exception error){alert("无法复制",error.getMessage());}
+                resumeSyncRefresh();
+            });
+        }catch(Exception error){runOnUiThread(()->{
+            busy=false;progress.dismiss();if(isDestroyed())return;
+            alert("无法整理安排",error.getMessage());resumeSyncRefresh();
+        });}});
+    }
     void calendar()throws Exception{
         calendarSearch();
         LinearLayout c=card(body),bar=row();weighted(bar,title(month.getYear()+" 年 "+month.getMonthValue()+" 月"));bar.addView(pill("今天",()->{selected=LocalDate.now(Planner.ZONE);month=selected.withDayOfMonth(1);render();}));bar.addView(pill("‹",()->moveCalendar(-1)));bar.addView(pill("›",()->moveCalendar(1)));c.addView(bar);
@@ -289,6 +309,7 @@ public class MainActivity extends Activity {
         try{confirmedText=hours(DailyConsequences.confirmed(selected,state));}
         catch(DailyConsequences.CalculationException e){confirmedText="无法计算（分钟数合计超出范围，记录已保留）";}
         body.addView(text("待学 "+hours(planned)+"   已确认 "+confirmedText+"   固定 "+events.size()+" 项",12,muted));
+        body.addView(button("复制当天安排",this::copyDayAgenda));
         List<JSONObject> timeline=new ArrayList<>(events);for(JSONObject t:tasks)if(Planner.pending(t))timeline.add(t);timeline.sort(Comparator.comparingDouble(t->t.has("courseID")?t.optDouble("start"):Planner.at(selected,t.optInt("startMinute"))));for(JSONObject item:timeline){if(item.has("courseID"))taskCard(body,item);else eventCard(body,item,false);}if(timeline.isEmpty())card(body).addView(text("这一天没有待进行的安排",15,muted));boolean label=false;for(JSONObject t:tasks)if(!Planner.pending(t)){if(!label){body.addView(title("完成记录"));label=true;}taskCard(body,t);}for(JSONObject e:Planner.list(state.getJSONArray("fixedEvents")))if(Planner.occurs(e,selected,true)&&!Planner.occurs(e,selected)){
             LinearLayout skipped=card(body);cardBorder(skipped,color(e.optString("color","orange")));skipped.addView(text(e.optString("title")+" · 本日已临时移除",16,muted));
             skipped.addView(text(Planner.time(e.optInt("startMinute"))+" — "+Planner.time(e.optInt("endMinute"))+" · 本日不占用时间，其他日期照常安排",12,muted));
