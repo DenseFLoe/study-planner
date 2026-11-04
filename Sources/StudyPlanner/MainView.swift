@@ -760,6 +760,7 @@ struct MainView: View {
                     FixedEventListRow(
                         event: event,
                         edit: { sheet = .fixed(event) },
+                        duplicate: { duplicateFixed(event) },
                         delete: { reviewed in Task { await store.deleteEvent(reviewed) } }
                     )
                 }
@@ -771,6 +772,7 @@ struct MainView: View {
                                 FixedEventListRow(
                                     event: event,
                                     edit: nil,
+                                    duplicate: { duplicateFixed(event) },
                                     delete: { reviewed in Task { await store.deleteEvent(reviewed) } }
                                 )
                             }
@@ -842,6 +844,11 @@ struct MainView: View {
             deadline: Calendar.current.date(byAdding: .day, value: 30, to: Date())!,
             minimumBlockMinutes: 0
         ))
+    }
+
+    private func duplicateFixed(_ event: FixedEvent) {
+        do { sheet = .fixed(try event.duplicate(startingOn: selectedDay)) }
+        catch { store.errorMessage = error.localizedDescription }
     }
 
     private func newFixed() {
@@ -1583,6 +1590,7 @@ private struct CourseListRow: View {
 private struct FixedEventListRow: View {
     var event: FixedEvent
     var edit: (() -> Void)?
+    var duplicate: () -> Void
     var delete: (FixedEvent) -> Void
     @State private var deletePrompt = false
     @State private var deletionReview: FixedEvent?
@@ -1621,6 +1629,10 @@ private struct FixedEventListRow: View {
             } else {
                 Text("已完成").font(.caption).foregroundStyle(.secondary)
             }
+            Button("复制", systemImage: "doc.on.doc", action: duplicate)
+                .buttonStyle(SoftButtonStyle())
+                .accessibilityLabel("复制固定事项：\(event.title)")
+                .help("复制为新事项，核对日期后再保存")
             Button("删除", systemImage: "trash", role: .destructive) { deletionReview = event; deletePrompt = true }
                 .buttonStyle(SoftButtonStyle())
                 .help("删除这条事项的全部过去和未来课表")
