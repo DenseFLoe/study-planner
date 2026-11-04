@@ -12,6 +12,8 @@ struct FixedEventEditor: View {
     @State private var semesterWeeks = 16
     @State private var message = ""
     @State private var saving = false
+    @State private var reloadPrompt = false
+    @State private var formRevision = UUID()
     init(store: PlannerStore, event: FixedEvent) {
         self.store = store
         _event = State(initialValue: event)
@@ -68,9 +70,17 @@ struct FixedEventEditor: View {
                     }
                 }
                 if existing { Text("已过去的课表会保留，修改仅应用于尚未开始的日期。").font(.caption).foregroundStyle(.secondary) }
-            }.formStyle(.grouped)
+            }.formStyle(.grouped).id(formRevision)
             if let validation { Text(validation).font(.caption).foregroundStyle(.orange) }
             if !message.isEmpty { Text(message).font(.caption).foregroundStyle(.red) }
+            if existing {
+                HStack {
+                    Button("载入已保存内容") { reloadPrompt = true }
+                    Text("用于放弃当前草稿，或在同步冲突后重新编辑。")
+                        .font(.caption).foregroundStyle(.secondary)
+                    Spacer()
+                }.padding(.horizontal, 20)
+            }
             HStack {
                 if existing { Button("删除事项", role: .destructive) { deletePrompt = true } }
                 if saving { ProgressView().controlSize(.small); Text("正在保存…").font(.caption).foregroundStyle(.secondary) }
@@ -91,6 +101,20 @@ struct FixedEventEditor: View {
         }.frame(width: 600, height: 740)
         .disabled(saving || store.orderSaveBusy)
         .interactiveDismissDisabled(saving)
+        .alert("载入已保存的固定事项？", isPresented: $reloadPrompt) {
+            Button("取消", role: .cancel) {}
+            Button("放弃草稿并载入", role: .destructive) {
+                guard !saving, !store.orderSaveBusy, let baseline else { return }
+                guard let latest = store.state.fixedEvents.first(where: { $0.id == baseline.id }) else {
+                    message = "此事项已被删除，当前草稿仍保留。请关闭窗口核对最新日程。"
+                    return
+                }
+                event = latest; self.baseline = latest; message = ""
+                semesterWeeks = 16; formRevision = UUID(); store.pendingEventConflicts = nil
+            }
+        } message: {
+            Text("将替换本窗口的未保存输入，不修改已保存日程。需要保留的文字请先复制。")
+        }
         .confirmationDialog("删除「\(baseline?.title ?? event.title)」？", isPresented: $deletePrompt, titleVisibility: .visible) {
             Button("删除事项", role: .destructive) {
                 guard let baseline, !saving, !store.orderSaveBusy else { return }

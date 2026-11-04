@@ -15,6 +15,8 @@ struct CourseEditor: View {
     @State private var backHistory: [CourseEditorPage] = []
     @State private var forwardHistory: [CourseEditorPage] = []
     @State private var saving = false
+    @State private var reloadPrompt = false
+    @State private var formRevision = UUID()
     @State private var importSheet: CourseContentImport?
     @State private var appeared = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -102,6 +104,7 @@ struct CourseEditor: View {
                         review.transition(pageTransition(offset: 18))
                     }
                 }
+                .id(formRevision)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .clipped()
                 // Animate only the content, keeping the navigation and footer steady.
@@ -115,6 +118,15 @@ struct CourseEditor: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(.horizontal, 24).padding(.bottom, 10)
             }
+            if existing {
+                HStack {
+                    Button("载入已保存课程") { finishEditing(); reloadPrompt = true }
+                        .disabled(saving || store.orderSaveBusy)
+                    Text("放弃课程草稿；本机软件绑定选择保留。")
+                        .font(.caption).foregroundStyle(.secondary)
+                    Spacer()
+                }.padding(.horizontal, 24).padding(.bottom, 10)
+            }
             Divider()
             footer
         }
@@ -122,6 +134,21 @@ struct CourseEditor: View {
         .background(Color(nsColor: .windowBackgroundColor))
         .disabled(saving)
         .interactiveDismissDisabled(saving)
+        .alert("载入已保存的课程？", isPresented: $reloadPrompt) {
+            Button("取消", role: .cancel) {}
+            Button("放弃课程草稿并载入", role: .destructive) {
+                guard !saving, !store.orderSaveBusy, let baseline else { return }
+                guard let latest = store.course(baseline.id) else {
+                    message = "此课程已被删除，当前草稿仍保留。请关闭窗口核对最新日程。"
+                    return
+                }
+                course = latest; self.baseline = latest; message = ""
+                deletionReview = nil; page = .overview; backHistory = []; forwardHistory = []
+                formRevision = UUID()
+            }
+        } message: {
+            Text("将替换课程名称、课节、时长和排程设置等未保存输入，不修改已保存日程。需要保留的文字请先复制。")
+        }
         .onAppear {
             store.websiteUpdater.beginEditing(course.id)
             supervisedApplication = store.playbackSupervisor.application(for: course.id)
