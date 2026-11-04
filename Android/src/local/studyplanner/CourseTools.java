@@ -37,7 +37,12 @@ public final class CourseTools {
         if(sources!=null){for(JSONObject source:Planner.list(sources)){List<JSONObject> items=lessons(source);if(items.isEmpty())items.add(new JSONObject().put("id","whole").put("name",source.getString("name")).put("durationMinutes",source.getInt("totalMinutes")));for(JSONObject raw:items){JSONObject lesson=copy(raw);lesson.put("id",source.getString("id")+"/"+raw.getString("id"));if(lesson.optString("subject").isEmpty())lesson.put("subject",source.getString("name"));result.add(lesson);}}return intelligent(result);}
         JSONObject web=course.optJSONObject("webCourse");JSONArray raw=web==null?course.optJSONArray("manualLessons"):web.optJSONArray("lessons");if(raw!=null)for(JSONObject item:Planner.list(raw))if(web==null||item.optBoolean("published")&&item.optBoolean("requiresDuration"))result.add(copy(item));return result;
     }
-    public static List<String> order(JSONObject course)throws Exception {List<String> ids=new ArrayList<>();for(JSONObject lesson:lessons(course))ids.add(lesson.getString("id"));List<String> result=new ArrayList<>();JSONArray preferred=course.optJSONArray("lessonOrder");if(preferred!=null)for(int i=0;i<preferred.length();i++){String id=preferred.getString(i);if(ids.contains(id)&&!result.contains(id))result.add(id);}for(String id:ids)if(!result.contains(id))result.add(id);return result;}
+    public static List<String> order(JSONObject course)throws Exception {
+        Set<String> known=new LinkedHashSet<>();for(JSONObject lesson:lessons(course))known.add(lesson.getString("id"));
+        Set<String> result=new LinkedHashSet<>();JSONArray preferred=course.optJSONArray("lessonOrder");
+        if(preferred!=null)for(int i=0;i<preferred.length();i++){String id=preferred.getString(i);if(known.contains(id))result.add(id);}
+        result.addAll(known);return new ArrayList<>(result);
+    }
     public static JSONObject merge(JSONObject state,Set<String> ids,String name)throws Exception {
         String title=name.trim();List<JSONObject> sources=new ArrayList<>();for(JSONObject c:Planner.list(state.getJSONArray("courses")))if(ids.contains(c.getString("id"))&&!c.optBoolean("isArchived"))sources.add(copy(c));sources.sort((a,b)->{int v=natural(a.optString("name"),b.optString("name"));return v!=0?v:a.optString("id").compareTo(b.optString("id"));});
         if(sources.size()<2||sources.size()!=ids.size()||title.isEmpty())throw new IllegalArgumentException("请选择至少两门现有课程，并填写合并后的名称。");

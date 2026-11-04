@@ -306,9 +306,9 @@ public final class Planner {
         if(old!=null)for(JSONObject lesson:list(old)){String id=lesson.getString("id");ranks.put(id,ranks.size());original.add(id);}
         Set<String> ids=new HashSet<>();int total=0;for(JSONObject lesson:list(parsed)){String id=lesson.getString("id");ids.add(id);if(ranks.containsKey(id))incoming.add(id);total+=lesson.getInt("durationMinutes");}
         original.removeIf(id->!ids.contains(id));
-        List<String> order=new ArrayList<>();
-        if(preferred!=null&&original.equals(incoming))for(int i=0;i<preferred.length();i++){String id=preferred.getString(i);if(ids.contains(id)&&!order.contains(id))order.add(id);}
-        for(JSONObject lesson:list(parsed)){String id=lesson.getString("id");if(!order.contains(id))order.add(id);}
+        Set<String> order=new LinkedHashSet<>();
+        if(preferred!=null&&original.equals(incoming))for(int i=0;i<preferred.length();i++){String id=preferred.getString(i);if(ids.contains(id))order.add(id);}
+        for(JSONObject lesson:list(parsed))order.add(lesson.getString("id"));
         // Baseline progress follows source order; changing study order must not move that credit.
         List<JSONObject> source=list(parsed);source.sort(Comparator.comparingInt(lesson->ranks.getOrDefault(lesson.optString("id"),Integer.MAX_VALUE)));
         course.put("manualLessons",new JSONArray(source)).put("lessonOrder",new JSONArray(order)).put("totalMinutes",total);
