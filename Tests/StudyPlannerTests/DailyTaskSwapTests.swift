@@ -40,13 +40,14 @@ final class DailyTaskSwapTests: XCTestCase {
         }
     }
 
-    private func fixture() -> (PlannerState, ScheduleResult, StudyLoadAssessment?) {
+    private func fixture(days: Int = 2, startingTomorrow: Bool = false) -> (PlannerState, ScheduleResult, StudyLoadAssessment?) {
         let cal = Calendar.current
-        let day = cal.startOfDay(for: Date())
+        let today = cal.startOfDay(for: Date())
+        let day = startingTomorrow ? cal.date(byAdding: .day, value: 1, to: today)! : today
         var state = PlannerState()
         state.courses = (0..<4).map {
-            Course(name: "课程\($0)", totalMinutes: 60 * 90, startDate: day,
-                   deadline: cal.date(byAdding: .day, value: 89, to: day)!)
+            Course(name: "课程\($0)", totalMinutes: 60 * days, startDate: day,
+                   deadline: cal.date(byAdding: .day, value: days - 1, to: day)!)
         }
         let plan = state.replan(now: day)
         return (state, plan, StudyLoadAnalyzer().assess(state: state, now: day))
@@ -81,7 +82,8 @@ final class DailyTaskSwapTests: XCTestCase {
     }
 
     @MainActor func testConcurrentConfirmationRefreshesStoreAndSameSwapIsNotReversed() async throws {
-        let (state, plan, load) = fixture(), (a, b) = pair(in: state)
+        // Future slots keep this assertion independent of the runner's clock.
+        let (state, plan, load) = fixture(startingTomorrow: true), (a, b) = pair(in: state)
         for identical in [false, true] {
             let repo = Repository()
             var remote = state
@@ -94,10 +96,15 @@ final class DailyTaskSwapTests: XCTestCase {
             XCTAssertEqual(saved, identical)
             XCTAssertEqual(repo.saved, remote)
             XCTAssertEqual(store.state, remote)
-            XCTAssertEqual(store.result.tasks, remote.tasks)
+            XCTAssertEqual(store.result.tasks, remote.tasks.filter(\.isUnconfirmed).sorted { $0.start < $1.start })
             XCTAssertFalse(store.orderSaveBusy)
             if identical { XCTAssertNil(store.errorMessage) }
-            else { XCTAssertTrue(store.errorMessage?.contains("未覆盖最新安排") == true) }
+            else {
+                XCTAssertTrue(store.errorMessage?.contains("未覆盖最新安排") == true)
+                XCTAssertEqual(store.state.completions.map(\.minutes), [20])
+                XCTAssertNotNil(store.state.tasks.first { $0.id == a && $0.confirmedAt != nil })
+                XCTAssertFalse(store.result.tasks.contains { $0.id == a })
+            }
         }
     }
 
@@ -151,7 +158,7 @@ final class DailyTaskSwapTests: XCTestCase {
     }
 
     @MainActor func testCompareFullRecalculationWithSwapFastPath() async throws {
-        let (state, plan, load) = fixture()
+        let (state, plan, load) = fixture(days: 90)
         let (a, b) = pair(in: state)
         // Both timings include actual persistence, on separate isolated stores.
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)

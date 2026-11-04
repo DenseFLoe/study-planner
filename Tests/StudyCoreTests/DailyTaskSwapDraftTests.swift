@@ -40,6 +40,19 @@ final class DailyTaskSwapDraftTests: XCTestCase {
             XCTAssertEqual(latest, before)
         }
     }
+    func testLateConfirmationKeepsHistoryOutOfPendingAssessment() throws {
+        let original = fixture(), edit = try draft(original), confirmedID = original.tasks[0].id
+        var latest = original
+        try latest.confirm(taskID: confirmedID, actualMinutes: 20, now: day.addingTimeInterval(7 * 3600), calendar: calendar)
+        let saved = latest
+        XCTAssertThrowsError(try edit.apply(to: &latest, now: day)) { XCTAssertTrue($0 is DailyTaskSwapError) }
+        let assessment = ScheduleEngine(calendar: calendar).assessSavedPlan(state: latest, now: day)
+        XCTAssertEqual(latest, saved)
+        XCTAssertEqual(latest.tasks.count, 3)
+        XCTAssertEqual(latest.completions.map(\.minutes), [20])
+        XCTAssertEqual(Set(assessment.tasks.map(\.id)), Set(original.tasks.dropFirst().map(\.id)))
+        XCTAssertFalse(assessment.tasks.contains { $0.id == confirmedID })
+    }
     func testUnrelatedChangesAndArrayOrderingArePreserved() throws {
         let original = fixture(), edit = try draft(original)
         var latest = original
