@@ -285,8 +285,15 @@ public final class Planner {
         if(rows.isEmpty())throw new IllegalArgumentException("请至少录入一节课");
         Set<String> used=new HashSet<>();
         // Match identity before considering row position, so inserts/deletes/reorders are safe.
-        for(JSONObject row:rows)for(JSONObject previous:old)if(!used.contains(previous.getString("id"))&&row.getString("name").equals(previous.getString("name"))&&row.getInt("durationMinutes")==previous.getInt("durationMinutes")){
-            row.put("id",previous.getString("id"));used.add(previous.getString("id"));break;
+        Map<String,Map<Integer,Deque<JSONObject>>> exact=new HashMap<>();
+        for(JSONObject previous:old)exact.computeIfAbsent(previous.getString("name"),key->new HashMap<>())
+            .computeIfAbsent(previous.getInt("durationMinutes"),key->new ArrayDeque<>()).add(previous);
+        for(JSONObject row:rows){
+            Map<Integer,Deque<JSONObject>> named=exact.get(row.getString("name"));
+            Deque<JSONObject> matches=named==null?null:named.get(row.getInt("durationMinutes"));
+            if(matches==null)continue;
+            while(!matches.isEmpty()&&used.contains(matches.peek().getString("id")))matches.remove();
+            if(!matches.isEmpty()){String id=matches.remove().getString("id");row.put("id",id);used.add(id);}
         }
         for(JSONObject row:rows)if(!row.has("id")){
             List<JSONObject> matches=new ArrayList<>();for(JSONObject previous:old)if(!used.contains(previous.getString("id"))&&row.getString("name").equals(previous.getString("name")))matches.add(previous);

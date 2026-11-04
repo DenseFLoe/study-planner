@@ -131,3 +131,6 @@ mkdir -p Android/build/controller-tests
 
 "$JDK/bin/javac" -cp Android/tools/json.jar:Android/build/tests -d Android/build/tests Android/tests/LessonOrderScaleTests.java
 "$JDK/bin/java" -cp Android/tools/json.jar:Android/build/tests local.studyplanner.LessonOrderScaleTests
+
+"$JDK/bin/javac" -cp Android/tools/json.jar:Android/build/tests -d Android/build/tests Android/tests/ManualLessonParseScaleTests.java
+"$JDK/bin/java" -cp Android/tools/json.jar:Android/build/tests local.studyplanner.ManualLessonParseScaleTests
