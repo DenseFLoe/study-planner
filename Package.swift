@@ -16,7 +16,7 @@ let package = Package(
         // Only SwiftData-backed repositories need the macOS test target below.
         .testTarget(name: "StudyPersistenceTests", dependencies: ["StudyPersistence", "StudyCore"], exclude: [
             "LocalRepositoryTests.swift", "FixedEventTransactionTests.swift", "MergedScheduleTransactionTests.swift",
-            "LessonOrderTransactionTests.swift", "DailyTaskSwapRepositoryTests.swift", "CourseDeletionTransactionTests.swift",
+            "LessonOrderTransactionTests.swift", "DailyTaskSwapRepositoryTests.swift", "CourseDeletionTransactionTests.swift", "CourseMergeTransactionTests.swift",
             "PlannerBackupRestoreRepositoryTests.swift", "SettingsTransactionTests.swift", "WebSourcePrivacyTests.swift"
         ])
     ]

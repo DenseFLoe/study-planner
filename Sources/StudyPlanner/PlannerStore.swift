@@ -118,6 +118,7 @@ final class PlannerStore {
                         clearError: Bool = true,
                         backupRestore: PlannerBackupRestore? = nil,
                         courseDeletionDraft: CourseDeletionDraft? = nil,
+                        courseMergeDraft: CourseMergeDraft? = nil,
                         fixedEventEdit: FixedEventEdit? = nil,
                         fixedOccurrenceEdit: FixedEventOccurrenceEdit? = nil,
                         lessonOrderDraft: LessonOrderDraft? = nil,
@@ -148,6 +149,8 @@ final class PlannerStore {
                 attemptedStorage = true
                 if let backupRestore {
                     saved = try await repository.restoreBackupForInteraction(backupRestore, from: previous)
+                } else if let courseMergeDraft {
+                    saved = try await repository.mergeCoursesForInteraction(courseMergeDraft, from: previous, now: now)
                 } else if let courseDeletionDraft {
                     saved = try await repository.deleteCourseForInteraction(courseDeletionDraft, from: previous, now: now)
                 } else if let fixedEventEdit {
@@ -178,7 +181,7 @@ final class PlannerStore {
                 let needsLatestState = (lessonOrderDraft != nil && error is LessonOrderEditError)
                     || (attemptedStorage && (error is ConfirmationEditError
                         || error is CourseEditError || error is FixedEventEditError
-                        || error is CourseDeletionError || error is SettingsEditError || error is PlannerBackupRestoreError))
+                        || error is CourseMergeError || error is CourseDeletionError || error is SettingsEditError || error is PlannerBackupRestoreError))
                 if needsLatestState,
                    let latest = try? repository.load() {
                     let (assessment, load) = await Task.detached(priority: .userInitiated) {
@@ -310,6 +313,13 @@ final class PlannerStore {
         guard let baseline else { return edited }
         guard let current = course(edited.id) else { throw CourseEditError.removed }
         return try edited.mergingDraft(from: baseline, into: current)
+    }
+    func mergeCourses(_ draft: CourseMergeDraft, now: Date = Date()) async -> Bool {
+        await commit(state, replan: true, now: now, backupReason: "合并课程前", courseMergeDraft: draft) {
+            try draft.apply(to: &$0)
+            $0.removeArchivedCourses()
+            return $0.replan(now: now)
+        }
     }
     func deleteCourse(_ course: Course) async -> Bool {
         await deleteCourse(CourseDeletionDraft(reviewed: course, state: state))

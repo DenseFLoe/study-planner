@@ -23,6 +23,8 @@ public protocol PlannerRepository {
                                                    from baseline: PlannerState) async throws -> PlannerState
     @MainActor func restoreBackupForInteraction(_ restore: PlannerBackupRestore,
                                                 from baseline: PlannerState) async throws -> PlannerState
+    @MainActor func mergeCoursesForInteraction(_ draft: CourseMergeDraft,
+                                               from baseline: PlannerState, now: Date) async throws -> PlannerState
     @MainActor func deleteCourseForInteraction(_ draft: CourseDeletionDraft,
                                                from baseline: PlannerState, now: Date) async throws -> PlannerState
     @MainActor func saveFixedEventForInteraction(_ edit: FixedEventEdit,
@@ -34,6 +36,14 @@ public protocol PlannerRepository {
 }
 
 extension PlannerRepository {
+    @MainActor public func mergeCoursesForInteraction(_ draft: CourseMergeDraft,
+                                                      from baseline: PlannerState, now: Date) async throws -> PlannerState {
+        var next = baseline
+        try draft.apply(to: &next)
+        next.removeArchivedCourses()
+        _ = next.replan(now: now)
+        return try await saveChangesForInteraction(next, from: baseline)
+    }
     @MainActor public func restoreBackupForInteraction(_ restore: PlannerBackupRestore,
                                                        from baseline: PlannerState) async throws -> PlannerState {
         var next = baseline
@@ -252,6 +262,25 @@ public final class LocalRepository: PlannerRepository {
         return try await Task.detached(priority: .userInitiated) {
             let worker = LocalRepository(container: container, migrationBackupURL: backup, cloudOutboxURL: outbox)
             return try worker.saveDailyTaskSwap(draft)
+        }.value
+    }
+
+    public func mergeCourses(_ draft: CourseMergeDraft, now: Date = Date()) throws -> PlannerState {
+        try update { latest, _ in
+            try draft.apply(to: &latest)
+            latest.removeArchivedCourses()
+            _ = latest.replan(now: now)
+            return latest
+        }
+    }
+
+    @MainActor public func mergeCoursesForInteraction(_ draft: CourseMergeDraft,
+                                                      from baseline: PlannerState, now: Date) async throws -> PlannerState {
+        let container = container, backup = migrationBackupURL, outbox = cloudOutboxURL
+        defer { discardCachedModels() }
+        return try await Task.detached(priority: .userInitiated) {
+            let worker = LocalRepository(container: container, migrationBackupURL: backup, cloudOutboxURL: outbox)
+            return try worker.mergeCourses(draft, now: now)
         }.value
     }
 
