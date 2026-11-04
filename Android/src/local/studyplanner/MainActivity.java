@@ -33,7 +33,8 @@ public class MainActivity extends Activity {
         SyncRead(JSONObject state,String summary){this.state=state;this.summary=summary;}
     }
     String settingsSection="";
-    String courseQuery="";int coursePage=0;Runnable closeCourseSearch;
+    String courseQuery="",eventQuery="";int coursePage=0,eventPage=0;Runnable closeCatalog;
+    FixedEventCatalog.Scope eventScope=FixedEventCatalog.Scope.CURRENT;
     static final int EXPORT_BACKUP=101,IMPORT_BACKUP=102,SCAN_PAIRING_QR=103,IMPORT_COURSES=104,IMPORT_SSH_KEY=105;
     JSONObject state; String syncSummary=""; LinearLayout root,body,nav; int page=0; LocalDate selected=LocalDate.now(Planner.ZONE),month=selected.withDayOfMonth(1),lastDay=selected;
     final int ink=0xff191919,blue=0xff07c160,muted=0xff555555,bg=0xffededed;
@@ -78,7 +79,7 @@ public class MainActivity extends Activity {
         b.putString("selected",selected.toString());b.putInt("page",page);b.putString("settingsSection",settingsSection);
         b.putBoolean("calendarExpanded",calendarExpanded);b.putString("month",month.toString());
     }
-    @Override public void onDestroy(){if(closeCourseSearch!=null)closeCourseSearch.run();if(syncRefresh!=null)syncRefresh.close();handler.removeCallbacks(ticker);if(consequences!=null)consequences.close();unregisterReceiver(syncReceiver);super.onDestroy();}
+    @Override public void onDestroy(){if(closeCatalog!=null)closeCatalog.run();if(syncRefresh!=null)syncRefresh.close();handler.removeCallbacks(ticker);if(consequences!=null)consequences.close();unregisterReceiver(syncReceiver);super.onDestroy();}
     @Override public void onBackPressed(){if(busy){Toast.makeText(this,"正在保存，请稍后",Toast.LENGTH_SHORT).show();return;}if(page==3&&!settingsSection.isEmpty()&&settingsMenu!=null){settingsMenu.show("");}else if(page!=0){page=0;render();}else super.onBackPressed();}
     static String read(InputStream stream)throws Exception{try(InputStream in=stream;ByteArrayOutputStream out=new ByteArrayOutputStream()){byte[] b=new byte[8192];int n;while((n=in.read(b))!=-1)out.write(b,0,n);return out.toString("UTF-8");}}
 
@@ -187,7 +188,7 @@ public class MainActivity extends Activity {
         if(!ready)return;
         try{if(captureSettingsDraft!=null)captureSettingsDraft.run();}catch(Exception error){alert("草稿未刷新",error.getMessage());return;}
         captureSettingsDraft=null;settingsMenu=null;
-        if(closeCourseSearch!=null){closeCourseSearch.run();closeCourseSearch=null;}
+        if(closeCatalog!=null){closeCatalog.run();closeCatalog=null;}
         consequences.refresh(state);consequencePanel=null;
         root=col();root.setBackgroundColor(bg);root.setFitsSystemWindows(true);setContentView(root);
         if(page!=0){LinearLayout top=row();top.setPadding(dp(18),dp(12),dp(18),dp(8));top.addView(title("学习日程"));root.addView(top);}
@@ -346,7 +347,7 @@ public class MainActivity extends Activity {
             box.addView(text("仅移除本日这一次安排，并重排今天及未来未确认任务。",12,muted));
         }
     }
-    void events()throws Exception{body.addView(title("固定课表"));FixedEventRecognitionPanel.render(this,body);body.addView(text("固定时间或时段内的固定时长优先保留",13,muted));body.addView(button("＋ 添加固定事项",()->eventEditor(null)));List<JSONObject> es=Planner.list(state.getJSONArray("fixedEvents"));es.sort(Comparator.comparingDouble(e->e.optDouble("startDate")));int hidden=0;for(JSONObject e:es){if(Planner.day(e.getDouble("endDate")).isBefore(LocalDate.now(Planner.ZONE))){hidden++;continue;}eventCard(body,e,true);}body.addView(text("另有 "+hidden+" 条历史规则，已保留在数据中。",12,muted));}
+    void events()throws Exception{body.addView(title("固定课表"));FixedEventRecognitionPanel.render(this,body);body.addView(text("固定时间或时段内的固定时长优先保留",13,muted));body.addView(button("＋ 添加固定事项",()->eventEditor(null)));FixedEventCatalogPanel.render(this,body);}
     void saveEventResolvingConflicts(JSONObject event,JSONObject baseline,AlertDialog editor,AlertDialog review,
                                      Set<LocalDate> skipped,Set<LocalDate> skippedLocal,List<Planner.EventConflict> reviewed){
         run(()->{

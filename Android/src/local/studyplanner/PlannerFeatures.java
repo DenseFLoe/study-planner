@@ -117,7 +117,7 @@ final class PlannerFeatures {
    pending[0]=()->work.submit(()->{if(index[0]==null)index[0]=new CourseCatalog(snapshot);return index[0].find(term,page);});app.handler.postDelayed(pending[0],200);
   };
   for(int i=0;i<2;i++){previous[i]=app.button("上一页",()->{app.coursePage--;search.run();});next[i]=app.button("下一页",()->{app.coursePage++;search.run();});PlannerUi.Flow navigation=i==0?top:bottom;navigation.addView(previous[i]);navigation.addView(next[i]);}
-  app.closeCourseSearch=()->{work.close();if(pending[0]!=null)app.handler.removeCallbacks(pending[0]);};
+  app.closeCatalog=()->{work.close();if(pending[0]!=null)app.handler.removeCallbacks(pending[0]);};
   query.addTextChangedListener(new TextWatcher(){
    public void beforeTextChanged(CharSequence s,int start,int count,int after){}
    public void onTextChanged(CharSequence s,int start,int before,int count){app.courseQuery=s.toString();app.coursePage=0;search.run();}
