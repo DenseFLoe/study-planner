@@ -139,8 +139,39 @@ public final class FixedEventEditingTests {
         FixedEventEditing.setSkipped(state, skipped, DAY, false, NOW);
         check(Planner.occurs(current, DAY) && !Planner.occurs(current, DAY.plusDays(1)), "Restore changed another day");
     }
+    static void duplicateRules() throws Exception {
+        JSONObject original = event("复用规则", 540, 600).put("startDate", Planner.at(DAY.minusDays(21), 0))
+            .put("endDate", Planner.at(DAY.minusDays(7), 0)).put("floatingDurationMinutes", 30).put("notes", "保留说明");
+        original.getJSONArray("excludedDates").put(Planner.at(DAY.minusDays(10), 0));
+        String before = SyncLedger.canonical(original);
+        JSONObject draft = FixedEventEditing.duplicate(original, DAY.plusDays(2), NOW);
+        check(!draft.getString("id").equals(original.getString("id")), "Duplicate reused saved rule ID");
+        check(Planner.day(draft.getDouble("startDate")).equals(DAY.plusDays(2)) && Planner.day(draft.getDouble("endDate")).equals(DAY.plusDays(16)), "Recurring rule span not shifted to selected date");
+        check(draft.getJSONArray("excludedDates").length() == 0, "Old skipped dates copied into new rule");
+        check(draft.getInt("floatingDurationMinutes") == 30 && draft.getInt("startMinute") == 540 && draft.getString("notes").equals("保留说明"), "Rule details lost");
+        check(draft.getJSONArray("weekdays").toString().equals(original.getJSONArray("weekdays").toString()), "Repeat weekdays changed");
+        draft.getJSONArray("weekdays").remove(0); draft.getJSONArray("excludedDates").put(Planner.at(DAY, 0));
+        check(SyncLedger.canonical(original).equals(before), "Draft retained mutable original fields");
+        JSONObject today = FixedEventEditing.duplicate(original, DAY.minusDays(100), NOW);
+        check(Planner.day(today.getDouble("startDate")).equals(DAY) && !today.getString("id").equals(draft.getString("id")), "Past selected date or repeated duplication reused draft");
+        JSONObject single = CourseTools.copy(original).put("weekdays", new JSONArray());
+        JSONObject one = FixedEventEditing.duplicate(single, DAY, NOW);
+        check(one.getDouble("startDate") == one.getDouble("endDate"), "Single occurrence repeated over original range");
+        single.remove("weekdays");
+        check(FixedEventEditing.duplicate(single, DAY, NOW).getJSONArray("weekdays").length() == 0, "Legacy one-off missing weekday default");
+        JSONObject capped = FixedEventEditing.duplicate(original, DAY.plusYears(10).minusDays(2), NOW);
+        check(Planner.day(capped.getDouble("endDate")).equals(DAY.plusYears(10)), "Copy exceeded supported ten-year boundary");
+        try { FixedEventEditing.duplicate(original, DAY.plusYears(10).plusDays(1), NOW); throw new AssertionError("Out-of-range start accepted"); }
+        catch (IllegalArgumentException expected) { check(SyncLedger.canonical(original).equals(before), "Rejected duplicate changed original"); }
+        JSONObject state = PlannerTests.empty(), existing = event("已有规则", 540, 600);
+        state.getJSONArray("fixedEvents").put(existing); String savedOriginal = SyncLedger.canonical(existing);
+        JSONObject copy = FixedEventEditing.duplicate(existing, DAY, NOW);
+        rejected(state, () -> save(state, copy, null), "Copy bypassed conflict review");
+        copy.put("startMinute", 660).put("endMinute", 720); save(state, copy, null);
+        check(state.getJSONArray("fixedEvents").length() == 2 && SyncLedger.canonical(state.getJSONArray("fixedEvents").getJSONObject(0)).equals(savedOriginal), "Saving reviewed copy changed its source rule");
+    }
     public static void main(String[] args) throws Exception {
-        metadataAndRuleConflicts(); changedReview(); reviewedChoicesAndIsolation(); splitRetryAndEquivalentRules(); guardedRemoval(); guardedOccurrence();
+        metadataAndRuleConflicts(); changedReview(); reviewedChoicesAndIsolation(); splitRetryAndEquivalentRules(); guardedRemoval(); guardedOccurrence(); duplicateRules();
         System.out.println("FixedEventEditingTests: " + checks + " checks passed");
     }
 }

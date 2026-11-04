@@ -6,6 +6,19 @@ import java.util.*;
 
 /** A conflict choice consents only to the occupants shown in that review. */
 public final class FixedEventEditing {
+    /** Start an independent reviewed draft; no saved rule or occurrence is changed. */
+    static JSONObject duplicate(JSONObject original, LocalDate selected, double now) throws Exception {
+        LocalDate today = Planner.day(now), first = selected.isBefore(today) ? today : selected;
+        LocalDate maximum = today.plusYears(10);
+        if (first.isAfter(maximum)) throw new IllegalArgumentException("新事项开始日期须在今天起十年以内，请先选择较近日期。");
+        long span = original.optJSONArray("weekdays") == null || original.optJSONArray("weekdays").length() == 0 ? 0 :
+                Math.max(0, java.time.temporal.ChronoUnit.DAYS.between(Planner.day(original.getDouble("startDate")), Planner.day(original.getDouble("endDate"))));
+        span = Math.min(span, java.time.temporal.ChronoUnit.DAYS.between(first, maximum));
+        JSONObject draft = CourseTools.copy(original);
+        if (draft.optJSONArray("weekdays") == null) draft.put("weekdays", new JSONArray());
+        return draft.put("id", Planner.id()).put("startDate", Planner.at(first, 0))
+                .put("endDate", Planner.at(first.plusDays(span), 0)).put("excludedDates", new JSONArray());
+    }
     private FixedEventEditing() {}
 
     public static final class ReviewRequired extends IllegalArgumentException {

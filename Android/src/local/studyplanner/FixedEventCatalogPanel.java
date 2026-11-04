@@ -13,6 +13,7 @@ final class FixedEventCatalogPanel {
         FixedEventCatalog.Scope[] scopes = FixedEventCatalog.Scope.values();
         Spinner scope = app.spinner(parent, "查看范围", new String[]{scopes[0].title, scopes[1].title, scopes[2].title}, app.eventScope.ordinal());
         parent.addView(app.text("历史按规则结束日期划分，仅列出已保存的规则；筛选不会更改日程。", 12, app.muted));
+        parent.addView(app.text("复制为新事项：从日历选中日期或今天开始，不沿用旧跳过日期；保存前可调整并核对冲突。", 12, app.muted));
         TextView count = app.text("正在读取事项…", 12, app.muted); parent.addView(count);
         PlannerUi.Flow top = new PlannerUi.Flow(app), bottom = new PlannerUi.Flow(app); parent.addView(top);
         LinearLayout rows = app.col(); parent.addView(rows); parent.addView(bottom);
