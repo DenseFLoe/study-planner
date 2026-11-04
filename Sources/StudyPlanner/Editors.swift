@@ -341,6 +341,7 @@ struct CompletionEditor: View {
     @State private var actual = 0
     @State private var studyDate = Date()
     @State private var message = ""
+    @State private var saving = false
     @Environment(\.dismiss) private var dismiss
     var body: some View {
         VStack(alignment: .leading, spacing: 20) {
@@ -348,20 +349,25 @@ struct CompletionEditor: View {
             Text(store.course(task.courseID)?.name ?? "课程").font(.headline)
             if let lessonName = task.lessonName { Text(lessonName).font(.callout).foregroundStyle(.secondary) }
             Text("\(task.planningStart.formatted(date: .abbreviated, time: .shortened))\(task.isFloating ? "–" + task.planningEnd.formatted(date: .omitted, time: .shortened) + " 时段内" : "") · 计划 \(hours(task.durationMinutes))").foregroundStyle(.secondary)
-            CompletionInput(actual: $actual, planned: task.durationMinutes)
-            DatePicker("实际学习日期", selection: $studyDate, in: ...Date(), displayedComponents: .date)
+            CompletionInput(actual: $actual, planned: task.durationMinutes).disabled(saving)
+            DatePicker("实际学习日期", selection: $studyDate, in: ...Date(), displayedComponents: .date).disabled(saving)
             Text("只有实际完成的学习量会计入进度；其余部分会自动重新分配。").font(.callout).foregroundStyle(.secondary)
             if !message.isEmpty { Text(message).font(.caption).foregroundStyle(.red) }
-            HStack { Spacer(); Button("取消") { dismiss() }.keyboardShortcut(.cancelAction)
+            if saving { ProgressView("正在保存确认并更新课表…").controlSize(.small) }
+            HStack { Spacer(); Button("取消") { dismiss() }.keyboardShortcut(.cancelAction).disabled(saving)
                 Button("确认并重新排程") {
+                    guard !saving else { return }
                     let minutes = actual, date = studyDate
+                    saving = true; message = ""
                     Task {
+                        defer { saving = false }
                         if await store.confirm(task, minutes: minutes, studyDate: date) { dismiss() }
                         else { message = store.errorMessage ?? "确认未保存" }
                     }
-                }.buttonStyle(.borderedProminent).disabled(actual < 0 || actual > task.durationMinutes || store.orderSaveBusy)
+                }.buttonStyle(.borderedProminent).disabled(saving || actual < 0 || actual > task.durationMinutes || store.orderSaveBusy)
             }
-        }.padding(28).frame(width: 500).onAppear { actual = task.durationMinutes; studyDate = min(task.start, Date()) }
+        }.padding(28).frame(width: 500).interactiveDismissDisabled(saving)
+        .onAppear { actual = task.durationMinutes; studyDate = min(task.start, Date()) }
     }
 }
 struct DailyReviewView: View {
@@ -372,6 +378,7 @@ struct DailyReviewView: View {
     @State private var reviewed: Set<UUID> = []
     @State private var studyDates: [UUID: Date] = [:]
     @State private var message = ""
+    @State private var saving = false
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
             SheetHeading(title: "确认学习完成情况", subtitle: "请逐项选择实际完成量，包含昨天及更早的未确认计划。")
@@ -388,7 +395,8 @@ struct DailyReviewView: View {
                         }.padding(16).background(Color.primary.opacity(0.035), in: RoundedRectangle(cornerRadius: 10))
                     }
                 }.padding(.horizontal, 24)
-            }
+            }.disabled(saving)
+            if saving { ProgressView("正在保存本批确认并更新课表…").controlSize(.small).padding(.horizontal, 24) }
             if !message.isEmpty { Text(message).font(.caption).foregroundStyle(.red).padding(.horizontal, 24) }
             HStack {
                 Button("全部标记完成") { for task in tasks { values[task.id] = task.durationMinutes; reviewed.insert(task.id) } }
@@ -396,8 +404,11 @@ struct DailyReviewView: View {
                 Spacer()
                 Button("稍后确认") { dismiss() }.keyboardShortcut(.cancelAction)
                 Button("保存并重新排程") {
+                    guard !saving else { return }
                     let selectedTasks = tasks, minutes = values, dates = studyDates
+                    saving = true; message = ""
                     Task {
+                        defer { saving = false }
                         let now = Date()
                         let needsReplan = selectedTasks.contains { $0.confirmationRequiresReplan(actualMinutes: minutes[$0.id] ?? 0, now: now) }
                         let success = await store.change(replan: needsReplan, now: now) { state in
@@ -408,8 +419,8 @@ struct DailyReviewView: View {
                         else { message = store.errorMessage ?? "本批确认未保存" }
                     }
                 }.buttonStyle(.borderedProminent).disabled(store.orderSaveBusy || tasks.isEmpty || reviewed.count != tasks.count || tasks.contains { !(0...$0.durationMinutes).contains(values[$0.id] ?? -1) })
-            }.padding(24)
-        }.frame(width: 740, height: 620)
+            }.padding(24).disabled(saving)
+        }.frame(width: 740, height: 620).interactiveDismissDisabled(saving)
         .onAppear { tasks = store.reviewTasks }
     }
 }
