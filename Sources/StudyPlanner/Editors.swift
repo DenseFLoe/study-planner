@@ -11,6 +11,7 @@ struct FixedEventEditor: View {
     @State private var conflictPrompt = false
     @State private var semesterWeeks = 16
     @State private var message = ""
+    @State private var saving = false
     init(store: PlannerStore, event: FixedEvent) {
         self.store = store
         _event = State(initialValue: event)
@@ -72,21 +73,30 @@ struct FixedEventEditor: View {
             if !message.isEmpty { Text(message).font(.caption).foregroundStyle(.red) }
             HStack {
                 if existing { Button("删除事项", role: .destructive) { deletePrompt = true } }
+                if saving { ProgressView().controlSize(.small); Text("正在保存…").font(.caption).foregroundStyle(.secondary) }
                 Spacer(); Button("取消") { dismiss() }.keyboardShortcut(.cancelAction)
                 Button("保存并重新排程") {
+                    guard !saving, !store.orderSaveBusy else { return }
+                    if event.weekdays.isEmpty { event.endDate = event.startDate }
+                    let submitted = event, reviewed = baseline
+                    saving = true; message = ""
                     Task {
-                        if event.weekdays.isEmpty { event.endDate = event.startDate }
-                        if await store.saveEvent(event, from: baseline) { dismiss() }
+                        defer { saving = false }
+                        if await store.saveEvent(submitted, from: reviewed) { dismiss() }
                         else if !conflicts.isEmpty { message = ""; conflictPrompt = true }
                         else { message = store.errorMessage ?? "保存失败" }
                     }
                 }.buttonStyle(.borderedProminent).keyboardShortcut(.defaultAction).disabled(validation != nil || store.orderSaveBusy)
             }.padding(20)
         }.frame(width: 600, height: 740)
+        .disabled(saving || store.orderSaveBusy)
+        .interactiveDismissDisabled(saving)
         .confirmationDialog("删除「\(baseline?.title ?? event.title)」？", isPresented: $deletePrompt, titleVisibility: .visible) {
             Button("删除事项", role: .destructive) {
-                guard let baseline else { return }
+                guard let baseline, !saving, !store.orderSaveBusy else { return }
+                saving = true; message = ""
                 Task {
+                    defer { saving = false }
                     if await store.deleteEvent(baseline) { dismiss() }
                     else { message = store.errorMessage ?? "删除未保存" }
                 }

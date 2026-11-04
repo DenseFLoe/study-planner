@@ -13,6 +13,7 @@ struct EventConflictReview: View {
     @Environment(\.dismiss) private var dismiss
     @State private var choices: [Date: ConflictChoice] = [:]
     @State private var message = ""
+    @State private var saving = false
     @State var conflicts: [FixedEventConflict]
     private var dates: [Date] { Array(Set(conflicts.map(\.date))).sorted() }
     private var remaining: Int { dates.filter { choices[$0, default: .unresolved] == .unresolved }.count }
@@ -49,6 +50,7 @@ struct EventConflictReview: View {
                 .font(.caption).foregroundStyle(.secondary)
             HStack {
                 Button("返回修改") { dismiss() }.keyboardShortcut(.cancelAction)
+                if saving { ProgressView().controlSize(.small) }
                 Spacer()
                 Button("全部跳过新课程并保存") { chooseAll(.skipNew) }.disabled(dates.isEmpty)
                 Button("全部跳过本地并保存") { chooseAll(.skipLocal) }
@@ -56,18 +58,24 @@ struct EventConflictReview: View {
                 Button("保存选择") { save() }
                     .buttonStyle(.borderedProminent).disabled(remaining > 0 || dates.isEmpty)
             }
-        }.padding(24).frame(width: 780, height: 680).disabled(store.orderSaveBusy)
+        }.padding(24).frame(width: 780, height: 680).disabled(saving || store.orderSaveBusy)
+            .interactiveDismissDisabled(saving)
     }
     private func chooseAll(_ choice: ConflictChoice) {
+        guard !saving, !store.orderSaveBusy else { return }
         for day in dates { choices[day] = choice }
         save()
     }
     private func save() {
+        guard !saving, !store.orderSaveBusy, remaining == 0, !dates.isEmpty else { return }
+        let skipped = Set(choices.filter { $0.value == .skipNew }.map(\.key))
+        let skippedLocal = Set(choices.filter { $0.value == .skipLocal }.map(\.key))
+        let submitted = event, reviewed = baseline, reviewedConflicts = conflicts
+        saving = true; message = ""
         Task {
-            let skipped = Set(choices.filter { $0.value == .skipNew }.map(\.key))
-            let skippedLocal = Set(choices.filter { $0.value == .skipLocal }.map(\.key))
-            if await store.saveEvent(event, from: baseline, skippingDates: skipped,
-                                     skippingExistingDates: skippedLocal, reviewedConflicts: conflicts) {
+            defer { saving = false }
+            if await store.saveEvent(submitted, from: reviewed, skippingDates: skipped,
+                                     skippingExistingDates: skippedLocal, reviewedConflicts: reviewedConflicts) {
                 dismiss()
                 onSaved()
             } else {
