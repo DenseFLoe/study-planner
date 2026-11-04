@@ -32,7 +32,7 @@ public final class CloudSnapshot {
                 StandardCharsets.UTF_8.newDecoder().onMalformedInput(CodingErrorAction.REPORT).onUnmappableCharacter(CodingErrorAction.REPORT)))){
             header=SyncJSON.readEnvelope(reader,"records",Arrays.asList("format","archiveID","device","createdAt","serverID","revision"),row->{
                 if(keys.size()>=200000||!keys.add(SyncLedger.key(row)))throw new IOException("重复或过多的同步记录");
-                if(row.has("modifiedAt")&&!(row.get("modifiedAt") instanceof Number))throw new IOException("修改时间无效");
+                if(row.has("modifiedAt")&&!row.isNull("modifiedAt")&&!(row.get("modifiedAt") instanceof Number))throw new IOException("修改时间无效");
                 if("settings".equals(row.getString("kind"))&&"settings".equals(row.getString("id"))&&!row.getBoolean("deleted"))settings[0]=true;
                 consumer.accept(row);
             });

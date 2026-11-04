@@ -3,7 +3,9 @@ package local.studyplanner;
 import org.json.*;
 import java.io.*;
 import java.math.*;
+import java.nio.charset.StandardCharsets;
 import java.util.*;
+import java.util.zip.*;
 
 /** Wire values must remain readable by Swift Codable, including ignored tombstones. */
 public final class SyncRecordValidationTests {
@@ -34,13 +36,18 @@ public final class SyncRecordValidationTests {
         rows.put("string sequence",validRow().put("sequence","1"));
         rows.put("fractional sequence",validRow().put("sequence",1.5));
         rows.put("overflowing sequence",validRow().put("sequence",new BigInteger("18446744073709551617")));
+        for(String field:new String[]{"version","sequence","deleted"})rows.put("null "+field,validRow().put(field,JSONObject.NULL));
         return rows;
     }
     static byte[] packedWithRow(JSONObject row)throws Exception{
         SyncLedger ledger=new SyncLedger();ledger.capture(SyncExchangeTests.initial());
-        // Model external wire bytes without going through the validator under test.
-        ledger.records().put(SyncLedger.key(row),row);
-        ByteArrayOutputStream bytes=new ByteArrayOutputStream();CloudSnapshot.write(bytes,ledger,CloudSnapshot.header(ledger));
+        // Append external input only after valid ledger rows have been selected.
+        // Malformed sequence values must reach the reader, not ledger.changes().
+        JSONObject envelope=CloudSnapshot.header(ledger).put("records",ledger.changes(0).put(row));
+        ByteArrayOutputStream bytes=new ByteArrayOutputStream();
+        try(Writer writer=new OutputStreamWriter(new GZIPOutputStream(bytes),StandardCharsets.UTF_8)){
+            SyncJSON.write(writer,envelope);
+        }
         return bytes.toByteArray();
     }
     public static void main(String[] args)throws Exception{
@@ -49,7 +56,13 @@ public final class SyncRecordValidationTests {
             try{ledger.mergeRecord(sample.getValue());}catch(Exception expected){rejected=true;}
             check(rejected,"accepted "+sample.getKey());
             check(before.equals(ledger.value.toString()),"rejected "+sample.getKey()+" changed ledger");
-            rejected=false;try{CloudSnapshot.read(new ByteArrayInputStream(packedWithRow(sample.getValue())));}catch(Exception expected){rejected=true;}
+            // Construction failures must fail the test, not masquerade as reader rejection.
+            byte[] packed=packedWithRow(sample.getValue());
+            try(GZIPInputStream input=new GZIPInputStream(new ByteArrayInputStream(packed))){
+                JSONArray rows=new JSONObject(new String(input.readAllBytes(),StandardCharsets.UTF_8)).getJSONArray("records");
+                check(SyncLedger.equivalent(rows.getJSONObject(rows.length()-1),sample.getValue()),"fixture changed invalid row: "+sample.getKey());
+            }
+            rejected=false;try{CloudSnapshot.read(new ByteArrayInputStream(packed));}catch(Exception expected){rejected=true;}
             check(rejected,"archive accepted "+sample.getKey());
         }
         for(Object number:new Object[]{1,1L,1.0,new BigDecimal("1e0")}){
@@ -60,6 +73,15 @@ public final class SyncRecordValidationTests {
         }
         JSONObject legacy=validRow();legacy.remove("modifiedAt");SyncLedger ledger=new SyncLedger();ledger.mergeRecord(legacy);
         check(ledger.records().length()==1,"legacy missing modifiedAt rejected");
+        JSONObject nullable=validRow().put("modifiedAt",JSONObject.NULL),zero=validRow().put("modifiedAt",0);
+        ledger=new SyncLedger();ledger.mergeRecord(nullable);
+        check(ledger.records().getJSONObject(SyncLedger.key(nullable)).isNull("modifiedAt"),"optional null timestamp changed");
+        check(!SyncLedger.wins(nullable,zero)&&!SyncLedger.wins(zero,nullable),"null timestamp differs from zero for ordering");
+        check(!SyncLedger.wins(nullable,legacy)&&!SyncLedger.wins(legacy,nullable),"null timestamp differs from missing for ordering");
+        JSONObject newer=validRow().put("modifiedAt",0).put("version",2);
+        check(SyncLedger.wins(newer,nullable)&&!SyncLedger.wins(nullable,newer),"null timestamp bypasses version ordering");
+        SyncLedger reopened=CloudSnapshot.read(new ByteArrayInputStream(packedWithRow(nullable))).ledger;
+        check(reopened.records().getJSONObject(SyncLedger.key(nullable)).isNull("modifiedAt"),"archive lost optional null timestamp");
         JSONObject maximum=validRow().put("payload",Base64.getEncoder().encodeToString(new byte[1_000_000]));
         ledger=new SyncLedger();ledger.mergeRecord(maximum);check(ledger.records().length()==1,"payload at supported limit rejected");
         System.out.println("PASS "+checks+" strict wire checks: malformed tombstones, atomic rejection, exact integers and legacy compatibility");

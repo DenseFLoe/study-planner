@@ -95,7 +95,7 @@ public final class SyncLedger {
         // Android's JSONObject string getters coerce non-strings, unlike desktop JSON-java.
         for(String field:new String[]{"kind","id","device","payload"})if(!(r.get(field) instanceof String))throw new IllegalArgumentException("同步字符串类型无效");
         String kind=r.getString("kind"),id=r.getString("id"),encoded=r.getString("payload");
-        long v=wireInteger(r,"version"),modified=r.has("modifiedAt")?wireInteger(r,"modifiedAt"):0;
+        long v=wireInteger(r,"version"),modified=r.has("modifiedAt")&&!r.isNull("modifiedAt")?wireInteger(r,"modifiedAt"):0;
         wireInteger(r,"sequence");
         if(!Arrays.asList(KINDS).contains(kind)||v<=0||v>=Long.MAX_VALUE-1000000||modified<0||modified>=Long.MAX_VALUE-1000000||!(r.get("deleted") instanceof Boolean)||r.getString("device").isEmpty()||r.getString("device").length()>64||encoded.length()>1400000)throw new IllegalArgumentException("同步记录无效");
         if(kind.equals("settings")?!id.equals("settings"):!UUID.fromString(id).toString().toUpperCase(Locale.ROOT).equals(id))throw new IllegalArgumentException("同步 ID 无效");
