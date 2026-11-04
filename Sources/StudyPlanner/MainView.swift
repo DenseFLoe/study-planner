@@ -1380,6 +1380,7 @@ private struct WeeklyStudyChart: View {
     var tasks: [ScheduledTask]
     var courses: [Course]
     @State private var appeared = false
+    @State private var showingActual = false
 
     private let calendar = Calendar.current
     private let dayNames = ["周一", "周二", "周三", "周四", "周五", "周六", "周日"]
@@ -1403,13 +1404,16 @@ private struct WeeklyStudyChart: View {
 
     var body: some View {
         // Each aggregation runs once per render, rather than once per chart/legend property.
-        let summary = self.summary, segments = summary.segments
+        let actual = showingActual ? WeeklyActualStudySeries.summary(state: state, weekStart: weekStart, calendar: calendar) : nil
+        let summary = actual?.chart ?? self.summary, segments = summary.segments
         let seriesIDs = WeeklyChartSeries.ids(in: segments)
-        let coursesByID = Dictionary(courses.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        let coursesByID = Dictionary(state.courses.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
         let seriesColors = seriesIDs.map { id in courseColor(coursesByID[id]?.color ?? "blue") }
-        let legendCourses = seriesIDs.compactMap { coursesByID[$0] }
+        let seriesNames = Dictionary(segments.map { ($0.courseID, $0.courseName) }, uniquingKeysWith: { first, _ in first })
+        let legend = seriesIDs.map { WeeklyChartLegendEntry(id: $0, name: seriesNames[$0] ?? "已删除课程", color: coursesByID[$0]?.color ?? "blue") }
+        let metric = showingActual ? "已学" : "计划"
         VStack(alignment: .leading, spacing: 16) {
-            PlannerSectionTitle(title: "周计划时长", detail: summary.totalMinutes.map { "合计 \(hours($0))" } ?? "合计超出范围")
+            PlannerSectionTitle(title: "周学习统计", detail: summary.totalMinutes.map { "\(metric) \(hours($0))" } ?? "合计超出范围")
             HStack {
                 Button("上一周") { moveWeek(-1) }
                 Button("本周") { select(Date()) }
@@ -1417,20 +1421,35 @@ private struct WeeklyStudyChart: View {
                 Spacer(minLength: 8)
                 WeeklyStudyCopyButton(day: selectedDay, state: state)
             }.buttonStyle(SoftButtonStyle())
-            Text("\(weekStart.formatted(.dateTime.month().day()))–\(calendar.date(byAdding: .day, value: 6, to: weekStart)!.formatted(.dateTime.month().day())) · 含已确认任务的原计划")
+            Picker("统计内容", selection: $showingActual) {
+                Text("课表计划").tag(false)
+                Text("实际已学").tag(true)
+            }.pickerStyle(.segmented)
+            Text("\(weekStart.formatted(.dateTime.month().day()))–\(calendar.date(byAdding: .day, value: 6, to: weekStart)!.formatted(.dateTime.month().day()))")
                 .font(.caption).foregroundStyle(.secondary)
-            Text("这里统计计划时长；实际学习按学习日期计入“实际已学”。")
+            Text(showingActual ? "按实际学习日期统计，保留已归档或已删除课程的学习记录。" : "当前课程的计划时长，含已确认任务的原计划；随重排更新。")
                 .font(.caption2).foregroundStyle(.secondary)
+            if let actual {
+                if let undated = actual.undatedMinutes {
+                    if undated > 0 {
+                        Text("全部历史中另有 \(studyDuration(undated)) 无法确定学习日期，未计入本周；原进度与记录保留。")
+                            .font(.caption2).foregroundStyle(.secondary)
+                    }
+                } else {
+                    Text("日期不明的历史记录无法合计，未计入本周；原进度与记录保留。")
+                        .font(.caption2).foregroundStyle(.secondary)
+                }
+            }
 
             if summary.totalMinutes == nil {
-                Label("本周计划时长无法合计，请核对任务时长；原记录已保留。", systemImage: "exclamationmark.triangle")
+                Label("本周\(metric)时长无法合计，请核对记录；原记录已保留。", systemImage: "exclamationmark.triangle")
                     .font(.callout).foregroundStyle(.secondary)
             } else if segments.isEmpty {
                 VStack(spacing: 10) {
                     Image(systemName: "chart.bar.xaxis")
                         .font(.system(size: 28, weight: .light))
                         .foregroundStyle(PlannerTheme.accent.opacity(0.75))
-                    Text("本周还没有学习安排")
+                    Text(showingActual ? "本周还没有可归属日期的已学记录" : "本周还没有学习安排")
                         .font(.callout)
                         .foregroundStyle(.secondary)
                 }
@@ -1444,7 +1463,7 @@ private struct WeeklyStudyChart: View {
                     .foregroundStyle(by: .value("课程", segment.courseID.uuidString))
                     .cornerRadius(4)
                     .accessibilityLabel("\(segment.dayLabel)，\(segment.courseName)")
-                    .accessibilityValue("计划 \(studyDuration(segment.minutes))")
+                    .accessibilityValue("\(metric) \(studyDuration(segment.minutes))")
                 }
                 .chartForegroundStyleScale(domain: seriesIDs.map(\.uuidString), range: seriesColors)
                 .chartLegend(.hidden)
@@ -1468,7 +1487,7 @@ private struct WeeklyStudyChart: View {
                 .frame(height: 190)
                 .animation(.easeOut(duration: 0.7), value: appeared)
 
-                FlowLegend(courses: legendCourses)
+                FlowLegend(entries: legend)
             }
         }
         .padding(18)
@@ -1481,12 +1500,18 @@ private struct WeeklyStudyChart: View {
     }
 }
 
+private struct WeeklyChartLegendEntry: Identifiable {
+    let id: UUID
+    let name: String
+    let color: String
+}
+
 private struct FlowLegend: View {
-    var courses: [Course]
+    var entries: [WeeklyChartLegendEntry]
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            ForEach(courses) { course in
+            ForEach(entries) { course in
                 HStack(alignment: .top, spacing: 7) {
                     Circle().fill(courseColor(course.color)).frame(width: 7, height: 7).padding(.top, 4)
                     Text(course.name).fixedSize(horizontal: false, vertical: true)
