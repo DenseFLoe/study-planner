@@ -149,7 +149,7 @@ public class MainActivity extends Activity {
     Button pill(String label,Runnable action){return button(label,action);}
     Button taskAction(String label,Runnable action){Button b=pill(label,action);b.setPadding(dp(8),dp(4),dp(8),dp(4));return b;}
     int color(String c){switch(c){case "green":return 0xff168875;case "purple":return 0xff8b60ba;case "orange":return 0xffc17d30;case "pink":return 0xffc45f92;default:return 0xff2766c3;}}
-    String hours(int n){return String.format(Locale.CHINA,"%.1f 小时",n/60.0);}
+    String hours(long n){return String.format(Locale.CHINA,"%.1f 小时",n/60.0);}
     void calendar()throws Exception{
         calendarSearch();
         LinearLayout c=card(body),bar=row();weighted(bar,title(month.getYear()+" 年 "+month.getMonthValue()+" 月"));bar.addView(pill("今天",()->{selected=LocalDate.now(Planner.ZONE);month=selected.withDayOfMonth(1);render();}));bar.addView(pill("‹",()->moveCalendar(-1)));bar.addView(pill("›",()->moveCalendar(1)));c.addView(bar);

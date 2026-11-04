@@ -35,7 +35,11 @@ final class DailyConsequences {
     static JSONObject task(JSONObject state,String id){for(JSONObject task:Planner.list(state.optJSONArray("tasks")))if(task.optString("id").equals(id))return task;return null;}
     static LocalDate effectiveDay(JSONObject record,JSONObject state) {
         if(record.has("studyDate")&&!record.isNull("studyDate"))return Planner.day(record.optDouble("studyDate"));
-        JSONObject task=task(state,record.optString("taskID"));LocalDate recorded=Planner.day(record.optDouble("recordedAt"));
+        return effectiveDayWithTask(record,task(state,record.optString("taskID")));
+    }
+    static LocalDate effectiveDayWithTask(JSONObject record,JSONObject task) {
+        if(record.has("studyDate")&&!record.isNull("studyDate"))return Planner.day(record.optDouble("studyDate"));
+        LocalDate recorded=Planner.day(record.optDouble("recordedAt"));
         return task!=null&&Planner.day(task.optDouble("start")).equals(recorded)?recorded:null;
     }
     static int confirmed(LocalDate day,JSONObject state){int total=0;for(JSONObject r:Planner.list(state.optJSONArray("completions")))if(day.equals(effectiveDay(r,state)))total=addMinutes(total,r.optInt("minutes"));return total;}

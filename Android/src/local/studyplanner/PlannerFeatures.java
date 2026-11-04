@@ -36,14 +36,21 @@ final class PlannerFeatures {
   JSONArray adjustments=ScheduleHealth.array(app.state,"androidAdjustments");for(int i=0;i<adjustments.length();i++)details.append("\n").append(adjustments.getString(i));
   app.alert("补回安排与每日负担",details.toString());
  }
- void weekly()throws Exception{
-  LocalDate monday=app.selected.minusDays(app.selected.getDayOfWeek().getValue()-1);List<JSONObject> courses=Planner.list(app.state.getJSONArray("courses"));Map<String,int[]> totals=new LinkedHashMap<>();int sum=0,max=1;
-  for(JSONObject c:courses)if(!c.optBoolean("isArchived"))totals.put(c.getString("id"),new int[7]);
-  for(JSONObject task:Planner.list(app.state.getJSONArray("tasks"))){int day=(int)java.time.temporal.ChronoUnit.DAYS.between(monday,Planner.day(task.getDouble("start")));int[] values=totals.get(task.optString("courseID"));if(day>=0&&day<7&&values!=null){int n=Planner.pending(task)?task.optInt("durationMinutes"):task.optInt("completedMinutes");values[day]+=n;sum+=n;}}
-  for(int day=0;day<7;day++){int n=0;for(int[] values:totals.values())n+=values[day];max=Math.max(max,n);}
-  LinearLayout box=app.card(app.body);box.addView(app.title("本周学习 · "+app.hours(sum)));
-  for(int day=0;day<7;day++){LinearLayout row=app.row();TextView label=app.text("周"+"一二三四五六日".charAt(day),12,app.muted);row.addView(label,new LinearLayout.LayoutParams(app.dp(32),-2));LinearLayout bar=app.row();int used=0;for(JSONObject c:courses){int[] values=totals.get(c.optString("id"));int n=values==null?0:values[day];used+=n;if(n>0){View segment=new View(app);segment.setBackgroundColor(app.color(c.optString("color")));bar.addView(segment,new LinearLayout.LayoutParams(0,app.dp(8),n));}}View spacer=new View(app);bar.addView(spacer,new LinearLayout.LayoutParams(0,app.dp(8),Math.max(1,max-used)));row.addView(bar,new LinearLayout.LayoutParams(0,-2,1));TextView time=app.text(app.hours(used),11,app.muted);row.addView(time,new LinearLayout.LayoutParams(app.dp(76),-2));box.addView(row);}
-  StringBuilder legend=new StringBuilder();for(JSONObject c:courses)if(totals.containsKey(c.optString("id"))){if(legend.length()>0)legend.append(" · ");legend.append(c.optString("name"));}box.addView(app.text(legend.toString(),12,app.muted));
+ void weekly(){
+  WeeklyStudyStats stats=WeeklyStudyStats.calculate(app.state,app.selected);long max=1;
+  for(int day=0;day<7;day++)max=Math.max(max,stats.studied(day));
+  LinearLayout box=app.card(app.body);box.addView(app.title("周学习统计"));
+  box.addView(app.text(stats.monday+" 至 "+stats.monday.plusDays(6)+"\n实际已学 "+app.hours(stats.studiedMinutes)+" · 课表计划 "+app.hours(stats.plannedMinutes),14,app.ink));
+  box.addView(app.text("色条表示实际已学，按确认时填写的学习日期统计；计划按当前课表的原定日期统计。",12,app.muted));
+  for(int day=0;day<7;day++){
+   LinearLayout row=app.row();row.addView(app.text("周"+"一二三四五六日".charAt(day),12,app.muted),new LinearLayout.LayoutParams(app.dp(32),-2));
+   LinearLayout detail=app.col();detail.addView(app.text("已学 "+app.hours(stats.studied(day))+" / 计划 "+app.hours(stats.planned(day)),12,app.muted));
+   LinearLayout bar=app.row();for(WeeklyStudyStats.Course course:stats.courses){long n=course.studied(day);if(n>0){View segment=new View(app);segment.setBackgroundColor(app.color(course.color));bar.addView(segment,new LinearLayout.LayoutParams(0,app.dp(8),(float)n));}}
+   View spacer=new View(app);bar.addView(spacer,new LinearLayout.LayoutParams(0,app.dp(8),(float)Math.max(1,max-stats.studied(day))));detail.addView(bar);
+   row.addView(detail,new LinearLayout.LayoutParams(0,-2,1));box.addView(row);
+  }
+  StringBuilder legend=new StringBuilder();for(WeeklyStudyStats.Course course:stats.courses){if(legend.length()>0)legend.append(" · ");legend.append(course.name);}box.addView(app.text(legend.toString(),12,app.muted));
+  if(stats.undatedMinutes>0)box.addView(app.text("全部历史中另有 "+app.hours(stats.undatedMinutes)+" 的旧记录无法确定学习日期，未计入本周实学；原进度与记录均保留。",12,app.muted));
  }
  void search(){
   LinearLayout form=app.col();form.setPadding(app.dp(16),0,app.dp(16),0);
