@@ -198,9 +198,10 @@ public class MainActivity extends Activity {
             box.addView(actions);
             new PlannerFeatures(this).taskDrag(box,actions,t);
         }else{
+            ConfirmationDraft.Undo undo=new ConfirmationDraft.Undo(state,t);
             LinearLayout result=row();
             weighted(result,text(t.optString("status").equals("missed")?"未完成 · 已保留剩余学习量":"已确认 "+t.optInt("completedMinutes")+" 分钟",13,muted));
-            result.addView(pill("撤销",()->mutate(s->Planner.undoConfirmation(s,t.optString("id"),Planner.now()),true,null)));
+            result.addView(pill("撤销",()->mutate(s->undo.apply(s,Planner.now()),true,null)));
             box.addView(result);
         }
     }

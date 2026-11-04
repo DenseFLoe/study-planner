@@ -92,8 +92,34 @@ public final class ConfirmationDraftTests {
                 "Floating confirmation ignored reserved window end");
         }
     }
+    static void staleUndo() throws Exception {
+        for (String change : new String[]{"reconfirmed", "date", "minutes", "removedRecord", "removedTask", "undone"}) {
+            JSONObject state = fixture(); Planner.confirm(state, "a", 20, NOW);
+            ConfirmationDraft.Undo undo = new ConfirmationDraft.Undo(state, task(state, 0));
+            if (change.equals("reconfirmed")) {
+                Planner.undoConfirmation(state, "a", NOW + 1); Planner.confirm(state, "a", 20, NOW + 2);
+            }
+            if (change.equals("date")) state.getJSONArray("completions").getJSONObject(0).put("studyDate", Planner.at(DAY.minusDays(1), 0));
+            if (change.equals("minutes")) state.getJSONArray("completions").getJSONObject(0).put("minutes", 30);
+            if (change.equals("removedRecord")) state.getJSONArray("completions").remove(0);
+            if (change.equals("removedTask")) state.getJSONArray("tasks").remove(0);
+            if (change.equals("undone")) Planner.undoConfirmation(state, "a", NOW + 1);
+            rejected(state, () -> undo.apply(state, NOW + 3));
+        }
+        for (int actual : new int[]{0, 20, 60}) {
+            JSONObject state = fixture(); Planner.confirm(state, "a", actual, NOW);
+            ConfirmationDraft.Undo undo = new ConfirmationDraft.Undo(state, task(state, 0));
+            Planner.confirm(state, "b", 30, NOW + 1);
+            state.getJSONArray("courses").getJSONObject(0).put("name", "同步后的名称");
+            String other = SyncLedger.canonical(task(state, 1));
+            undo.apply(state, NOW + 2);
+            check(Planner.pending(task(state, 0)) && task(state, 0).getInt("completedMinutes") == 0, "Reviewed confirmation was not undone");
+            check(state.getJSONArray("completions").length() == 1 && other.equals(SyncLedger.canonical(task(state, 1))), "Undo removed another task's confirmation");
+            check(state.getJSONArray("courses").getJSONObject(0).getString("name").equals("同步后的名称"), "Undo replaced unrelated course metadata");
+        }
+    }
     public static void main(String[] args) throws Exception {
-        staleTasks(); validationAndAtomicity(); preservedProgressAndDates(); currentTimeAndFloating();
+        staleTasks(); validationAndAtomicity(); preservedProgressAndDates(); currentTimeAndFloating(); staleUndo();
         System.out.println("ConfirmationDraftTests: " + checks + " checks passed");
     }
 }

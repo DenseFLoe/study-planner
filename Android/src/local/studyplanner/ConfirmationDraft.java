@@ -12,6 +12,35 @@ public final class ConfirmationDraft {
         for (JSONObject task : displayed) tasks.put(task.getString("id"), identity(task));
     }
 
+    /** Undo applies only to the confirmation rendered on the card. */
+    public static final class Undo {
+        private final String taskID, task, records;
+
+        public Undo(JSONObject state, JSONObject displayed) throws Exception {
+            taskID = displayed.getString("id");
+            task = SyncLedger.canonical(displayed);
+            records = records(state, taskID);
+        }
+
+        private static String records(JSONObject state, String id) throws Exception {
+            JSONObject rows = new JSONObject();
+            for (JSONObject record : Planner.list(state.getJSONArray("completions")))
+                if (record.optString("taskID").equals(id)) rows.put(record.getString("id"), record);
+            return SyncLedger.canonical(rows);
+        }
+
+        public void apply(JSONObject state, double now) throws Exception {
+            JSONObject current = null;
+            for (JSONObject row : Planner.list(state.getJSONArray("tasks")))
+                if (row.optString("id").equals(taskID)) current = row;
+            if (current == null || !task.equals(SyncLedger.canonical(current)) || !records.equals(records(state, taskID)))
+                throw new IllegalArgumentException("这条完成记录已更新或撤销，未执行本次撤销。请核对最新记录后重试。");
+            JSONObject next = CourseTools.copy(state);
+            Planner.undoConfirmation(next, taskID, now);
+            for (String key : new String[]{"courses", "tasks", "completions"}) state.put(key, next.get(key));
+        }
+    }
+
     private static String identity(JSONObject task) throws Exception {
         JSONObject value = new JSONObject();
         for (String key : new String[]{"id", "courseID", "lessonID", "lessonName", "start",
