@@ -4,6 +4,12 @@ import org.json.*;import java.util.*;
 
 /** Desktop-compatible live lesson IDs and incremental captures across catalog pages. */
 public final class WebsiteCapture {
+ /** Use the same provider boundary for crawling, automatic refresh and incremental merging. */
+ static boolean isYantuHost(String host){
+  if(host==null)return false;String value=host.toLowerCase(Locale.ROOT);
+  if(value.endsWith("."))value=value.substring(0,value.length()-1);
+  return !value.startsWith(".")&&!value.contains("..")&&(value.equals("kaoyanvip.cn")||value.endsWith(".kaoyanvip.cn"));
+ }
  public static JSONObject xuecheng(JSONObject catalog,List<JSONObject> base,String source,double now)throws Exception{
   String packageID="generic:"+catalog.getString("courseID");JSONArray lessons=new JSONArray();Map<String,Integer> counts=new HashMap<>();Map<String,JSONObject> known=new HashMap<>(),byID=new HashMap<>();Set<String> used=new HashSet<>();for(JSONObject snapshot:base)if(snapshot.optString("packageID").equals(packageID)&&Objects.equals(WebCourseImport.origin(snapshot.optString("sourceURL")),WebCourseImport.origin(source)))for(JSONObject lesson:Planner.list(snapshot.getJSONArray("lessons"))){known.put(lesson.getString("name"),lesson);byID.put(lesson.getString("id"),lesson);}
   for(JSONObject row:Planner.list(catalog.getJSONArray("rows"))){String name=row.getString("name");int occurrence=counts.getOrDefault(name,0)+1;counts.put(name,occurrence);String key=row.optString("key",String.valueOf(occurrence)),id=packageID+":live:"+name+":"+key;JSONObject previous=byID.get(id);if(previous==null)previous=known.get(name);if(previous!=null&&!used.add(previous.optString("id")))previous=null;JSONObject lesson=new JSONObject().put("id",id).put("name",name).put("subject","").put("stage","").put("chapter","").put("kind","living").put("published",row.optBoolean("replay")).put("requiresDuration",row.optBoolean("replay")).put("markedFinished",previous!=null&&previous.optBoolean("markedFinished")).put("watchedPercent",previous==null?0:previous.optDouble("watchedPercent",0));if(previous!=null&&previous.has("durationSeconds"))lesson.put("durationSeconds",previous.get("durationSeconds"));lessons.put(lesson);}
