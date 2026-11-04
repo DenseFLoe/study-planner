@@ -405,6 +405,15 @@ struct DailyReviewView: View {
     @State private var saving = false
     @State private var changedTasks: Set<UUID> = []
     @State private var refreshNotice = ""
+    @State private var query = ""
+    @State private var matches: [ScheduledTask] = []
+    @State private var displayedFilter: ReviewFilter?
+    private struct ReviewFilter: Equatable, Sendable {
+        let query: String
+        let tasks: [ScheduledTask]
+        let courses: [Course]
+        let calendar: Calendar
+    }
 
     private func refreshTasks() {
         guard !saving, !store.orderSaveBusy else { return }
@@ -417,6 +426,11 @@ struct DailyReviewView: View {
 
     var body: some View {
         let selectedTasks = tasks.filter { reviewed.contains($0.id) }
+        let input = ReviewFilter(query: query, tasks: tasks, courses: store.state.courses, calendar: .current)
+        let hasQuery = !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        let searching = hasQuery && displayedFilter != input
+        let visibleTasks = hasQuery ? (searching ? [] : matches) : tasks
+        let hiddenSelection = reviewed.subtracting(visibleTasks.map(\.id)).count
         VStack(alignment: .leading, spacing: 18) {
             SheetHeading(title: "确认学习完成情况", subtitle: "只保存已勾选并核对的项目；未勾选项目不确认，待学日程仍可能随重排更新。")
             HStack(alignment: .top) {
@@ -425,10 +439,22 @@ struct DailyReviewView: View {
                     .font(.caption).foregroundStyle(.secondary)
             }.padding(.horizontal, 24)
             if !refreshNotice.isEmpty { Text(refreshNotice).font(.caption).foregroundStyle(.secondary).padding(.horizontal, 24) }
+            VStack(alignment: .leading, spacing: 6) {
+                HStack {
+                    TextField("筛选课程、课节或日期（YYYY-MM-DD）", text: $query).textFieldStyle(.roundedBorder)
+                    if !query.isEmpty { Button("清除筛选") { query = "" } }
+                }.disabled(saving)
+                if searching { ProgressView("正在筛选…").controlSize(.small) }
+                else {
+                    Text("显示 \(visibleTasks.count) / \(tasks.count) 项 · 已勾选 \(selectedTasks.count) 项，其中 \(hiddenSelection) 项在筛选外；保存包含全部已勾选项。")
+                        .font(.caption).foregroundStyle(.secondary)
+                    if !tasks.isEmpty && visibleTasks.isEmpty { Text("没有匹配的任务，可清除筛选或调整关键词。").font(.caption).foregroundStyle(.secondary) }
+                }
+            }.padding(.horizontal, 24)
             if tasks.isEmpty { ContentUnavailableView("没有待确认的任务", systemImage: "checkmark.circle", description: Text("所有历史计划均已确认。")) }
             ScrollView {
                 LazyVStack(spacing: 12) {
-                    ForEach(tasks) { task in
+                    ForEach(visibleTasks) { task in
                         VStack(alignment: .leading, spacing: 10) {
                             HStack { Text(store.course(task.courseID)?.name ?? "课程").font(.headline); Spacer(); Text(task.planningStart.formatted(date: .abbreviated, time: .shortened) + (task.isFloating ? "–" + task.planningEnd.formatted(date: .omitted, time: .shortened) + " 内浮动" : "")).foregroundStyle(.secondary) }
                             if let lessonName = task.lessonName { Text(lessonName).font(.callout).foregroundStyle(.secondary) }
@@ -452,9 +478,14 @@ struct DailyReviewView: View {
             if saving { ProgressView("正在保存本批确认并更新课表…").controlSize(.small).padding(.horizontal, 24) }
             if !message.isEmpty { Text(message).font(.caption).foregroundStyle(.red).padding(.horizontal, 24) }
             HStack {
-                Button("全部标记完成") { for task in tasks { values[task.id] = task.durationMinutes; reviewed.insert(task.id) } }
-                Button("全部未完成") { for task in tasks { values[task.id] = 0; reviewed.insert(task.id) } }
+                Button("将结果标为完成") { for task in visibleTasks { values[task.id] = task.durationMinutes; reviewed.insert(task.id) } }
+                    .disabled(searching || visibleTasks.isEmpty)
+                Button("将结果标为未完成") { for task in visibleTasks { values[task.id] = 0; reviewed.insert(task.id) } }
+                    .disabled(searching || visibleTasks.isEmpty)
                 Button("全部暂不提交") { reviewed.removeAll() }
+                Spacer()
+            }.padding(.horizontal, 24).disabled(saving)
+            HStack {
                 Spacer()
                 Button("稍后确认") { dismiss() }.keyboardShortcut(.cancelAction)
                 Button("保存已核对 \(selectedTasks.count) 项") {
@@ -480,8 +511,18 @@ struct DailyReviewView: View {
                     return value < 0 || value > $0.durationMinutes
                 })
             }.padding(24).disabled(saving)
-        }.frame(width: 740, height: 620).interactiveDismissDisabled(saving)
+        }.frame(width: 740, height: 680).interactiveDismissDisabled(saving)
         .onAppear { tasks = store.reviewTasks }
+        .task(id: input) {
+            displayedFilter = nil; matches = []
+            guard !input.query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+            do { try await Task.sleep(for: .milliseconds(200)) } catch { return }
+            let result = await Task.detached(priority: .userInitiated) {
+                ScheduleSearch.matches(query: input.query, tasks: input.tasks, courses: input.courses, calendar: input.calendar)
+            }.value
+            guard !Task.isCancelled else { return }
+            matches = result; displayedFilter = input
+        }
     }
 }
 struct CompletionInput: View {
