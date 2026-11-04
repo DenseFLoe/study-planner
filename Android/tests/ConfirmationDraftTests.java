@@ -154,8 +154,31 @@ public final class ConfirmationDraftTests {
         allRecords.apply(original,NOW+2);
         check(Planner.pending(task(original,0))&&original.getJSONArray("completions").length()==0,"Capture lost multiple records or depended on array order");
     }
+    static void singleReloadAndCourseAvailability() throws Exception {
+        JSONObject state=fixture();state.getJSONArray("courses").getJSONObject(0).put("autoScheduleEnabled",false);
+        task(state,0).put("start",NOW+86400).put("durationMinutes",30).put("lessonName","Updated");
+        String before=SyncLedger.canonical(state);JSONObject loaded=ConfirmationDraft.pendingTask(state,"a");
+        check(loaded.getInt("durationMinutes")==30&&loaded.getString("lessonName").equals("Updated"),"Reload did not read current task");
+        check(before.equals(SyncLedger.canonical(state)),"Reload changed the plan");
+        loaded.put("durationMinutes",20);check(task(state,0).getInt("durationMinutes")==30,"Reload returned mutable stored task");
+        loaded=ConfirmationDraft.pendingTask(state,"a");ConfirmationDraft fresh=new ConfirmationDraft(Collections.singletonList(loaded));
+        fresh.apply(state,Collections.singletonMap("a",20),Collections.singletonMap("a",DAY.minusDays(1)),NOW);
+        check(task(state,0).getInt("completedMinutes")==20,"Pausing automatic scheduling blocked confirmation");
+        rejected(state,()->ConfirmationDraft.pendingTask(state,"a"));
+        for(String change:new String[]{"archived","courseDeleted","taskDeleted"}){
+            JSONObject unavailable=fixture();
+            if(change.equals("archived"))unavailable.getJSONArray("courses").getJSONObject(0).put("isArchived",true);
+            else if(change.equals("courseDeleted"))unavailable.put("courses",new JSONArray());
+            else unavailable.getJSONArray("tasks").remove(0);
+            rejected(unavailable,()->ConfirmationDraft.pendingTask(unavailable,"a"));
+            rejected(unavailable,()->Planner.confirm(unavailable,"a",20,NOW));
+        }
+        JSONObject latest=fixture();JSONObject row=ConfirmationDraft.pendingTask(latest,"a");
+        ConfirmationDraft reviewed=new ConfirmationDraft(Collections.singletonList(row));task(latest,0).put("start",NOW+60);
+        rejected(latest,()->reviewed.apply(latest,Collections.singletonMap("a",20),Collections.singletonMap("a",DAY),NOW));
+    }
     public static void main(String[] args) throws Exception {
-        staleTasks(); validationAndAtomicity(); preservedProgressAndDates(); currentTimeAndFloating(); staleUndo(false); staleUndo(true); indexedUndoCapture();
+        staleTasks(); validationAndAtomicity(); preservedProgressAndDates(); currentTimeAndFloating(); staleUndo(false); staleUndo(true); indexedUndoCapture(); singleReloadAndCourseAvailability();
         System.out.println("ConfirmationDraftTests: " + checks + " checks passed");
     }
 }

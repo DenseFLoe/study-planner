@@ -12,6 +12,16 @@ public final class ConfirmationDraft {
         for (JSONObject task : displayed) tasks.put(task.getString("id"), identity(task));
     }
 
+    /** Read a detached, still-confirmable task for an explicitly refreshed form. */
+    public static JSONObject pendingTask(JSONObject state, String id) throws Exception {
+        for (JSONObject task : Planner.list(state.optJSONArray("tasks"))) if (task.optString("id").equals(id)) {
+            JSONObject course = Planner.course(state, task.optString("courseID"));
+            if (Planner.pending(task) && course != null && !course.optBoolean("isArchived")) return CourseTools.copy(task);
+            break;
+        }
+        throw new IllegalArgumentException("这项任务已确认、移除或所属课程已删除、归档，请返回日历核对。");
+    }
+
     /** Undo applies only to the confirmation rendered on the card. */
     public static final class Undo {
         private final String taskID, task, records;

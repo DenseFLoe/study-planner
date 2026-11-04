@@ -372,16 +372,42 @@ public class MainActivity extends Activity {
         Map<String,Integer> filled=new LinkedHashMap<>(minutes);Map<String,LocalDate> dates=new LinkedHashMap<>(studyDates);
         mutate(s->{double now=Planner.now();if(draft.apply(s,filled,dates,now))Planner.replan(s,now);},false,done);
     }
+    String confirmationDetails(JSONObject task){
+        JSONObject course=Planner.course(state,task.optString("courseID"));String lesson=task.optString("lessonName");
+        double start=Planner.planningStart(task),end=Planner.planningEnd(task);
+        String endDate=Planner.day(start).equals(Planner.day(end))?"":Planner.date(end)+" ";
+        return (course==null?"课程不可用":course.optString("name"))+(lesson.isEmpty()?"":" / "+lesson)+"\n"+
+            Planner.date(start)+" "+Planner.clock(start)+"–"+endDate+Planner.clock(end)+(Planner.floatingTask(task)?" 窗口内":"")+
+            " · 计划 "+task.optInt("durationMinutes")+" 分钟";
+    }
     void completion(JSONObject t){run(()->{
-        ConfirmationDraft draft=new ConfirmationDraft(Collections.singletonList(t));String id=t.getString("id");
+        ConfirmationDraft[] draft={new ConfirmationDraft(Collections.singletonList(t))};String id=t.getString("id");
+        Button[] save={null};boolean[] unavailable={false};
         LinearLayout form=col();form.setPadding(dp(20),dp(8),dp(20),0);
+        TextView details=text(confirmationDetails(t),14,ink);form.addView(details);
         EditText actual=field(form,"实际完成分钟（0 = 未完成）",""+t.optInt("durationMinutes"),true);
         EditText studyDate=dateField(form,"实际学习日期（补录请核对）",Planner.date(Math.min(t.optDouble("start"),Planner.now())));
-        AlertDialog d=new AlertDialog.Builder(this).setTitle("确认学习进度").setView(form).setNegativeButton("取消",null).setPositiveButton("确认",null).create();
-        d.setOnShowListener(v->d.getButton(-1).setOnClickListener(x->run(()->{
+        TextView notice=text("载入最新安排会保留填写的分钟数和学习日期。",12,muted);form.addView(notice);
+        form.addView(button("载入最新安排",()->{
+            if(busy||!ready||isDestroyed())return;
+            try{
+                JSONObject current=ConfirmationDraft.pendingTask(state,id);
+                ConfirmationDraft refreshed=new ConfirmationDraft(Collections.singletonList(current));
+                details.setText(confirmationDetails(current));draft[0]=refreshed;unavailable[0]=false;
+                notice.setText("已载入最新安排，输入已保留；请核对分钟数与学习日期后确认。");
+                if(save[0]!=null)save[0].setEnabled(true);
+            }catch(Exception error){
+                unavailable[0]=true;if(save[0]!=null)save[0].setEnabled(false);
+                notice.setText(error.getMessage()+" 输入仍保留。");
+            }
+        }));
+        ScrollView scroll=new ScrollView(this);scroll.addView(form);
+        AlertDialog d=new AlertDialog.Builder(this).setTitle("确认学习进度").setView(scroll).setNegativeButton("取消",null).setPositiveButton("确认",null).create();
+        d.setOnShowListener(v->{save[0]=d.getButton(-1);save[0].setOnClickListener(x->run(()->{
+            if(busy||unavailable[0])return;
             int n=Integer.parseInt(value(actual));LocalDate date=LocalDate.parse(value(studyDate));
-            confirmTasks(draft,Collections.singletonMap(id,n),Collections.singletonMap(id,date),d::dismiss);
-        })));d.show();
+            confirmTasks(draft[0],Collections.singletonMap(id,n),Collections.singletonMap(id,date),d::dismiss);
+        }));});d.show();
     });}
     void review(){run(()->{
         double now=Planner.now();List<JSONObject> displayed=Planner.review(state,now);
