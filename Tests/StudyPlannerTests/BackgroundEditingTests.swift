@@ -4,6 +4,22 @@ import StudyPersistence
 @testable import StudyPlanner
 
 final class BackgroundEditingTests: XCTestCase {
+    @MainActor func testStaleConfirmationAndUndoKeepCurrentProgress() async throws {
+        let now = Date(), original = fixture(), task = try XCTUnwrap(original.tasks.first)
+        var moved = original; let index = try XCTUnwrap(moved.tasks.firstIndex { $0.id == task.id })
+        moved.tasks[index].start.addTimeInterval(60)
+        let repository = Repository(), store = store(moved, repository)
+        let confirmed = await store.confirm(task, minutes: 10, now: now)
+        XCTAssertFalse(confirmed); XCTAssertEqual(store.state, moved); XCTAssertNil(repository.saved)
+
+        var state = original; try state.confirm(taskID: task.id, actualMinutes: 10, now: now)
+        let reviewed = try XCTUnwrap(state.tasks.first { $0.id == task.id })
+        try state.undoConfirmation(taskID: task.id, now: now)
+        try state.confirm(taskID: task.id, actualMinutes: 20, now: now.addingTimeInterval(60))
+        let undoStore = self.store(state, repository)
+        let undone = await undoStore.undoConfirmation(reviewed)
+        XCTAssertFalse(undone); XCTAssertEqual(undoStore.state, state); XCTAssertNil(repository.saved)
+    }
     @MainActor func testStaleFixedEventDeletionDoesNotSaveOrRotateRecovery() async throws {
         let day = Calendar.current.startOfDay(for: Date()).addingTimeInterval(86400)
         let reviewed = FixedEvent(title: "待删除规则", startMinute: 540, endMinute: 600, startDate: day, endDate: day)

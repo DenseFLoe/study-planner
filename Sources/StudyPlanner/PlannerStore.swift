@@ -315,11 +315,11 @@ final class PlannerStore {
     }
     func confirm(_ task: ScheduledTask, minutes: Int, studyDate: Date? = nil, now: Date = Date()) async -> Bool {
         await change(replan: task.confirmationRequiresReplan(actualMinutes: minutes, now: now), now: now) {
-            try $0.confirm(taskID: task.id, actualMinutes: minutes, now: now, studyDate: studyDate)
+            try $0.confirm(reviewed: task, actualMinutes: minutes, now: now, studyDate: studyDate)
         }
     }
     func undoConfirmation(_ task: ScheduledTask) async -> Bool {
-        await change { try $0.undoConfirmation(taskID: task.id, now: Date()) }
+        await change { try $0.undoConfirmation(reviewed: task, now: Date()) }
     }
 
     func refreshBackups() async {

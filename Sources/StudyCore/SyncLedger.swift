@@ -63,6 +63,34 @@ public struct SyncLedger: Codable, Sendable {
                 throw FixedEventEditError.removed
             }
         }
+        // A confirmation/undo can race a sync write after the UI's review. Check
+        // both the task and the completion row before applying any part of it.
+        let progressChanges = changes.filter { $0.kind == "completions" }
+        if !progressChanges.isEmpty {
+            let decoder = JSONDecoder(), latest = try materialize()
+            let latestTasks = Dictionary(uniqueKeysWithValues: latest.tasks.map { ($0.id, $0) })
+            let latestRecords = Dictionary(uniqueKeysWithValues: latest.completions.map { ($0.taskID, $0) })
+            for row in progressChanges {
+                let record = try decoder.decode(CompletionRecord.self, from: row.payload)
+                let taskKey = "tasks/" + record.taskID.uuidString
+                if let before = original[taskKey], !before.deleted {
+                    let reviewedTask = try decoder.decode(ScheduledTask.self, from: before.payload)
+                    guard let effectiveTask = latestTasks[record.taskID] else { throw ConfirmationEditError.changed }
+                    // Materialization may recover a confirmed task from a pending
+                    // tombstone. Accept that unchanged effective history as well.
+                    let storedTask: ScheduledTask?
+                    if let row = records[taskKey], !row.deleted { storedTask = try decoder.decode(ScheduledTask.self, from: row.payload) }
+                    else { storedTask = nil }
+                    guard effectiveTask == reviewedTask || storedTask == reviewedTask else { throw ConfirmationEditError.changed }
+                }
+                if let before = original[row.key], !before.deleted {
+                    guard try decoder.decode(CompletionRecord.self, from: before.payload) == latestRecords[record.taskID]
+                    else { throw ConfirmationEditError.changed }
+                } else if latestRecords[record.taskID] != nil {
+                    throw ConfirmationEditError.changed
+                }
+            }
+        }
         // Validate every row before mutating the ledger; a conflict rejects the
         // whole edit, including tasks computed from that edit.
         let resolved = try changes.map { change -> SyncRecord in

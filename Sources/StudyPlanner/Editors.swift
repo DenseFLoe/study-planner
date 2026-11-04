@@ -306,6 +306,7 @@ struct CompletionEditor: View {
     let task: ScheduledTask
     @State private var actual = 0
     @State private var studyDate = Date()
+    @State private var message = ""
     @Environment(\.dismiss) private var dismiss
     var body: some View {
         VStack(alignment: .leading, spacing: 20) {
@@ -316,8 +317,15 @@ struct CompletionEditor: View {
             CompletionInput(actual: $actual, planned: task.durationMinutes)
             DatePicker("实际学习日期", selection: $studyDate, in: ...Date(), displayedComponents: .date)
             Text("只有实际完成的学习量会计入进度；其余部分会自动重新分配。").font(.callout).foregroundStyle(.secondary)
+            if !message.isEmpty { Text(message).font(.caption).foregroundStyle(.red) }
             HStack { Spacer(); Button("取消") { dismiss() }.keyboardShortcut(.cancelAction)
-                Button("确认并重新排程") { Task { if await store.confirm(task, minutes: actual, studyDate: studyDate) { dismiss() } } }.buttonStyle(.borderedProminent).disabled(actual < 0 || actual > task.durationMinutes)
+                Button("确认并重新排程") {
+                    let minutes = actual, date = studyDate
+                    Task {
+                        if await store.confirm(task, minutes: minutes, studyDate: date) { dismiss() }
+                        else { message = store.errorMessage ?? "确认未保存" }
+                    }
+                }.buttonStyle(.borderedProminent).disabled(actual < 0 || actual > task.durationMinutes || store.orderSaveBusy)
             }
         }.padding(28).frame(width: 500).onAppear { actual = task.durationMinutes; studyDate = min(task.start, Date()) }
     }
@@ -329,6 +337,7 @@ struct DailyReviewView: View {
     @State private var values: [UUID: Int] = [:]
     @State private var reviewed: Set<UUID> = []
     @State private var studyDates: [UUID: Date] = [:]
+    @State private var message = ""
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
             SheetHeading(title: "确认学习完成情况", subtitle: "请逐项选择实际完成量，包含昨天及更早的未确认计划。")
@@ -346,21 +355,25 @@ struct DailyReviewView: View {
                     }
                 }.padding(.horizontal, 24)
             }
+            if !message.isEmpty { Text(message).font(.caption).foregroundStyle(.red).padding(.horizontal, 24) }
             HStack {
                 Button("全部标记完成") { for task in tasks { values[task.id] = task.durationMinutes; reviewed.insert(task.id) } }
                 Button("全部未完成") { for task in tasks { values[task.id] = 0; reviewed.insert(task.id) } }
                 Spacer()
                 Button("稍后确认") { dismiss() }.keyboardShortcut(.cancelAction)
                 Button("保存并重新排程") {
+                    let selectedTasks = tasks, minutes = values, dates = studyDates
                     Task {
                         let now = Date()
-                        let needsReplan = tasks.contains { $0.confirmationRequiresReplan(actualMinutes: values[$0.id] ?? 0, now: now) }
+                        let needsReplan = selectedTasks.contains { $0.confirmationRequiresReplan(actualMinutes: minutes[$0.id] ?? 0, now: now) }
                         let success = await store.change(replan: needsReplan, now: now) { state in
-                            for task in tasks { try state.confirm(taskID: task.id, actualMinutes: values[task.id] ?? 0, now: now, studyDate: studyDates[task.id] ?? min(task.start, now)) }
+                            for task in selectedTasks { try state.checkReviewedTask(task) }
+                            for task in selectedTasks { try state.confirm(reviewed: task, actualMinutes: minutes[task.id] ?? 0, now: now, studyDate: dates[task.id] ?? min(task.start, now)) }
                         }
                         if success { dismiss() }
+                        else { message = store.errorMessage ?? "本批确认未保存" }
                     }
-                }.buttonStyle(.borderedProminent).disabled(tasks.isEmpty || reviewed.count != tasks.count || tasks.contains { !(0...$0.durationMinutes).contains(values[$0.id] ?? -1) })
+                }.buttonStyle(.borderedProminent).disabled(store.orderSaveBusy || tasks.isEmpty || reviewed.count != tasks.count || tasks.contains { !(0...$0.durationMinutes).contains(values[$0.id] ?? -1) })
             }.padding(24)
         }.frame(width: 740, height: 620)
         .onAppear { tasks = store.reviewTasks }
