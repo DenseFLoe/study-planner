@@ -38,7 +38,19 @@ public final class Planner {
     public static String date(double s){return day(s).toString();}
     public static String clock(double s){return Instant.ofEpochMilli((long)((s+EPOCH)*1000)).atZone(ZONE).format(DateTimeFormatter.ofPattern("HH:mm"));}
     public static String time(int m){return String.format(Locale.ROOT,"%02d:%02d",m/60,m%60);}
-    public static int minute(String t){String[] a=t.trim().split(":"); if(a.length!=2)throw new IllegalArgumentException("时间格式为 HH:mm");int h=Integer.parseInt(a[0]),m=Integer.parseInt(a[1]);if(h<0||h>24||m<0||m>59||(h==24&&m!=0))throw new IllegalArgumentException("时间超出范围");return h*60+m;}
+    static String normalizeTimeText(String text){
+        StringBuilder normalized=new StringBuilder();
+        for(char c:text.toCharArray())normalized.append(c>=0xff01&&c<=0xff5e?(char)(c-0xfee0):c==0x3000?' ':c);
+        return normalized.toString();
+    }
+    public static int minute(String text){
+        if(text==null)throw new IllegalArgumentException("时间格式为 HH:mm");
+        String normalized=normalizeTimeText(text).trim();
+        if(!normalized.matches("[0-9]{1,2}[ \\t]*:[ \\t]*[0-9]{1,2}"))throw new IllegalArgumentException("时间格式为 HH:mm");
+        String[] parts=normalized.split(":",-1);int hour=Integer.parseInt(parts[0].trim()),minute=Integer.parseInt(parts[1].trim());
+        if(hour>24||minute>59||(hour==24&&minute!=0))throw new IllegalArgumentException("时间超出范围");
+        return hour*60+minute;
+    }
     public static int weekday(LocalDate d){return d.getDayOfWeek().getValue()%7+1;}
     public static double end(JSONObject t){return t.optDouble("start")+60.0*t.optInt("durationMinutes");}
     public static boolean floating(JSONObject e){return e.has("floatingDurationMinutes")&&!e.isNull("floatingDurationMinutes");}

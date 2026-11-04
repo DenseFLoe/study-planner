@@ -52,7 +52,8 @@ final class SettingsDraft {
             .put("notificationMinute", Planner.minute(notification.trim())).put("schedulingRuleLevels", CourseTools.copy(levels));
         JSONArray windows = new JSONArray();
         for (int i = 0; i < 7; i++) {
-            String line = availability[i].trim(); if (line.isEmpty()) continue;
+            String line = Planner.normalizeTimeText(availability[i]).trim().replace('–', '-').replace('—', '-').replace('−', '-');
+            if (line.isEmpty()) continue;
             for (String token : line.split("[,，]", -1)) {
                 String[] parts = token.trim().split("-", -1);
                 if (parts.length != 2) throw new IllegalArgumentException("时段格式应为 08:00-12:00，多个时段用逗号分隔。");

@@ -90,8 +90,28 @@ public final class SettingsDraftTests {
         JSONObject edited = CourseTools.copy(baseline).put("minimumScheduleUnit", 30.5);
         rejected(state, () -> SettingsEditing.save(state, edited, baseline, NOW), "Fractional settings accepted");
     }
+    static void timeEntryAndAtomicity() throws Exception {
+        String[] inputs={"08:00","8:0","  ０８：００  ","８ ： ３０","00:00","２４：００","23:59"};
+        int[] expected={480,480,480,510,0,1440,1439};
+        for(int i=0;i<inputs.length;i++)check(Planner.minute(inputs[i])==expected[i],"Time normalization changed meaning: "+inputs[i]);
+        for(String invalid:new String[]{"08:00:","08::00",":08:00","+08:00","08:+00","08:-0","008:00","08:000","08.00","25:00","24:01","08:60",""}){
+            try{Planner.minute(invalid);throw new AssertionError("Malformed time accepted: "+invalid);}catch(IllegalArgumentException expectedError){checks++;}
+        }
+        JSONObject baseline=settings(),state=PlannerTests.empty();state.put("settings",CourseTools.copy(baseline));
+        for(String separator:new String[]{"-","－","–","—","−"}){
+            SettingsDraft draft=new SettingsDraft(baseline);draft.availability[0]="０８：００"+separator+"１２：００， １４：００"+separator+"１８：００";draft.notification="２０：００";
+            JSONObject merged=SettingsEditing.resolve(draft.editedSettings(),draft.baseline,state.getJSONObject("settings"));
+            check(merged.getJSONArray("availability").toString().equals(baseline.getJSONArray("availability").toString()),"Equivalent typography replaced window identities");
+            check(merged.getInt("notificationMinute")==1200,"Full-width confirmation time not retained");
+        }
+        for(String invalid:new String[]{"０８：００：–１２：００","０８：６０—１２：００","０８：００––１２：００"}){
+            SettingsDraft draft=new SettingsDraft(baseline);draft.availability[0]=invalid;String raw=draft.snapshot().toString();
+            rejected(state,()->SettingsEditing.save(state,draft.editedSettings(),draft.baseline,NOW),"Malformed range saved");
+            check(raw.equals(draft.snapshot().toString()),"Failed normalization changed the raw draft");
+        }
+    }
     public static void main(String[] args) throws Exception {
-        rawDraftRestoration(); independentEditsAndRuntime(); staleConflicts(); equivalentWindowsAndDayAnchor(); invalidInputIsAtomic();
+        rawDraftRestoration(); independentEditsAndRuntime(); staleConflicts(); equivalentWindowsAndDayAnchor(); invalidInputIsAtomic(); timeEntryAndAtomicity();
         System.out.println("SettingsDraftTests: " + checks + " checks passed");
     }
 }
