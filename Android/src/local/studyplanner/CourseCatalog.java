@@ -44,9 +44,16 @@ final class CourseCatalog {
         return find(query, scope, Order.DEADLINE, requestedPage);
     }
     Page find(String query, Scope scope, Order order, int requestedPage) {
+        return find(query, scope, order, requestedPage, null);
+    }
+    Page findSelected(String query, Set<String> selected, int requestedPage) {
+        return find(query, Scope.ALL, Order.DEADLINE, requestedPage, selected);
+    }
+    private Page find(String query, Scope scope, Order order, int requestedPage, Set<String> includedIDs) {
         String normalized = TaskSearch.normalize(query); String[] terms = normalized.isEmpty() ? new String[0] : normalized.split("\\s+");
         List<JSONObject> matches = new ArrayList<>();
         for (JSONObject course : courses) {
+            if (includedIDs != null && !includedIDs.contains(course.optString("id"))) continue;
             boolean automatic = course.optBoolean("autoScheduleEnabled", true);
             if (scope == Scope.AUTOMATIC && !automatic || scope == Scope.PAUSED && automatic) continue;
             String text = searchText.get(course.optString("id")); boolean found = true;

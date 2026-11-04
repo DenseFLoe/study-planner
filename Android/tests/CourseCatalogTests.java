@@ -8,6 +8,30 @@ public final class CourseCatalogTests {
     static int checks;
     static final LocalDate DAY = LocalDate.of(2026, 11, 4);
     static void check(boolean value, String message) { checks++; if (!value) throw new AssertionError(message); }
+    static final class Queue implements java.util.concurrent.Executor {
+        final Deque<Runnable> items=new ArrayDeque<>();
+        public void execute(Runnable item){items.add(item);}
+        void drain(){while(!items.isEmpty())items.remove().run();}
+    }
+    static void asynchronousSelectedPages() throws Exception {
+        JSONObject old=fixture(),fresh=CourseTools.copy(old);
+        String id=old.getJSONArray("courses").getJSONObject(0).getString("id");
+        Planner.course(fresh,id).put("initialCompletedMinutes",123);
+        Queue worker=new Queue(),ui=new Queue();List<CourseCatalog.Page> accepted=new ArrayList<>();List<Exception> errors=new ArrayList<>();
+        LatestWork<CourseCatalog.Page> work=new LatestWork<>(worker,ui,accepted::add,errors::add);
+        work.submit(()->new CourseCatalog(old).findSelected("",Collections.singleton(id),0));worker.drain();
+        check(accepted.isEmpty(),"Background course lookup touched UI directly");
+        work.clear();work.submit(()->new CourseCatalog(fresh).findSelected("",Collections.singleton(id),0));ui.drain();
+        check(accepted.isEmpty(),"Old course progress appeared after refresh");worker.drain();ui.drain();
+        check(accepted.size()==1&&accepted.get(0).rows.get(0).completedMinutes==123,"Fresh selected progress was lost");
+        work.submit(()->{throw new IllegalStateException("old failure");});worker.drain();work.clear();ui.drain();
+        check(errors.isEmpty(),"Old search failure replaced a new review");
+        work.submit(()->{throw new IllegalStateException("current failure");});worker.drain();ui.drain();
+        check(errors.size()==1,"Current search error was hidden");
+        work.submit(()->new CourseCatalog(fresh).find("",0));worker.drain();work.close();ui.drain();
+        work.submit(()->{throw new IllegalStateException("closed");});worker.drain();ui.drain();
+        check(accepted.size()==1&&errors.size()==1,"Closed merge lookup delivered a result or error");
+    }
     static JSONObject fixture() throws Exception {
         JSONObject state = PlannerTests.empty();
         for (int i = 50; i >= 0; i--) state.getJSONArray("courses").put(
@@ -69,6 +93,22 @@ public final class CourseCatalogTests {
         check(ordered.find("none",CourseCatalog.Scope.ALL,CourseCatalog.Order.PRIORITY,99).pageCount==0,"Empty sorted catalog has pages");
         check(ordered.find("",CourseCatalog.Scope.ALL,CourseCatalog.Order.PRIORITY,99).index==2,"Sorted page did not clamp");
         check(priorityBefore.equals(SyncLedger.canonical(prioritized)),"List sorting changed scheduling data");
+        Set<String> chosen=new HashSet<>(ids);String archived=state.getJSONArray("courses").getJSONObject(51).getString("id");
+        chosen.add(archived);chosen.add("missing");
+        CourseCatalog.Page chosenLast=catalog.findSelected("",chosen,99);
+        check(chosenLast.count==51&&chosenLast.index==2&&chosenLast.rows.size()==11,"Selected-only pages include missing/archive or truncate the selection");
+        check(catalog.findSelected("重点",chosen,0).count==26,"Selected-only view ignored keywords");
+        chosen.clear();chosen.add(first.rows.get(0).id);chosen.add(last.rows.get(10).id);
+        CourseCatalog.Page across=catalog.findSelected("",chosen,1);
+        check(across.count==2&&across.index==0&&across.rows.size()==2,"Selections across distant pages cannot be reviewed together");
+        check(across.rows.get(0).id.equals(first.rows.get(0).id)&&across.rows.get(1).id.equals(last.rows.get(10).id),"Selected-only view changed identities or order");
+        chosen.remove(first.rows.get(0).id);
+        check(catalog.findSelected("",chosen,2).rows.get(0).id.equals(last.rows.get(10).id),"Removing a selected row left stale results");
+        check(across.rows.size()==2,"Earlier page changed with the selection");
+        chosen.clear();check(catalog.findSelected("",chosen,99).pageCount==0,"Empty selection fell back to all courses");
+        check(catalog.find("",0).count==51,"Selected-only filtering changed the full course index");
+        check(SyncLedger.canonical(state).equals(before),"Selection filtering mutated planner data");
+        asynchronousSelectedPages();
         System.out.println("Course catalog: " + checks + " checks passed");
     }
 }
