@@ -20,10 +20,14 @@ final class FixedEventCatalog {
         final String title; Scope(String title) { this.title = title; }
     }
     private static final class Entry {
-        final String id, text; final double start, end; final boolean historical;
+        final String id, text; final double start, end; final boolean historical; final int weekdayMask;
         Entry(JSONObject event, LocalDate today) {
             id = event.optString("id"); start = event.optDouble("startDate"); end = lastRuleDate(event);
             historical = Planner.day(end).isBefore(today);
+            JSONArray weekdays=event.optJSONArray("weekdays");int mask=0;
+            if(weekdays==null||weekdays.length()==0)mask=1<<Planner.weekday(Planner.day(start));
+            else for(int i=0;i<weekdays.length();i++){int day=weekdays.optInt(i);if(day>=1&&day<=7)mask|=1<<day;}
+            weekdayMask=mask;
             text = TaskSearch.normalize(event.optString("title") + " " + event.optString("notes") + " " +
                     Planner.date(start) + " " + Planner.date(end));
         }
@@ -45,11 +49,16 @@ final class FixedEventCatalog {
     // Existing event editors copy this read-only snapshot before changing it.
     JSONObject event(String id) { return events.get(id); }
     Page find(String query, Scope scope, int requestedPage) {
+        return find(query,scope,0,requestedPage);
+    }
+    Page find(String query, Scope scope, int weekday, int requestedPage) {
+        if(weekday<0||weekday>7)throw new IllegalArgumentException("星期筛选应为全部或星期日到星期六。");
         String normalized = TaskSearch.normalize(query);
         String[] terms = normalized.isEmpty() ? new String[0] : normalized.split("\\s+");
         List<Entry> matches = new ArrayList<>();
         for (Entry entry : entries) {
             if (scope == Scope.CURRENT && entry.historical || scope == Scope.HISTORY && !entry.historical) continue;
+            if(weekday!=0&&(entry.weekdayMask&(1<<weekday))==0)continue;
             boolean found = true; for (String term : terms) if (!entry.text.contains(term)) { found = false; break; }
             if (found) matches.add(entry);
         }

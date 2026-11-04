@@ -33,7 +33,7 @@ public class MainActivity extends Activity {
         SyncRead(JSONObject state,String summary){this.state=state;this.summary=summary;}
     }
     String settingsSection="";
-    String courseQuery="",eventQuery="";int coursePage=0,eventPage=0;Runnable closeCatalog;
+    String courseQuery="",eventQuery="";int coursePage=0,eventPage=0,eventWeekday=0;Runnable closeCatalog;
     String eventRecognitionText="";
     FixedEventCatalog.Scope eventScope=FixedEventCatalog.Scope.CURRENT;
     CourseCatalog.Scope courseScope=CourseCatalog.Scope.ALL;
@@ -92,13 +92,14 @@ public class MainActivity extends Activity {
             else if(restoredSettingsDraft!=null)b.putString("studySettingsDraft",restoredSettingsDraft);
         }catch(Exception error){android.util.Log.w("StudyPlanner","Unable to retain settings draft",error);}
         b.putString("courseQuery",courseQuery);b.putString("courseScope",courseScope.name());b.putString("courseOrder",courseOrder.name());b.putInt("coursePage",coursePage);
-        b.putString("eventQuery",eventQuery);b.putString("eventScope",eventScope.name());b.putInt("eventPage",eventPage);
+        b.putString("eventQuery",eventQuery);b.putString("eventScope",eventScope.name());b.putInt("eventPage",eventPage);b.putInt("eventWeekday",eventWeekday);
         b.putString("selected",selected.toString());b.putInt("page",page);b.putString("settingsSection",settingsSection);
         b.putBoolean("calendarExpanded",calendarExpanded);b.putString("month",month.toString());
     }
     private void restoreCatalogNavigation(Bundle saved){
         courseQuery=saved.getString("courseQuery","");eventQuery=saved.getString("eventQuery","");
         coursePage=Math.max(0,saved.getInt("coursePage",0));eventPage=Math.max(0,saved.getInt("eventPage",0));
+        eventWeekday=saved.getInt("eventWeekday",0);if(eventWeekday<0||eventWeekday>7){eventWeekday=0;eventPage=0;}
         // Stable names survive enum reordering; a newer/removed scope falls back.
         try{courseScope=CourseCatalog.Scope.valueOf(saved.getString("courseScope",CourseCatalog.Scope.ALL.name()));}
         catch(IllegalArgumentException ignored){courseScope=CourseCatalog.Scope.ALL;coursePage=0;}

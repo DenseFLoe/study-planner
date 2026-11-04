@@ -12,7 +12,9 @@ final class FixedEventCatalogPanel {
         EditText query = app.field(parent, "搜索事项名称、备注或起止日期（可组合关键词）", app.eventQuery, false);
         FixedEventCatalog.Scope[] scopes = FixedEventCatalog.Scope.values();
         Spinner scope = app.spinner(parent, "查看范围", new String[]{scopes[0].title, scopes[1].title, scopes[2].title}, app.eventScope.ordinal());
+        Spinner weekday=app.spinner(parent,"星期",new String[]{"全部星期","星期日","星期一","星期二","星期三","星期四","星期五","星期六"},app.eventWeekday);
         parent.addView(app.text("历史按日期划分：单次事项看发生日，重复事项看规则结束日；今天仍列在当前范围。筛选不会更改日程。", 12, app.muted));
+        parent.addView(app.text("星期按原定规则筛选；单次事项看实际发生日，临时跳过的日期仍可查到。",12,app.muted));
         parent.addView(app.text("复制为新事项：从日历选中日期或今天开始，不沿用旧跳过日期；保存前可调整并核对冲突。", 12, app.muted));
         TextView count = app.text("正在读取事项…", 12, app.muted); parent.addView(count);
         PlannerUi.Flow top = new PlannerUi.Flow(app), bottom = new PlannerUi.Flow(app); parent.addView(top);
@@ -35,10 +37,10 @@ final class FixedEventCatalogPanel {
         Runnable search = () -> {
             if (pending[0] != null) app.handler.removeCallbacks(pending[0]); work.clear(); result[0] = null;
             rows.removeAllViews(); controls.run(); count.setText("正在读取事项…");
-            String term = app.eventQuery; FixedEventCatalog.Scope range = app.eventScope; int page = app.eventPage;
+            String term = app.eventQuery; FixedEventCatalog.Scope range = app.eventScope; int page = app.eventPage,day=app.eventWeekday;
             pending[0] = () -> work.submit(() -> {
                 if (index[0] == null) index[0] = new FixedEventCatalog(snapshot, today);
-                return index[0].find(term, range, page);
+                return index[0].find(term, range, day, page);
             }); app.handler.postDelayed(pending[0], 200);
         };
         for (int i = 0; i < 2; i++) {
@@ -58,9 +60,15 @@ final class FixedEventCatalogPanel {
             }
             public void onNothingSelected(AdapterView<?> parent) {}
         });
+        weekday.setOnItemSelectedListener(new AdapterView.OnItemSelectedListener(){
+            public void onItemSelected(AdapterView<?> parent,View view,int position,long id){
+                if(app.eventWeekday!=position){app.eventWeekday=position;app.eventPage=0;search.run();}
+            }
+            public void onNothingSelected(AdapterView<?> parent){}
+        });
         top.addView(app.button("清除筛选", () -> {
-            app.eventScope = FixedEventCatalog.Scope.CURRENT; app.eventPage = 0;
-            scope.setSelection(0); query.setText(""); search.run();
+            app.eventScope = FixedEventCatalog.Scope.CURRENT; app.eventPage = 0;app.eventWeekday=0;
+            scope.setSelection(0);weekday.setSelection(0);query.setText("");search.run();
         }));
         search.run();
     }

@@ -63,6 +63,17 @@ public final class FixedEventCatalogTests {
         check(SyncLedger.canonical(legacyState).equals(original),"Display-only repair modified legacy or skipped rule data");
         JSONObject missing=CourseTools.copy(single);missing.remove("weekdays");
         check(FixedEventCatalog.lastRuleDate(missing)==single.getDouble("startDate"),"Legacy absent weekday list is not treated as a one-off");
+        check(catalog.find("",FixedEventCatalog.Scope.ALL,2,2).count==47&&catalog.find("",FixedEventCatalog.Scope.ALL,2,2).ids.size()==7,"Weekday pages truncate matching rules");
+        check(catalog.find("",FixedEventCatalog.Scope.ALL,4,99).pageCount==0,"Non-matching weekday retained old pages");
+        check(catalog.find("ＭＥＥＴＩＮＧ 复习",FixedEventCatalog.Scope.HISTORY,2,0).count==12,"Weekday bypasses query or history scope");
+        check(catalog.find("",FixedEventCatalog.Scope.HISTORY,2,99).index==1,"Weekday result does not clamp the page");
+        check(legacy.find("旧单次",FixedEventCatalog.Scope.HISTORY,2,0).count==1,"Skipped single occurrence was removed from its weekday filter");
+        check(legacy.find("旧单次",FixedEventCatalog.Scope.HISTORY,4,0).count==0,"One-off used today or end date as its weekday");
+        check(legacy.find("",FixedEventCatalog.Scope.CURRENT,4,0).ids.equals(Collections.singletonList(today.getString("id"))),"Wednesday scope lost today's single occurrence");
+        check(legacy.find("",FixedEventCatalog.Scope.CURRENT,2,0).ids.equals(Collections.singletonList(repeating.getString("id"))),"Recurring weekday was replaced by its start or end date");
+        check(legacy.find("",FixedEventCatalog.Scope.ALL,0,0).count==3,"Clearing weekday did not restore all rules");
+        for(int invalid:new int[]{-1,8})try{legacy.find("",FixedEventCatalog.Scope.ALL,invalid,0);throw new AssertionError("Invalid weekday accepted");}catch(IllegalArgumentException expected){checks++;}
+        check(SyncLedger.canonical(legacyState).equals(original),"Weekday filtering modified stored rules");
         System.out.println("Fixed event catalog: " + checks + " checks passed");
     }
 }
