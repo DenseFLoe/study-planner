@@ -17,10 +17,15 @@ enum ScheduleSearch {
     static func matches(query: String, tasks: [ScheduledTask], courses: [Course],
                         scope: ScheduleSearchScope = .all, now: Date = Date(),
                         calendar: Calendar = .current) -> [ScheduledTask] {
-        let terms = query.split(whereSeparator: \.isWhitespace).map(String.init)
+        let terms = query.precomposedStringWithCompatibilityMapping.split(whereSeparator: \.isWhitespace).map(String.init)
         guard !terms.isEmpty else { return [] }
         let coursesByID = Dictionary(courses.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
         let today = calendar.startOfDay(for: now)
+        let dateLabel = DateFormatter()
+        dateLabel.locale = Locale(identifier: "en_US_POSIX")
+        dateLabel.calendar = Calendar(identifier: .gregorian)
+        dateLabel.timeZone = calendar.timeZone
+        dateLabel.dateFormat = "yyyy-MM-dd"
         return tasks.filter { task in
             let course = coursesByID[task.courseID]
             guard course?.isArchived == false || !task.isUnconfirmed else { return false }
@@ -28,7 +33,8 @@ enum ScheduleSearch {
             let upcoming = task.isUnconfirmed && (task.start >= today || task.planningEnd > today)
             if scope == .upcoming && !upcoming { return false }
             if scope == .history && upcoming { return false }
-            let text = [course?.name, task.lessonName].compactMap { $0 }.joined(separator: " ")
+            let text = [course?.name, task.lessonName, dateLabel.string(from: task.start)].compactMap { $0 }
+                .joined(separator: " ").precomposedStringWithCompatibilityMapping
             return terms.allSatisfy { text.localizedStandardContains($0) }
         }.sorted {
             if $0.start != $1.start { return scope == .history ? $0.start > $1.start : $0.start < $1.start }
@@ -67,7 +73,7 @@ struct ScheduleSearchView: View {
             }
             HStack {
                 Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
-                TextField("输入课程或课时名称，例如：简单商品经济", text: $query)
+                TextField("课程、课时或日期（YYYY-MM-DD），可组合关键词", text: $query)
                     .textFieldStyle(.plain)
                     .focused($searchFocused)
                 if !query.isEmpty {
@@ -89,7 +95,7 @@ struct ScheduleSearchView: View {
             let matches = results
             if query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 ContentUnavailableView("查找哪天学这节课", systemImage: "calendar.badge.magnifyingglass",
-                                       description: Text("输入课程或课时名称，点击结果跳转到当天。历史记录可切换到“历史”或“全部”查看。"))
+                                       description: Text("输入课程、课时名称或日期，也可用空格组合关键词。点击结果跳转到当天；历史记录可切换到“历史”或“全部”查看。"))
             } else if matches.isEmpty {
                 ContentUnavailableView("没有找到相关日程", systemImage: "magnifyingglass",
                                        description: Text(scope == .all

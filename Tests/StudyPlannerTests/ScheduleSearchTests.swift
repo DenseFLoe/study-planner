@@ -3,6 +3,30 @@ import StudyCore
 @testable import StudyPlanner
 
 final class ScheduleSearchTests: XCTestCase {
+    func testDateTermsUseLocalGregorianDatesAndComposeWithNormalizedNames() throws {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = try XCTUnwrap(TimeZone(identifier: "Asia/Shanghai"))
+        let midnight = try XCTUnwrap(calendar.date(from: .init(year: 2026, month: 11, day: 4)))
+        let course = Course(name: "Math 高数", totalMinutes: 120, startDate: midnight, deadline: midnight)
+        let before = ScheduledTask(courseID: course.id, start: midnight.addingTimeInterval(-60), durationMinutes: 1, lessonName: "第一课")
+        let after = ScheduledTask(courseID: course.id, start: midnight.addingTimeInterval(60), durationMinutes: 30, lessonName: "第二课")
+        let tasks = [after, before]
+        func search(_ term: String, _ scope: ScheduleSearchScope = .all, _ zone: Calendar) -> [UUID] {
+            ScheduleSearch.matches(query: term, tasks: tasks, courses: [course], scope: scope,
+                                   now: midnight.addingTimeInterval(3600), calendar: zone).map(\.id)
+        }
+        XCTAssertEqual(search("ＭＡＴＨ　２０２６－１１－０４", .upcoming, calendar), [after.id])
+        XCTAssertEqual(search("高数 2026-11-03", .history, calendar), [before.id])
+        XCTAssertEqual(search("2026-11", .all, calendar), [before.id, after.id])
+        XCTAssertTrue(search("第二课 2026-11-03", .all, calendar).isEmpty)
+        var utc = calendar
+        utc.timeZone = try XCTUnwrap(TimeZone(secondsFromGMT: 0))
+        XCTAssertEqual(search("2026-11-03", .all, utc), [before.id, after.id], "Date matching must use the calendar's time zone")
+        var buddhist = Calendar(identifier: .buddhist)
+        buddhist.timeZone = calendar.timeZone
+        XCTAssertEqual(search("2026-11-04", .all, buddhist), [after.id], "ISO date queries remain Gregorian")
+    }
+
     func testScopesSeparatePendingPlansFromHistoryWithStableOrdering() {
         var calendar = Calendar(identifier: .gregorian)
         calendar.timeZone = TimeZone(identifier: "Asia/Shanghai")!
