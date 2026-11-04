@@ -221,6 +221,8 @@ Mac 私钥文件在后台按实际字节数限量读取（最大64KB），严格
 
 Android 首次迁移旧版 `planner-v1.json` 时，按备份相同的64MB上限严格读取 UTF-8，拒绝多余尾部内容及过深嵌套；读取失败不会保存替代日程，原文件保留。合法旧数据仍执行原有迁移，包括早期可学习时段 ID 的兼容处理。
 
+Android 与服务端在读取备份或同步设置时，先检查分钟、星期及已知偏好等级的整数类型；小数、数字字符串与溢出值不会被截断后保存。合法的整数值 JSON 表示（例如 `60.0`、`6e1`）继续兼容，旧版未设置偏好等级的数据仍可读取。
+
 ## 验证
 
 新增 `bash Scripts/test-ci.sh` 统一运行服务端、Swift、Android 及跨语言往返测试，自动准备并校验 JSON-java 依赖。GitHub Actions 在提交和拉取请求时执行同一入口，不上传构建产物。另有独立 Ubuntu 任务先运行 `bash Scripts/test-java-ci.sh`，验证服务端、Android 核心及真实 Android API 编译，再用固定摘要的官方 Swift 6.0.3 容器运行全部 `StudyCoreTests` 并读取 Android 生成的样本；该任务无需等 macOS 执行器。完整 Swift、SwiftData、界面与跨语言往返检查仍在原 macOS 任务运行。需要真实手机、SSH 服务器或真实网站的测试仍须单独准备环境，不代表真机验收。
