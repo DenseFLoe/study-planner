@@ -76,6 +76,26 @@ public final class PlannerBackupFileTests {
         current.getJSONArray("courses").getJSONObject(0).put("name", "之后的更改");
         check(file.state().getJSONArray("courses").getJSONObject(0).getString("name").equals("恢复后的课程"), "Restore aliased backup state");
     }
+    static void legacyStartupIntegrity() throws Exception {
+        JSONObject original = fixture();
+        original.put("futureLocalMetadata", new JSONObject().put("note", "保留字段"));
+        String json = original.toString(); byte[] bytes = json.getBytes(StandardCharsets.UTF_8);
+        JSONObject loaded = PlannerBackupFile.readLegacyState(new ByteArrayInputStream(bytes), bytes.length);
+        check(SyncLedger.canonical(loaded).equals(SyncLedger.canonical(original)), "Startup discarded legacy fields or progress");
+        rejected(() -> PlannerBackupFile.readLegacyState(new ByteArrayInputStream(bytes), bytes.length - 1));
+        rejected(() -> PlannerBackupFile.readLegacyState(new ByteArrayInputStream((json + " {}").getBytes(StandardCharsets.UTF_8))));
+        byte[] damaged = json.replace("保留字段", "BAD").getBytes(StandardCharsets.UTF_8);
+        for (int i = 0; i + 2 < damaged.length; i++) if (damaged[i] == 'B' && damaged[i + 1] == 'A' && damaged[i + 2] == 'D') { damaged[i] = (byte)0xff; break; }
+        rejected(() -> PlannerBackupFile.readLegacyState(new ByteArrayInputStream(damaged)));
+        rejected(() -> PlannerBackupFile.readLegacyState(new ByteArrayInputStream(encoded(PlannerBackupFile.create(original, NOW)).getBytes(StandardCharsets.UTF_8))));
+        JSONObject old = fixture(); old.getJSONObject("settings").getJSONArray("availability").put(new JSONObject()
+            .put("id", "default-availability-1").put("weekday", 1).put("startMinute", 480).put("endMinute", 1380));
+        loaded = PlannerBackupFile.readLegacyState(new ByteArrayInputStream(old.toString().getBytes(StandardCharsets.UTF_8)));
+        check(Planner.canonicalID(loaded.getJSONObject("settings").getJSONArray("availability").getJSONObject(0).getString("id")), "Existing availability migration was skipped");
+        class Closed extends ByteArrayInputStream { boolean closed; Closed(byte[] value) { super(value); } public void close() { closed = true; } }
+        Closed success = new Closed(bytes); PlannerBackupFile.readLegacyState(success); check(success.closed, "Startup stream not closed");
+        Closed failure = new Closed(damaged); rejected(() -> PlannerBackupFile.readLegacyState(failure)); check(failure.closed, "Failed startup stream not closed");
+    }
     static void wireFixtures() throws Exception {
         String directory = System.getenv("STUDY_CLOUD_FIXTURE_DIR"); if (directory == null) return;
         Path folder = Paths.get(directory);
@@ -84,7 +104,7 @@ public final class PlannerBackupFileTests {
         PlannerBackupFile.create(fixture(), NOW).write(Files.newOutputStream(folder.resolve("android-file-backup.json")));
     }
     public static void main(String[] args) throws Exception {
-        formatsAndIsolation(); invalidFiles(); restoreReview(); wireFixtures();
+        formatsAndIsolation(); invalidFiles(); restoreReview(); legacyStartupIntegrity(); wireFixtures();
         System.out.println("PlannerBackupFileTests: " + checks + " checks passed");
     }
 }

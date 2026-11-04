@@ -72,7 +72,7 @@ public class MainActivity extends Activity {
             JSONObject loaded;
             synchronized(database){
             if(database.initialized())loaded=database.load();
-            else{if(storage.getBaseFile().exists()||new File(storage.getBaseFile()+".bak").exists())loaded=new JSONObject(read(storage.openRead()));else loaded=new JSONObject(read(getAssets().open("initial-state.json")));}
+            else{if(storage.getBaseFile().exists()||new File(storage.getBaseFile()+".bak").exists())loaded=PlannerBackupFile.readLegacyState(storage.openRead());else loaded=PlannerBackupFile.readLegacyState(getAssets().open("initial-state.json"));}
             Planner.prepareForOpen(loaded,Planner.now());database.save(loaded);
             }
             JSONObject finalState=loaded;String summary=syncSummary(database.metadata());runOnUiThread(()->{if(isDestroyed())return;state=finalState;syncSummary=summary;ready=true;render();resumeSyncRefresh();handler.postDelayed(ticker,1000);syncServer.start(false,false);CloudSync.get(this).start();});

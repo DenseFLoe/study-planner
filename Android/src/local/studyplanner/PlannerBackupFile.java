@@ -32,6 +32,26 @@ public final class PlannerBackupFile {
 
     public static PlannerBackupFile read(InputStream input) throws Exception { return read(input, MAX_BYTES); }
     static PlannerBackupFile read(InputStream input, long maximum) throws Exception {
+        JSONObject value = readObject(input, maximum);
+        if (value.has("format") || value.has("state")) {
+            if (Planner.exactProgressInteger(value.opt("format")) != 1 || !CloudSnapshot.validID(value.getString("id")) ||
+                    !(value.get("createdAt") instanceof Number) || !Double.isFinite(value.getDouble("createdAt")) || !(value.get("reason") instanceof String))
+                throw new IllegalArgumentException("不支持此备份格式或备份信息不完整");
+            value.put("state", businessState(value.getJSONObject("state")));
+            return new PlannerBackupFile(value, false);
+        }
+        return new PlannerBackupFile(new JSONObject().put("state", businessState(value)), true);
+    }
+
+    /** Startup migration keeps all legacy fields until the existing open migration runs. */
+    public static JSONObject readLegacyState(InputStream input) throws Exception { return readLegacyState(input, MAX_BYTES); }
+    static JSONObject readLegacyState(InputStream input, long maximum) throws Exception {
+        JSONObject value = readObject(input, maximum);
+        Planner.validate(value);
+        return value;
+    }
+
+    private static JSONObject readObject(InputStream input, long maximum) throws Exception {
         if (input == null) throw new IOException("无法打开备份文件");
         StringBuilder text = new StringBuilder(); int depth = 0; boolean quoted = false, escaped = false;
         try (Reader reader = new BufferedReader(new InputStreamReader(new CloudSnapshot.LimitedInput(input, maximum),
@@ -50,14 +70,7 @@ public final class PlannerBackupFile {
         }
         JSONTokener tokens = new JSONTokener(text.toString()); JSONObject value = new JSONObject(tokens);
         if (tokens.nextClean() != 0) throw new IOException("备份文件含有多余内容");
-        if (value.has("format") || value.has("state")) {
-            if (Planner.exactProgressInteger(value.opt("format")) != 1 || !CloudSnapshot.validID(value.getString("id")) ||
-                    !(value.get("createdAt") instanceof Number) || !Double.isFinite(value.getDouble("createdAt")) || !(value.get("reason") instanceof String))
-                throw new IllegalArgumentException("不支持此备份格式或备份信息不完整");
-            value.put("state", businessState(value.getJSONObject("state")));
-            return new PlannerBackupFile(value, false);
-        }
-        return new PlannerBackupFile(new JSONObject().put("state", businessState(value)), true);
+        return value;
     }
 
     public void write(OutputStream output) throws Exception {
