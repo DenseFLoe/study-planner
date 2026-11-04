@@ -80,7 +80,9 @@ final class PlannerFeatures {
  void lessonOrder(JSONObject course){app.run(()->{
   List<JSONObject> lessons=CourseTools.lessons(course);if(lessons.isEmpty())throw new IllegalArgumentException("这门课程没有可管理的独立课节。");
   Map<String,String> names=new LinkedHashMap<>();for(JSONObject l:lessons)names.put(l.getString("id"),l.getString("name"));
-  List<String> order=CourseTools.order(course);Set<String> selected=new HashSet<>(),deleted=new HashSet<>(),movable=new HashSet<>();for(Planner.Work w:Planner.lessonWork(app.state,course))movable.add(w.lessonID);
+  LessonOrderDraft draft=new LessonOrderDraft(app.state,course.getString("id"));
+  boolean[] followWebsite={false};
+  List<String> order=draft.originalOrder();Set<String> selected=new HashSet<>(),deleted=new HashSet<>(),movable=new HashSet<>();for(Planner.Work w:Planner.lessonWork(app.state,course))movable.add(w.lessonID);
   LinearLayout form=app.col(),rows=app.col();form.addView(app.text("多选课节可移动或删除。删除在保存后生效，清除所选课节的安排和完成记录；请至少保留一节。",13,app.muted));
   TextView summary=app.text("",13,app.muted);form.addView(summary);
   ScrollView scroll=new ScrollView(app);scroll.addView(rows);form.addView(scroll,new LinearLayout.LayoutParams(-1,app.dp(280)));EditText target=app.field(form,"插入到第几节之前（课节数 + 1 为末尾）","1",true);
@@ -88,18 +90,22 @@ final class PlannerFeatures {
   PlannerUi.Flow actions=new PlannerUi.Flow(app);form.addView(actions);
   actions.addView(app.button("删除所选课节",()->app.run(()->{
    if(selected.isEmpty())throw new IllegalArgumentException("请先选择要删除的课节。");Set<String> next=new HashSet<>(deleted);next.addAll(selected);
-   JSONObject check=CourseTools.copy(app.state);CourseTools.removeLessons(check,course.getString("id"),next);
+   List<String> retained=new ArrayList<>(order);retained.removeIf(next::contains);
+   JSONObject check=CourseTools.copy(app.state);draft.apply(check,retained,next,followWebsite[0]);
    new AlertDialog.Builder(app).setTitle("删除所选的 "+selected.size()+" 节课？").setMessage("保存后将删除这些课节的全部安排和完成记录，重算总量并保留其余课节。取消或关闭窗口不会保存删除。").setNegativeButton("取消",null).setPositiveButton("删除所选课节",(d,w)->{deleted.clear();deleted.addAll(next);order.removeIf(deleted::contains);selected.clear();refresh.run();}).show();
   })));
-  for(int position:new int[]{0,1,2}){String label=new String[]{"移到最前","移到最后","移动所选课节"}[position];actions.addView(app.button(label,()->app.run(()->{int at=position==0?0:position==1?order.size():app.integer(target)-1;if(at<0||at>order.size()||selected.isEmpty())throw new IllegalArgumentException("请选择课节并填写有效序号。");List<String> moved=app.movedLessons(order,selected,at);order.clear();order.addAll(moved);refresh.run();})));}
-  actions.addView(app.button("智能排序",()->{order.clear();for(JSONObject l:CourseTools.intelligent(lessons))if(!deleted.contains(l.optString("id")))order.add(l.optString("id"));refresh.run();}));
-  JSONObject web=course.optJSONObject("webCourse");if(web!=null)actions.addView(app.button("按网站顺序",()->{order.clear();for(JSONObject l:lessons)if(!deleted.contains(l.optString("id")))order.add(l.optString("id"));refresh.run();}));
-  actions.addView(app.button("编排预览",()->app.run(()->{JSONObject draft=CourseTools.copy(app.state);if(!deleted.isEmpty())CourseTools.removeLessons(draft,course.getString("id"),deleted);JSONObject current=Planner.course(draft,course.getString("id"));current.put("lessonOrder",new JSONArray(order));preview(draft,current);})));
-  AlertDialog dialog=app.editor("调整课节顺序与删除",form);dialog.setOnShowListener(v->{dialog.getButton(-1).setText("保存并重新排程");dialog.getButton(-1).setOnClickListener(x->app.mutate(s->{
-   if(!deleted.isEmpty())CourseTools.removeLessons(s,course.getString("id"),deleted);JSONObject current=Planner.course(s,course.getString("id"));if(current==null)throw new IllegalArgumentException("课程已删除，请刷新。");List<String> website=sourceOrder(lessons);website.removeIf(deleted::contains);boolean follows=web!=null&&order.equals(website);current.put("lessonOrder",new JSONArray(order)).put("lessonOrderCustomized",!follows);
-  },true,dialog::dismiss));});dialog.show();
+  for(int position:new int[]{0,1,2}){String label=new String[]{"移到最前","移到最后","移动所选课节"}[position];actions.addView(app.button(label,()->app.run(()->{int at=position==0?0:position==1?order.size():app.integer(target)-1;if(at<0||at>order.size()||selected.isEmpty())throw new IllegalArgumentException("请选择课节并填写有效序号。");List<String> moved=app.movedLessons(order,selected,at);order.clear();order.addAll(moved);followWebsite[0]=false;refresh.run();})));}
+  actions.addView(app.button("智能排序",()->{followWebsite[0]=false;order.clear();for(JSONObject l:CourseTools.intelligent(lessons))if(!deleted.contains(l.optString("id")))order.add(l.optString("id"));refresh.run();}));
+  JSONObject web=course.optJSONObject("webCourse");if(web!=null)actions.addView(app.button("按网站顺序",()->{followWebsite[0]=true;order.clear();for(JSONObject l:lessons)if(!deleted.contains(l.optString("id")))order.add(l.optString("id"));refresh.run();}));
+  actions.addView(app.button("编排预览",()->app.run(()->{JSONObject previewState=CourseTools.copy(app.state);draft.apply(previewState,order,deleted,followWebsite[0]);preview(previewState,Planner.course(previewState,course.getString("id")));})));
+  AlertDialog dialog=app.editor("调整课节顺序与删除",form);dialog.setOnShowListener(v->{
+   dialog.getButton(-1).setText("保存并重新排程");
+   dialog.getButton(-1).setOnClickListener(x->{
+    List<String> savedOrder=new ArrayList<>(order);Set<String> savedDeleted=new HashSet<>(deleted);boolean savedFollow=followWebsite[0];
+    app.mutate(s->draft.apply(s,savedOrder,savedDeleted,savedFollow),true,dialog::dismiss);
+   });
+  });dialog.show();
  });}
- static List<String> sourceOrder(List<JSONObject> lessons){List<String> ids=new ArrayList<>();for(JSONObject l:lessons)ids.add(l.optString("id"));return ids;}
  void taskDrag(LinearLayout box,PlannerUi.Flow actions,JSONObject task){if(!Planner.pending(task)||Planner.day(task.optDouble("start")).isBefore(Planner.day(Planner.now())))return;String id=task.optString("id");box.setContentDescription("长按交换 "+task.optString("lessonName",Planner.course(app.state,task.optString("courseID")).optString("name")));box.setOnLongClickListener(view->{if(app.busy)return false;return view.startDragAndDrop(ClipData.newPlainText("daily-task",id),new View.DragShadowBuilder(view),id,0);});box.setOnDragListener((view,event)->{Object local=event.getLocalState();if(!(local instanceof String)||id.equals(local))return false;JSONObject source=null;for(JSONObject t:Planner.list(app.state.optJSONArray("tasks")))if(t.optString("id").equals(local))source=t;if(source==null||!Planner.pending(source)||!Planner.day(source.optDouble("start")).equals(Planner.day(task.optDouble("start"))))return false;
    switch(event.getAction()){case DragEvent.ACTION_DRAG_STARTED:return true;case DragEvent.ACTION_DRAG_ENTERED:box.setAlpha(.65f);return true;case DragEvent.ACTION_DRAG_EXITED:case DragEvent.ACTION_DRAG_ENDED:box.setAlpha(1);return true;case DragEvent.ACTION_DROP:box.setAlpha(1);app.swapDailyTasks((String)local,id);return true;default:return true;}});
   actions.addView(app.taskAction("交换顺序",()->app.run(()->{List<JSONObject> targets=new ArrayList<>();for(JSONObject other:Planner.list(app.state.getJSONArray("tasks")))if(Planner.pending(other)&&!other.getString("id").equals(id)&&Planner.day(other.getDouble("start")).equals(Planner.day(task.getDouble("start"))))targets.add(other);if(targets.isEmpty())throw new IllegalArgumentException("当天没有其他未确认学习板块。");String[] labels=new String[targets.size()];for(int i=0;i<labels.length;i++){JSONObject t=targets.get(i),c=Planner.course(app.state,t.getString("courseID"));labels[i]=Planner.clock(t.getDouble("start"))+" · "+t.optString("lessonName",c.optString("name"));}new AlertDialog.Builder(app).setTitle("选择要交换的学习板块").setItems(labels,(dialog,index)->app.swapDailyTasks(id,targets.get(index).optString("id"))).setNegativeButton("取消",null).show();})));
