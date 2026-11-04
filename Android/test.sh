@@ -149,3 +149,6 @@ mkdir -p Android/build/controller-tests
 
 "$JDK/bin/javac" --release 8 -encoding UTF-8 -d Android/build/tests Android/src/local/studyplanner/CloudSSHConfig.java Android/tests/SSHKeyImportTests.java
 "$JDK/bin/java" -cp Android/build/tests local.studyplanner.SSHKeyImportTests
+
+"$JDK/bin/javac" --release 8 -encoding UTF-8 -d Android/build/tests Android/src/local/studyplanner/CloudOperationGate.java Android/tests/CloudOperationGateTests.java
+"$JDK/bin/java" -cp Android/build/tests local.studyplanner.CloudOperationGateTests

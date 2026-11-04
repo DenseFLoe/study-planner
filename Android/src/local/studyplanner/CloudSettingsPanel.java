@@ -112,17 +112,34 @@ final class CloudSettingsPanel {
     }
     void save()throws Exception{
         if(reading)throw new Exception("正在读取指纹，请稍后保存");
-        if(CloudSync.get(app).isRunning())throw new Exception("正在同步，请完成后再修改服务器配置");
-        if("ssh".equals(method)){
-            if(enabled.isChecked()&&!trusted.isChecked())throw new Exception("请先向服务器主人核对指纹，再勾选确认");
-            CloudSettings.saveSSH(app,app.value(host),app.value(port),app.value(user),app.value(fingerprint),importedKey,app.value(passphrase),app.value(sshToken),enabled.isChecked());
-            if(enabled.isChecked()){importedKey="";keyLabel.setText("已安全保存私钥");}
-        }else CloudSettings.save(app,app.value(endpoint),app.value(httpsToken),enabled.isChecked());
-        httpsToken.setText("");sshToken.setText("");passphrase.setText("");
-        app.worker.execute(()->{try{
-            synchronized(app.database){SyncLedger ledger=app.database.ledger();ledger.value.remove("cloudProgress");app.database.commit(ledger,false);}
-            app.runOnUiThread(()->{if(app.cloudLabel!=null)app.cloudLabel.setText(CloudSettings.enabled(app)?"配置已保存，准备同步":"云同步已暂停，待上传文件已保留");});
-            CloudSync.get(app).start();
-        }catch(Exception e){app.runOnUiThread(()->app.alert("云同步配置","配置已保存，重置同步状态失败，请重试"));}});
+        final boolean ssh="ssh".equals(method),activate=enabled.isChecked();
+        if(ssh&&activate&&!trusted.isChecked())throw new Exception("请先向服务器主人核对指纹，再勾选确认");
+        // Read widgets on the UI thread; credentials stay only in memory until the secure save.
+        final String targetHost=app.value(host),targetPort=app.value(port),targetUser=app.value(user),pin=app.value(fingerprint);
+        final String key=importedKey,password=app.value(passphrase),serviceToken=app.value(ssh?sshToken:httpsToken),url=app.value(endpoint);
+        CloudSync sync=CloudSync.get(app);
+        if(!sync.beginConfiguration())throw new Exception("正在同步或保存配置，请完成后再修改服务器配置");
+        app.busy=true;ProgressDialog progress=ProgressDialog.show(app,"","正在保存云同步配置…",true,false);
+        app.worker.execute(()->{
+            boolean persisted=false,complete=false;String problem=null;
+            try{
+                if(ssh)CloudSettings.saveSSH(app,targetHost,targetPort,targetUser,pin,key,password,serviceToken,activate);
+                else CloudSettings.save(app,url,serviceToken,activate);
+                persisted=true;
+                synchronized(app.database){SyncLedger ledger=app.database.ledger();ledger.value.remove("cloudProgress");app.database.commit(ledger,false);}
+                complete=true;
+            }catch(Exception error){problem=persisted?"配置已保存，但重置同步状态失败，请重试保存。":"配置未完整保存，请检查输入后重试。\n"+error.getMessage();}
+            try{sync.finishConfiguration(complete);}catch(Exception error){problem="配置已保存，但未能启动自动同步，请重新打开云同步设置后重试。";}
+            final boolean saved=complete;final String failure=problem;
+            app.runOnUiThread(()->{app.busy=false;progress.dismiss();if(app.isDestroyed())return;
+                if(saved&&app.cloudPanel==this){
+                    if(ssh&&activate){importedKey="";keyLabel.setText("已安全保存私钥");}
+                    httpsToken.setText("");sshToken.setText("");passphrase.setText("");
+                }
+                if(failure!=null)app.alert("云同步配置",failure);
+                if(app.cloudLabel!=null)app.cloudLabel.setText(saved?CloudSync.summary(app):"配置保存未完成，请核对后重试");
+                app.resumeSyncRefresh();
+            });
+        });
     }
 }

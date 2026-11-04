@@ -19,11 +19,25 @@ final class CloudSync {
     private static CloudSync instance;
     final Context context;final PlannerDatabase database;
     final ScheduledExecutorService network=Executors.newSingleThreadScheduledExecutor(r->new Thread(r,"planner-cloud"));
-    boolean running=false,again=false,monitoring=false;int failures=0;ScheduledFuture<?> retry;
+    final CloudOperationGate gate=new CloudOperationGate();
+    boolean again=false,monitoring=false;int failures=0;ScheduledFuture<?> retry;
     final List<Consumer<Boolean>> callbacks=new ArrayList<>();
     private CloudSync(Context c){context=c.getApplicationContext();database=PlannerRuntime.get(context).database;}
     static synchronized CloudSync get(Context c){if(instance==null)instance=new CloudSync(c);return instance;}
-    synchronized boolean isRunning(){return running;}
+    synchronized boolean isRunning(){return gate.isActive(CloudOperationGate.Operation.SYNC);}
+    synchronized boolean beginConfiguration(){return gate.begin(CloudOperationGate.Operation.CONFIGURATION);}
+    synchronized void finishConfiguration(boolean success){
+        gate.finish(CloudOperationGate.Operation.CONFIGURATION);again=false;
+        if(success){
+            failures=0;if(retry!=null){retry.cancel(false);retry=null;}
+            if(!CloudSettings.enabled(context))status("云同步已暂停，待上传文件已保留");
+        }
+        if(!success||!CloudSettings.enabled(context)){
+            List<Consumer<Boolean>> done=new ArrayList<>(callbacks);callbacks.clear();
+            for(Consumer<Boolean> callback:done)new Handler(Looper.getMainLooper()).post(()->callback.accept(success));
+        }
+        if(success)start();
+    }
     static File outbox(Context c){return new File(c.getFilesDir(),"cloud-outbox");}
     static void enqueue(Context c,SyncLedger ledger)throws Exception{
         File directory=outbox(c);if(!directory.isDirectory()&&!directory.mkdirs())throw new IOException("无法创建待上传目录");
@@ -45,9 +59,12 @@ final class CloudSync {
         request(null);
     }
     synchronized void request(Consumer<Boolean> completion){
+        if(gate.isActive(CloudOperationGate.Operation.CONFIGURATION)){
+            if(completion!=null)callbacks.add(completion);return;
+        }
         if(!CloudSettings.enabled(context)){if(completion!=null)completion.accept(true);return;}
         if(completion!=null)callbacks.add(completion);
-        if(running){again=true;return;}running=true;status("正在同步完整课表…");
+        if(!gate.begin(CloudOperationGate.Operation.SYNC)){again=true;return;}status("正在同步完整课表…");
         network.execute(()->{
             boolean success=false;
             try{sync();success=true;failures=0;synchronized(this){if(retry!=null){retry.cancel(false);retry=null;}}}catch(Exception e){
@@ -55,7 +72,7 @@ final class CloudSync {
                 synchronized(this){if(retry!=null)retry.cancel(false);long delay=Math.min(1800,30L<<Math.min(failures++,6));retry=network.schedule(()->request(null),delay,TimeUnit.SECONDS);}
             }
             List<Consumer<Boolean>> done;boolean repeat;
-            synchronized(this){running=false;repeat=again;again=false;done=new ArrayList<>(callbacks);callbacks.clear();}
+            synchronized(this){gate.finish(CloudOperationGate.Operation.SYNC);repeat=again;again=false;done=new ArrayList<>(callbacks);callbacks.clear();}
             context.sendBroadcast(new Intent(ACTION).setPackage(context.getPackageName()));
             final boolean ok=success;for(Consumer<Boolean> callback:done)new Handler(Looper.getMainLooper()).post(()->callback.accept(ok));
             if(repeat)request(null);
