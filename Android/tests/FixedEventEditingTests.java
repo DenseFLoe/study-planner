@@ -92,8 +92,55 @@ public final class FixedEventEditingTests {
         reordered.put("weekdays", new JSONArray().put(7).put(6).put(5).put(4).put(3).put(2).put(1));
         check(FixedEventEditing.schedulingInputs(simple).equals(FixedEventEditing.schedulingInputs(reordered)), "Weekday set order caused a false conflict");
     }
+    static void guardedRemoval() throws Exception {
+        for (String change : new String[]{"title", "notes", "window", "excluded", "removed"}) {
+            JSONObject baseline = event("原事项", 540, 600), state = PlannerTests.empty(), current = CourseTools.copy(baseline);
+            state.getJSONArray("fixedEvents").put(current);
+            if (change.equals("title") || change.equals("notes")) current.put(change, "同步变更");
+            if (change.equals("window")) current.put("endMinute", 630);
+            if (change.equals("excluded")) current.getJSONArray("excludedDates").put(Planner.at(DAY.plusDays(2), 0));
+            if (change.equals("removed")) state.getJSONArray("fixedEvents").remove(0);
+            rejected(state, () -> FixedEventEditing.removeFuture(state, baseline, NOW), "Stale future removal accepted");
+        }
+        for (int minute : new int[]{480, 570}) {
+            JSONObject baseline = event("保留历史", 540, 600).put("startDate", Planner.at(DAY.minusDays(7), 0));
+            JSONObject state = PlannerTests.empty(), current = CourseTools.copy(baseline);
+            current.put("weekdays", new JSONArray().put(7).put(6).put(5).put(4).put(3).put(2).put(1));
+            state.getJSONArray("fixedEvents").put(current);
+            FixedEventEditing.removeFuture(state, baseline, Planner.at(DAY, minute));
+            check(Planner.occurs(current, DAY.minusDays(1)), "Future removal erased history");
+            check(Planner.occurs(current, DAY) == (minute >= 540), "Started occurrence was not preserved");
+            check(!Planner.occurs(current, DAY.plusDays(1)), "Future occurrence survived removal");
+        }
+    }
+    static void guardedOccurrence() throws Exception {
+        for (String change : new String[]{"title", "window", "floating", "excluded", "date", "removed"}) {
+            JSONObject baseline = event("本日安排", 540, 600), state = PlannerTests.empty(), current = CourseTools.copy(baseline);
+            state.getJSONArray("fixedEvents").put(current);
+            if (change.equals("title")) current.put("title", "另一件事项");
+            if (change.equals("window")) current.put("endMinute", 630);
+            if (change.equals("floating")) current.put("floatingDurationMinutes", 30);
+            if (change.equals("excluded")) current.getJSONArray("excludedDates").put(Planner.at(DAY, 0));
+            if (change.equals("date")) current.put("startDate", Planner.at(DAY.plusDays(1), 0));
+            if (change.equals("removed")) state.getJSONArray("fixedEvents").remove(0);
+            rejected(state, () -> FixedEventEditing.setSkipped(state, baseline, DAY, true, NOW), "Stale single-day operation accepted");
+        }
+        JSONObject baseline = event("本日安排", 540, 600), state = PlannerTests.empty(), current = CourseTools.copy(baseline);
+        state.getJSONArray("fixedEvents").put(current);
+        current.put("notes", "新备注").put("color", "blue").put("endDate", Planner.at(DAY.plusDays(9), 0));
+        current.getJSONArray("excludedDates").put(Planner.at(DAY.plusDays(1), 0));
+        FixedEventEditing.setSkipped(state, baseline, DAY, true, NOW);
+        check(!Planner.occurs(current, DAY) && !Planner.occurs(current, DAY.plusDays(1)), "Single-day skip changed other exclusions");
+        check(current.getString("notes").equals("新备注") && current.getString("color").equals("blue"), "Single-day skip lost new metadata");
+        JSONObject skipped = CourseTools.copy(current);
+        state.getJSONArray("fixedEvents").put(event("新增冲突", 550, 580));
+        rejected(state, () -> FixedEventEditing.setSkipped(state, skipped, DAY, false, NOW), "Restore bypassed current conflict validation");
+        state.getJSONArray("fixedEvents").remove(1);
+        FixedEventEditing.setSkipped(state, skipped, DAY, false, NOW);
+        check(Planner.occurs(current, DAY) && !Planner.occurs(current, DAY.plusDays(1)), "Restore changed another day");
+    }
     public static void main(String[] args) throws Exception {
-        metadataAndRuleConflicts(); changedReview(); reviewedChoicesAndIsolation(); splitRetryAndEquivalentRules();
+        metadataAndRuleConflicts(); changedReview(); reviewedChoicesAndIsolation(); splitRetryAndEquivalentRules(); guardedRemoval(); guardedOccurrence();
         System.out.println("FixedEventEditingTests: " + checks + " checks passed");
     }
 }

@@ -22,6 +22,36 @@ public final class FixedEventEditing {
         return new IllegalArgumentException("这条固定事项在编辑期间已有其他修改，与当前草稿冲突。草稿仍保留，最新数据未被覆盖，请重新打开事项后编辑。");
     }
 
+    private static JSONObject current(JSONObject state, JSONObject baseline) throws Exception {
+        if (baseline != null) for (JSONObject event : Planner.list(state.getJSONArray("fixedEvents")))
+            if (event.getString("id").equals(baseline.getString("id"))) return event;
+        throw new IllegalArgumentException("这条固定事项已不存在，请刷新日程后重试。");
+    }
+
+    public static void removeFuture(JSONObject state, JSONObject baseline, double now) throws Exception {
+        JSONObject latest = current(state, baseline);
+        boolean changed = !schedulingInputs(baseline).equals(schedulingInputs(latest));
+        for (String key : new String[]{"title", "notes", "color"})
+            changed |= !baseline.optString(key, key.equals("color") ? "orange" : "").equals(latest.optString(key, key.equals("color") ? "orange" : ""));
+        if (changed) throw new IllegalArgumentException("这条固定事项已更新，未删除未来安排。请重新打开事项核对后再删除。");
+        Planner.removeEvent(state, latest.getString("id"), now);
+    }
+
+    private static String occurrence(JSONObject event, LocalDate date) throws Exception {
+        return SyncLedger.canonical(new JSONArray().put(event.getString("id")).put(event.optString("title"))
+            .put(event.getInt("startMinute")).put(event.getInt("endMinute"))
+            .put(Planner.floating(event)).put(Planner.occupied(event))
+            .put(Planner.occurs(event, date, true)).put(Planner.occurs(event, date)));
+    }
+
+    public static void setSkipped(JSONObject state, JSONObject displayed, LocalDate date, boolean skipped, double now) throws Exception {
+        JSONObject latest = current(state, displayed);
+        // Only this occurrence was reviewed; other days and notes can change independently.
+        if (!occurrence(displayed, date).equals(occurrence(latest, date)))
+            throw new IllegalArgumentException("这一天的固定事项已有变化，未执行移除或恢复。请刷新日程并核对后重试。");
+        Planner.setEventSkipped(state, latest.getString("id"), date, skipped, now);
+    }
+
     static String schedulingInputs(JSONObject event) throws Exception {
         JSONObject value = CourseTools.copy(event);
         for (String key : new String[]{"title", "notes", "color"}) value.remove(key);
