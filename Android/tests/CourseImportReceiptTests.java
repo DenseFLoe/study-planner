@@ -66,9 +66,26 @@ public final class CourseImportReceiptTests {
         }
         Files.delete(unrelated);
     }
+    static void atomicStaging(Path directory) throws Exception {
+        JSONObject capture = LessonDeletionTests.snapshot(NOW, "a", "b").put("accessToken", "synthetic-private-field");
+        capture.put("name", "中文课程 😀"); String original = capture.toString();
+        File file = CourseImportReceipt.stage(directory.toFile(), Collections.singletonList(capture), Planner.at(DAY.plusDays(7), 0));
+        String saved = new String(Files.readAllBytes(file.toPath()), StandardCharsets.UTF_8);
+        check(saved.contains("中文课程 😀") && !saved.contains("synthetic-private-field"), "Staging changed Unicode or retained unapproved capture fields");
+        check(original.equals(capture.toString()), "Staging mutated selected capture");
+        check(CourseImportReceipt.pending(directory.toFile()).size() == 1, "Complete staged file not available for import");
+        byte[] before = Files.readAllBytes(file.toPath());
+        try { CourseImportReceipt.stage(directory.toFile(), Collections.singletonList(capture), NOW, 32); throw new AssertionError("Oversized output accepted"); }
+        catch (IOException expected) { check(Arrays.equals(before, Files.readAllBytes(file.toPath())), "Failed stage overwrote a completed capture"); }
+        try (Stream<Path> files = Files.list(directory)) { check(files.count() == 1, "Failed stage leaked a partial import or temporary file"); }
+        try { CourseImportReceipt.stage(directory.toFile(), Collections.emptyList(), NOW); throw new AssertionError("Empty capture staged"); }
+        catch (IllegalArgumentException expected) { check(CourseImportReceipt.pending(directory.toFile()).size() == 1, "Empty capture produced a pending file"); }
+        Store store = new Store(); CourseImportReceipt.Result imported = new CourseImportReceipt(directory.toFile(), file.getAbsolutePath()).commit(store, () -> NOW);
+        check(imported.removed && store.value.getJSONArray("courses").getJSONObject(0).getString("name").equals("中文课程 😀"), "Staged capture did not round-trip into planner");
+    }
     public static void main(String[] args) throws Exception {
         Path directory = Files.createTempDirectory("study-import-receipt-");
-        try { successfulRetry(directory); invalidPayloads(directory); pathScope(directory); }
+        try { successfulRetry(directory); invalidPayloads(directory); pathScope(directory); atomicStaging(directory); }
         finally { try (Stream<Path> files = Files.walk(directory)) { for (Path path : (Iterable<Path>)files.sorted(Comparator.reverseOrder())::iterator) Files.deleteIfExists(path); } }
         System.out.println("CourseImportReceiptTests: " + checks + " checks passed");
     }

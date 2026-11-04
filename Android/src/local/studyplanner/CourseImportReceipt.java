@@ -3,6 +3,7 @@ package local.studyplanner;
 import org.json.*;
 import java.io.*;
 import java.nio.charset.*;
+import java.nio.file.*;
 import java.util.*;
 import java.util.function.DoubleSupplier;
 
@@ -21,6 +22,32 @@ final class CourseImportReceipt {
         File[] files = cache.listFiles(file -> file.isFile() && validName(file.getName()));
         List<File> result = files == null ? new ArrayList<>() : new ArrayList<>(Arrays.asList(files));
         result.sort(Comparator.comparingLong(File::lastModified).reversed().thenComparing(File::getName)); return result;
+    }
+    static File stage(File cache, List<JSONObject> captures, double deadline) throws Exception {
+        return stage(cache, captures, deadline, MAX_BYTES);
+    }
+    static File stage(File cache, List<JSONObject> captures, double deadline, long limit) throws Exception {
+        if (captures.isEmpty()) throw new IllegalArgumentException("请先选择课程。");
+        JSONArray clean = new JSONArray(); for (JSONObject capture : captures) clean.put(WebCourseImport.cleanCapture(capture));
+        JSONObject payload = new JSONObject().put("snapshots", clean).put("deadline", deadline);
+        File temporary = File.createTempFile("course-import-", ".tmp", cache);
+        try {
+            temporary.setReadable(false, false); temporary.setWritable(false, false);
+            temporary.setReadable(true, true); temporary.setWritable(true, true);
+            try (FileOutputStream bytes = new FileOutputStream(temporary)) {
+                OutputStream retained = new FilterOutputStream(bytes) {
+                    public void write(byte[] value, int offset, int count) throws IOException { out.write(value, offset, count); }
+                    public void close() throws IOException { flush(); }
+                };
+                try (Writer writer = new BufferedWriter(new OutputStreamWriter(new CloudSnapshot.LimitedOutput(retained, limit), StandardCharsets.UTF_8))) {
+                    SyncJSON.write(writer, payload);
+                }
+                bytes.getFD().sync();
+            }
+            File result = new File(cache, "course-import-" + UUID.randomUUID() + ".json");
+            Files.move(temporary.toPath(), result.toPath(), StandardCopyOption.ATOMIC_MOVE);
+            return result;
+        } finally { Files.deleteIfExists(temporary.toPath()); }
     }
     private JSONObject read() throws Exception {
         if (!file.isFile()) throw new IOException("导入结果已不存在，请重新抓取课程。");
