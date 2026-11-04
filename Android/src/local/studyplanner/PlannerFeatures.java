@@ -202,10 +202,10 @@ final class PlannerFeatures {
   LessonOrderDraft draft=new LessonOrderDraft(app.state,course.getString("id"));
   boolean[] followWebsite={false};
   List<String> order=draft.originalOrder();Set<String> selected=new HashSet<>(),deleted=new HashSet<>(),movable=new HashSet<>();for(Planner.Work w:Planner.lessonWork(app.state,course))movable.add(w.lessonID);
-  LinearLayout form=app.col(),rows=app.col();form.addView(app.text("多选课节可移动或删除。删除在保存后生效，清除所选课节的安排和完成记录；请至少保留一节。",13,app.muted));
-  TextView summary=app.text("",13,app.muted);form.addView(summary);
-  ScrollView scroll=new ScrollView(app);scroll.addView(rows);form.addView(scroll,new LinearLayout.LayoutParams(-1,app.dp(280)));EditText target=app.field(form,"插入到第几节之前（课节数 + 1 为末尾）","1",true);
-  Runnable refresh=()->{app.renderLessonOrderRows(rows,order,names,selected,movable);summary.setText("待删除 "+deleted.size()+" 节 · 保存后重新排程");};refresh.run();
+  LinearLayout form=app.col();form.addView(app.text("多选课节可移动或删除。删除在保存后生效，清除所选课节的安排和完成记录；请至少保留一节。",13,app.muted));
+  LessonOrderPanel list=new LessonOrderPanel(app,order,names,selected,movable,deleted);form.addView(list.view);
+  EditText target=app.field(form,"插入到完整列表的第几节之前（课节数 + 1 为末尾）","1",true);
+  Runnable refresh=list::refresh;
   PlannerUi.Flow actions=new PlannerUi.Flow(app);form.addView(actions);
   actions.addView(app.button("删除所选课节",()->app.run(()->{
    if(selected.isEmpty())throw new IllegalArgumentException("请先选择要删除的课节。");Set<String> next=new HashSet<>(deleted);next.addAll(selected);
