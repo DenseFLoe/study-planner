@@ -34,6 +34,7 @@ public class MainActivity extends Activity {
     }
     String settingsSection="";
     String courseQuery="",eventQuery="";int coursePage=0,eventPage=0;Runnable closeCatalog;
+    String eventRecognitionText="";
     FixedEventCatalog.Scope eventScope=FixedEventCatalog.Scope.CURRENT;
     CourseCatalog.Scope courseScope=CourseCatalog.Scope.ALL;
     static final int EXPORT_BACKUP=101,IMPORT_BACKUP=102,SCAN_PAIRING_QR=103,IMPORT_COURSES=104,IMPORT_SSH_KEY=105;

@@ -13,6 +13,7 @@ struct FixedEventRecognitionCard: View {
     @State private var isRecognizing = false
     @State private var recognitionID = UUID()
     @State private var isExpanded = false
+    @State private var notice = ""
 
     private static let example = "明天下午 3 点到 5 点开会"
     private static let limit = 20
@@ -47,6 +48,7 @@ struct FixedEventRecognitionCard: View {
                 if let recognized {
                     results(recognized)
                 }
+                if !notice.isEmpty { Text(notice).font(.caption).foregroundStyle(.orange) }
             }.padding(.top, 12)
         } label: {
             VStack(alignment: .leading, spacing: 4) {
@@ -61,6 +63,7 @@ struct FixedEventRecognitionCard: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .plannerSurface(radius: 18, material: .thinMaterial, shadow: false)
         .onChange(of: text) { _, _ in
+            notice = ""
             // Editing invalidates both the visible drafts and any in-flight parse,
             // so a late result can never be mistaken for the new text.
             guard isRecognizing || recognized != nil else { return }
@@ -146,15 +149,24 @@ struct FixedEventRecognitionCard: View {
                     .fill(Color.primary.opacity(0.04))
             }
         } else {
-            Text(payload.total > Self.limit
+            Text("按 \(payload.referenceLabel) 识别 · " + (payload.total > Self.limit
                  ? "识别到 \(payload.total) 条，仅显示前 \(Self.limit) 条"
-                 : "识别到 \(payload.total) 条")
+                 : "识别到 \(payload.total) 条"))
                 .font(.caption.weight(.semibold))
                 .foregroundStyle(.secondary)
 
             VStack(spacing: 8) {
                 ForEach(payload.drafts) { draft in
-                    DraftRow(draft: draft) { onAdd(draft.event) }
+                    DraftRow(draft: draft) {
+                        let calendar = Calendar.current
+                        guard calendar.timeZone.identifier == payload.timeZone,
+                              calendar.isDate(payload.referenceDate, inSameDayAs: Date()) else {
+                            recognized = nil
+                            notice = "日期或时区已变化，请重新识别后核对。原文仍保留。"
+                            return
+                        }
+                        onAdd(draft.event)
+                    }
                 }
             }
         }
@@ -167,10 +179,12 @@ struct FixedEventRecognitionCard: View {
         let token = UUID()
         recognitionID = token
         recognized = nil
+        notice = ""
         isRecognizing = true
 
         let now = Date()
         let calendar = Calendar.current
+        let referenceLabel = now.formatted(date: .numeric, time: .omitted)
         let limit = Self.limit
 
         Task { @MainActor in
@@ -179,7 +193,8 @@ struct FixedEventRecognitionCard: View {
                 return FixedEventRecognitionPayload(
                     messages: result.messages,
                     drafts: Array(result.drafts.prefix(limit)),
-                    total: result.drafts.count
+                    total: result.drafts.count,
+                    referenceDate: now, timeZone: calendar.timeZone.identifier, referenceLabel: referenceLabel
                 )
             }.value
 
@@ -196,6 +211,9 @@ private struct FixedEventRecognitionPayload: Sendable {
     var messages: [String]
     var drafts: [FixedEventTextDraft]
     var total: Int
+    var referenceDate: Date
+    var timeZone: String
+    var referenceLabel: String
 }
 
 private struct DraftRow: View {
