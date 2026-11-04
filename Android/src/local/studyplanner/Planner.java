@@ -63,6 +63,7 @@ public final class Planner {
         try{return new java.math.BigDecimal(value.toString()).intValueExact();}
         catch(NumberFormatException|ArithmeticException error){throw new IllegalArgumentException("学习进度超出整数范围或含小数",error);}
     }
+    static boolean isFiniteDateNumber(Object value){return value instanceof Number&&Double.isFinite(((Number)value).doubleValue());}
     static void validateTaskData(JSONObject task){
         exactProgressInteger(task.opt("durationMinutes"));
         exactProgressInteger(task.opt("completedMinutes"));
@@ -71,7 +72,7 @@ public final class Planner {
         for(String key:new String[]{"start","confirmedAt","floatingWindowStart","floatingWindowEnd"}){
             if(!key.equals("start")&&(!task.has(key)||task.isNull(key)))continue;
             Object value=task.opt(key);
-            if(!(value instanceof Number)||!Double.isFinite(((Number)value).doubleValue()))throw new IllegalArgumentException("任务的时间必须是有效数字。");
+            if(!isFiniteDateNumber(value))throw new IllegalArgumentException("任务的时间必须是有效数字。");
         }
         for(String key:new String[]{"lessonID","lessonName"})
             if(task.has(key)&&!task.isNull(key)&&!(task.opt(key) instanceof String))throw new IllegalArgumentException("任务课节信息格式无效。");
@@ -102,6 +103,12 @@ public final class Planner {
             int duration=exactProgressInteger(event.opt("floatingDurationMinutes"));
             if(duration<=0||duration>end-start)throw new IllegalArgumentException("固定事项占用时长无效");
         }
+    }
+    static void validateCompletionData(JSONObject record){
+        completionMinutes(record);
+        if(!isFiniteDateNumber(record.opt("recordedAt")))throw new IllegalArgumentException("完成记录的确认时间必须是有效数字。");
+        if(record.has("studyDate")&&!record.isNull("studyDate")&&!isFiniteDateNumber(record.opt("studyDate")))
+            throw new IllegalArgumentException("完成记录的实际学习日期必须是有效数字。");
     }
     static int completionMinutes(JSONObject record){
         int minutes=exactProgressInteger(record.opt("minutes"));
@@ -140,7 +147,7 @@ public final class Planner {
         for(JSONObject task:list(state.getJSONArray("tasks"))){String course=task.getString("courseID");if(!ignoredCourses.contains(course))tasks.computeIfAbsent(course,k->new ArrayList<>()).add(task);}
         for(JSONObject record:list(state.getJSONArray("completions"))){
             String course=record.getString("courseID");if(ignoredCourses.contains(course))continue;
-            completionMinutes(record);records.computeIfAbsent(course,k->new ArrayList<>()).add(record);
+            validateCompletionData(record);records.computeIfAbsent(course,k->new ArrayList<>()).add(record);
         }
         Deque<ProgressNode> pending=new ArrayDeque<>();
         for(JSONObject course:list(state.getJSONArray("courses"))){String id=course.getString("id");if(!ignoredCourses.contains(id))pending.push(new ProgressNode(course,"",tasks.getOrDefault(id,Collections.emptyList()),records.getOrDefault(id,Collections.emptyList())));}

@@ -64,6 +64,8 @@ mkdir -p Android/build/controller-tests
 "$JDK/bin/java" -cp Android/tools/json.jar:Android/build/tests local.studyplanner.SyncTaskIntervalTests
 "$JDK/bin/javac" -cp Android/tools/json.jar:Android/build/tests -d Android/build/tests Android/tests/CompletionNumberIntegrityTests.java
 "$JDK/bin/java" -cp Android/tools/json.jar:Android/build/tests local.studyplanner.CompletionNumberIntegrityTests
+"$JDK/bin/javac" -cp Android/tools/json.jar:Android/build/tests -d Android/build/tests Android/tests/CompletionDateIntegrityTests.java
+"$JDK/bin/java" -cp Android/tools/json.jar:Android/build/tests local.studyplanner.CompletionDateIntegrityTests
 "$JDK/bin/javac" -cp Android/tools/json.jar:Android/build/tests -d Android/build/tests Android/tests/ProgressIntegrityTests.java
 "$JDK/bin/java" -cp Android/tools/json.jar:Android/build/tests local.studyplanner.ProgressIntegrityTests
 "$JDK/bin/javac" -cp Android/tools/json.jar:Android/build/tests -d Android/build/tests Android/tests/CourseMergingIntegrityTests.java

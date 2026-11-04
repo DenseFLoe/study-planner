@@ -55,7 +55,7 @@ public final class SyncLedger {
         for(JSONObject record:Planner.list(state.getJSONArray("completions"))){
             String course=record.getString("courseID"),owner=taskCourses.get(record.getString("taskID"));
             if(archived.contains(course))continue;
-            Planner.completionMinutes(record);
+            Planner.validateCompletionData(record);
             if(owner!=null&&!owner.equals(course))throw new IllegalArgumentException("完成记录与关联任务的课程不一致");
         }
         Planner.validateRecordedProgress(state,archived);
@@ -116,7 +116,7 @@ public final class SyncLedger {
         for(JSONObject course:Planner.list(s.getJSONArray("courses")))if(course.optBoolean("isArchived"))deletedIDs.add(course.getString("id"));
         // Validate original numbers before merged-course recovery or task reconciliation
         // reads them through JSONObject's truncating integer getters.
-        Set<String> confirmationTasks=new HashSet<>();for(JSONObject record:Planner.list(s.getJSONArray("completions"))){Planner.completionMinutes(record);confirmationTasks.add(record.getString("taskID"));}
+        Set<String> confirmationTasks=new HashSet<>();for(JSONObject record:Planner.list(s.getJSONArray("completions"))){Planner.validateCompletionData(record);confirmationTasks.add(record.getString("taskID"));}
         Map<String,JSONObject> deletedTasks=new HashMap<>();
         for(String k:keys){
             JSONObject row=records().getJSONObject(k);
