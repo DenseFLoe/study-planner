@@ -45,6 +45,24 @@ public final class FixedEventCatalogTests {
         state.put("fixedEvents", new JSONArray());
         check(new FixedEventCatalog(state, DAY).find("", FixedEventCatalog.Scope.ALL, 0).count == 0, "New snapshot retained removed rules");
         check(catalog.event(current.ids.get(0)) != null, "Existing snapshot lost its rule references");
+        JSONObject legacyState=PlannerTests.empty(),single=fixture().getJSONArray("fixedEvents").getJSONObject(0);
+        single.put("title","旧单次").put("startDate",Planner.at(DAY.minusDays(2),0)).put("endDate",Planner.at(DAY.plusDays(30),0))
+            .put("weekdays",new JSONArray()).put("excludedDates",new JSONArray().put(Planner.at(DAY.minusDays(2),0)));
+        JSONObject repeating=CourseTools.copy(single).put("id",Planner.id()).put("title","重复事项").put("weekdays",new JSONArray().put(2));
+        JSONObject today=CourseTools.copy(single).put("id",Planner.id()).put("title","今天单次").put("startDate",Planner.at(DAY,0));
+        legacyState.getJSONArray("fixedEvents").put(single).put(repeating).put(today);String original=SyncLedger.canonical(legacyState);
+        FixedEventCatalog legacy=new FixedEventCatalog(legacyState,DAY);
+        check(legacy.find("旧单次",FixedEventCatalog.Scope.HISTORY,0).count==1,"One-off used a legacy future end date instead of its occurrence day");
+        check(legacy.find("旧单次",FixedEventCatalog.Scope.CURRENT,0).count==0,"Expired one-off remains current");
+        check(legacy.find("重复事项",FixedEventCatalog.Scope.CURRENT,0).count==1,"Recurring interval was shortened");
+        check(legacy.find("旧单次 2026-11-02",FixedEventCatalog.Scope.ALL,0).count==1,"One-off occurrence is not searchable");
+        check(legacy.find("旧单次 2026-12-04",FixedEventCatalog.Scope.ALL,0).count==0,"Unused legacy end date is searchable");
+        check(legacy.find("重复事项 2026-12-04",FixedEventCatalog.Scope.ALL,0).count==1,"Repeating cutoff is no longer searchable");
+        check(legacy.find("今天单次",FixedEventCatalog.Scope.CURRENT,0).count==1&&new FixedEventCatalog(legacyState,DAY.plusDays(1)).find("今天单次",FixedEventCatalog.Scope.HISTORY,0).count==1,"One-off current/history boundary is not its actual day");
+        check(FixedEventCatalog.dateRange(single).equals("2026-11-02")&&FixedEventCatalog.dateRange(repeating).equals("2026-11-02 至 2026-12-04"),"Displayed date range disagrees with search and classification");
+        check(SyncLedger.canonical(legacyState).equals(original),"Display-only repair modified legacy or skipped rule data");
+        JSONObject missing=CourseTools.copy(single);missing.remove("weekdays");
+        check(FixedEventCatalog.lastRuleDate(missing)==single.getDouble("startDate"),"Legacy absent weekday list is not treated as a one-off");
         System.out.println("Fixed event catalog: " + checks + " checks passed");
     }
 }

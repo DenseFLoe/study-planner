@@ -7,6 +7,14 @@ import java.util.*;
 /** Read-only rule index, including expired rules that remain in the planner. */
 final class FixedEventCatalog {
     static final int PAGE_SIZE = 20;
+    static double lastRuleDate(JSONObject event) {
+        JSONArray weekdays=event.optJSONArray("weekdays");
+        return weekdays==null||weekdays.length()==0?event.optDouble("startDate"):event.optDouble("endDate");
+    }
+    static String dateRange(JSONObject event) {
+        String first=Planner.date(event.optDouble("startDate")),last=Planner.date(lastRuleDate(event));
+        return first.equals(last)?first:first+" 至 "+last;
+    }
     enum Scope {
         CURRENT("当前与未来"), HISTORY("历史"), ALL("全部");
         final String title; Scope(String title) { this.title = title; }
@@ -14,7 +22,7 @@ final class FixedEventCatalog {
     private static final class Entry {
         final String id, text; final double start, end; final boolean historical;
         Entry(JSONObject event, LocalDate today) {
-            id = event.optString("id"); start = event.optDouble("startDate"); end = event.optDouble("endDate");
+            id = event.optString("id"); start = event.optDouble("startDate"); end = lastRuleDate(event);
             historical = Planner.day(end).isBefore(today);
             text = TaskSearch.normalize(event.optString("title") + " " + event.optString("notes") + " " +
                     Planner.date(start) + " " + Planner.date(end));
