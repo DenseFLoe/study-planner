@@ -173,7 +173,8 @@ final class PlannerStore {
                 // the store so explicit Reload can start from that latest data.
                 let needsLatestState = (lessonOrderDraft != nil && error is LessonOrderEditError)
                     || (attemptedStorage && (error is ConfirmationEditError
-                        || error is CourseEditError || error is FixedEventEditError || error is CourseDeletionError))
+                        || error is CourseEditError || error is FixedEventEditError
+                        || error is CourseDeletionError || error is SettingsEditError))
                 if needsLatestState,
                    let latest = try? repository.load() {
                     let (assessment, load) = await Task.detached(priority: .userInitiated) {

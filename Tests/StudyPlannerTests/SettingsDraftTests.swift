@@ -69,6 +69,34 @@ final class SettingsDraftTests: XCTestCase {
         XCTAssertTrue(store.errorMessage?.contains("冲突") == true)
     }
 
+    @MainActor func testLateDatabaseConflictKeepsDraftAndReloadUsesTheNewSettings() async throws {
+        let (store, repository) = try fixture()
+        let original = store.state, draft = store.settingsDraft
+        draft.refresh(from: original.settings)
+        draft.settings.minimumScheduleUnit = 45
+        // The database receives another device's edit before the UI is refreshed.
+        var incoming = original; incoming.settings.minimumScheduleUnit = 30
+        try repository.save(incoming)
+        let saved = await draft.save(using: store)
+        XCTAssertFalse(saved)
+        XCTAssertEqual(store.state.settings, incoming.settings)
+        XCTAssertEqual(try repository.load().settings, incoming.settings)
+        draft.refresh(from: store.state.settings) // SettingsView's change observer.
+        XCTAssertEqual(draft.settings.minimumScheduleUnit, 45)
+        XCTAssertEqual(draft.baseline, original.settings)
+        XCTAssertTrue(draft.hasChanges)
+        XCTAssertTrue(store.errorMessage?.contains("冲突") == true)
+
+        draft.restore(from: store.state.settings)
+        XCTAssertEqual(draft.settings.minimumScheduleUnit, 30)
+        XCTAssertFalse(draft.hasChanges)
+        draft.settings.notificationMinute = 1200
+        let retried = await draft.save(using: store)
+        XCTAssertTrue(retried)
+        XCTAssertEqual(try repository.load().settings.minimumScheduleUnit, 30)
+        XCTAssertEqual(try repository.load().settings.notificationMinute, 1200)
+    }
+
     @MainActor func testExplicitSaveResetsBaselineAndInvalidSaveRetainsDraft() async throws {
         let (store, repository) = try fixture()
         let draft = store.settingsDraft
