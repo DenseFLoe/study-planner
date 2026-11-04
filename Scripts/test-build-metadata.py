@@ -101,6 +101,25 @@ class BuildMetadataTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "Source changed during the build"):
             metadata.stamp(self.root, state, path)
 
+    def test_verify_cli_supports_non_plist_packages(self):
+        (self.root / "dist").mkdir()
+        snapshot = self.root / "dist" / "build-info.json"
+        snapshot.write_text(json.dumps(metadata.capture(self.root, "release")))
+        command = [sys.executable, str(SCRIPT), "verify", str(self.root), str(snapshot)]
+        subprocess.run(command, check=True)
+        original = snapshot.read_bytes()
+        (self.root / "课程.swift").write_text("// edited during APK build\n")
+        result = subprocess.run(command, capture_output=True, text=True)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("Source changed during the build", result.stderr)
+        self.assertEqual(snapshot.read_bytes(), original)
+
+    def test_missing_fingerprint_is_rejected(self):
+        state = metadata.capture(self.root, "release")
+        del state["StudyPlannerSourceFingerprint"]
+        with self.assertRaisesRegex(ValueError, "Source changed during the build"):
+            metadata.verify(self.root, state)
+
     def test_invalid_configuration_is_rejected(self):
         with self.assertRaisesRegex(ValueError, "configuration"):
             metadata.capture(self.root, "relase")

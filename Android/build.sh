@@ -18,9 +18,11 @@ OUTPUT="${STUDYPLANNER_APK_OUTPUT:-$PWD/../dist/学习日程-安卓版.apk}"
 }
 rm -rf build/classes build/dex build/resources.zip build/base.apk build/unsigned.apk build/aligned.apk
 mkdir -p build/classes build/dex signing
+python3 ../Scripts/build-metadata.py capture .. release build/source-metadata.json
 sed -E "s/android:versionCode=\"[0-9]+\"/android:versionCode=\"$STUDYPLANNER_BUILD\"/; s/android:versionName=\"[^\"]+\"/android:versionName=\"$STUDYPLANNER_VERSION\"/" AndroidManifest.xml > build/AndroidManifest.xml
 "$BT/aapt2" compile --dir res -o build/resources.zip
 python3 prepare-assets.py
+cp build/source-metadata.json build/assets/build-info.json
 "$BT/aapt2" link -o build/base.apk -I "$PLATFORM" --manifest build/AndroidManifest.xml -A build/assets build/resources.zip
 python3 ../Scripts/verify-ssh-dependencies.py
 "$JDK/bin/javac" --release 8 -encoding UTF-8 -classpath "$PLATFORM:$PWD/lib/*" -d build/classes src/local/studyplanner/*.java
@@ -28,6 +30,7 @@ python3 ../Scripts/verify-ssh-dependencies.py
 cp build/base.apk build/unsigned.apk
 (cd build/dex && zip -q ../unsigned.apk classes*.dex)
 "$BT/zipalign" -f 4 build/unsigned.apk build/aligned.apk
+python3 ../Scripts/build-metadata.py verify .. build/source-metadata.json
 if [ -z "${STUDYPLANNER_KEYSTORE_PASSWORD:-}" ] && command -v security >/dev/null 2>&1; then
   STUDYPLANNER_KEYSTORE_PASSWORD="$(security find-generic-password -s local.studyplanner.android.signing -a release -w 2>/dev/null || true)"
   export STUDYPLANNER_KEYSTORE_PASSWORD

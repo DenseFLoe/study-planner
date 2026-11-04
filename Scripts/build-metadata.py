@@ -56,10 +56,14 @@ def capture(root, configuration):
     }
 
 
-def stamp(root, metadata, plist_path):
+def verify(root, metadata):
     current = source_state(root)
     if any(metadata.get(key) != value for key, value in current.items()):
-        raise ValueError("Source changed during the build; no package was signed. Retry after edits finish.")
+        raise ValueError("Source changed during the build; packaged source cannot be verified. Retry after edits finish.")
+
+
+def stamp(root, metadata, plist_path):
+    verify(root, metadata)
     plist_path = Path(plist_path)
     info = plistlib.loads(plist_path.read_bytes())
     info.update(metadata)
@@ -77,10 +81,15 @@ def main():
     write.add_argument("root", type=Path)
     write.add_argument("snapshot", type=Path)
     write.add_argument("plist", type=Path)
+    check = commands.add_parser("verify")
+    check.add_argument("root", type=Path)
+    check.add_argument("snapshot", type=Path)
     args = parser.parse_args()
     try:
         if args.command == "capture":
             args.output.write_text(json.dumps(capture(args.root, args.configuration)), encoding="utf-8")
+        elif args.command == "verify":
+            verify(args.root, json.loads(args.snapshot.read_text(encoding="utf-8")))
         else:
             stamp(args.root, json.loads(args.snapshot.read_text(encoding="utf-8")), args.plist)
     except (OSError, ValueError, subprocess.CalledProcessError) as error:
