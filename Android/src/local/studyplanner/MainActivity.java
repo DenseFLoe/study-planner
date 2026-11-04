@@ -25,7 +25,12 @@ public class MainActivity extends Activity {
     SettingsDraft settingsDraft;
     Checked captureSettingsDraft;
     String restoredSettingsDraft;
-    LinearLayout syncProgress; boolean syncRefreshing=false,syncRefreshAgain=false;
+    LinearLayout syncProgress;
+    DeferredRefresh<SyncRead> syncRefresh;
+    static final class SyncRead {
+        final JSONObject state;final String summary;
+        SyncRead(JSONObject state,String summary){this.state=state;this.summary=summary;}
+    }
     String settingsSection="";
     static final int EXPORT_BACKUP=101,IMPORT_BACKUP=102,SCAN_PAIRING_QR=103,IMPORT_COURSES=104,IMPORT_SSH_KEY=105;
     JSONObject state; String syncSummary=""; LinearLayout root,body,nav; int page=0; LocalDate selected=LocalDate.now(Planner.ZONE),month=selected.withDayOfMonth(1),lastDay=selected;
@@ -36,6 +41,11 @@ public class MainActivity extends Activity {
     interface Change{void run(JSONObject s)throws Exception;}
     interface Checked{void run()throws Exception;}
     @Override public void onCreate(Bundle b){super.onCreate(b);getWindow().setStatusBarColor(bg);getWindow().setNavigationBarColor(Color.WHITE);getWindow().getDecorView().setSystemUiVisibility(View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR|View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR);storage=new AtomicFile(new File(getFilesDir(),"planner-v1.json"));if(b!=null){restoredSettingsDraft=b.getString("studySettingsDraft");selected=LocalDate.parse(b.getString("selected",selected.toString()));month=selected.withDayOfMonth(1);page=b.getInt("page",0);settingsSection=b.getString("settingsSection","");calendarExpanded=b.getBoolean("calendarExpanded",false);month=LocalDate.parse(b.getString("month",month.toString()));}PlannerRuntime runtime=PlannerRuntime.get(this);database=runtime.database;worker=runtime.worker;
+        syncRefresh=new DeferredRefresh<>(worker,this::runOnUiThread,()->ready&&!busy&&!isDestroyed(),
+            ()->{JSONObject latest=database.load();Planner.refreshDiagnostics(latest,Planner.now());return new SyncRead(latest,syncSummary(database.metadata()));},
+            latest->{state=latest.state;syncSummary=latest.summary;render();},
+            error->{syncStatus="读取同步结果失败："+error.getMessage();updateSyncLabel();},this::updateSyncProgress);
+
         consequences=new DailyConsequenceController(this);
         syncServer=new SyncWindow(this,message->{syncStatus=message;updateSyncLabel();});
         IntentFilter filter=new IntentFilter(SyncWindowService.ACTION_STATUS);
@@ -47,7 +57,7 @@ public class MainActivity extends Activity {
             if(database.initialized())loaded=database.load();
             else{if(storage.getBaseFile().exists()||new File(storage.getBaseFile()+".bak").exists())loaded=new JSONObject(read(storage.openRead()));else loaded=new JSONObject(read(getAssets().open("initial-state.json")));}
             Planner.prepareForOpen(loaded,Planner.now());database.save(loaded);
-            JSONObject finalState=loaded;String summary=syncSummary(database.metadata());runOnUiThread(()->{if(isDestroyed())return;state=finalState;syncSummary=summary;ready=true;render();handler.postDelayed(ticker,1000);syncServer.start(false,false);CloudSync.get(this).start();});
+            JSONObject finalState=loaded;String summary=syncSummary(database.metadata());runOnUiThread(()->{if(isDestroyed())return;state=finalState;syncSummary=summary;ready=true;render();resumeSyncRefresh();handler.postDelayed(ticker,1000);syncServer.start(false,false);CloudSync.get(this).start();});
         }catch(Exception e){runOnUiThread(()->errorScreen(e));}});
     }
     @Override protected void onResume(){super.onResume();if(ready&&syncServer!=null){refreshSyncData();syncStatus=SyncWindowService.lastStatus;updateSyncLabel();syncServer.start(false,false);CloudSync.get(this).start();}}
@@ -63,7 +73,7 @@ public class MainActivity extends Activity {
         b.putString("selected",selected.toString());b.putInt("page",page);b.putString("settingsSection",settingsSection);
         b.putBoolean("calendarExpanded",calendarExpanded);b.putString("month",month.toString());
     }
-    @Override public void onDestroy(){handler.removeCallbacks(ticker);if(consequences!=null)consequences.close();unregisterReceiver(syncReceiver);super.onDestroy();}
+    @Override public void onDestroy(){if(syncRefresh!=null)syncRefresh.close();handler.removeCallbacks(ticker);if(consequences!=null)consequences.close();unregisterReceiver(syncReceiver);super.onDestroy();}
     @Override public void onBackPressed(){if(busy){Toast.makeText(this,"正在保存，请稍后",Toast.LENGTH_SHORT).show();return;}if(page==3&&!settingsSection.isEmpty()&&settingsMenu!=null){settingsMenu.show("");}else if(page!=0){page=0;render();}else super.onBackPressed();}
     static String read(InputStream stream)throws Exception{try(InputStream in=stream;ByteArrayOutputStream out=new ByteArrayOutputStream()){byte[] b=new byte[8192];int n;while((n=in.read(b))!=-1)out.write(b,0,n);return out.toString("UTF-8");}}
     void save(JSONObject s)throws Exception{database.save(s);}
@@ -72,8 +82,24 @@ public class MainActivity extends Activity {
     void alert(String title,String message){new AlertDialog.Builder(this).setTitle(title).setMessage(message).setPositiveButton("知道了",null).show();}
     void run(Checked c){try{c.run();}catch(Exception e){alert("请检查",e.getMessage());}}
     void mutate(Change change,boolean replan,Runnable done){mutate(change,replan,done,null);}
-    void mutate(Change change,boolean replan,Runnable done,java.util.function.Consumer<Exception> failure){if(busy)return;busy=true;ProgressDialog progress=new ProgressDialog(this);progress.setMessage(replan?"正在保存并重新安排学习任务…":"正在保存…");progress.setCancelable(false);progress.show();worker.execute(()->{try{JSONObject next=database.load();change.run(next);if(replan)Planner.replan(next,Planner.now());else Planner.refreshDiagnostics(next,Planner.now());Planner.validate(next);save(next);runOnUiThread(()->{state=next;busy=false;progress.dismiss();if(done!=null)done.run();render();});}catch(Exception e){runOnUiThread(()->{busy=false;progress.dismiss();if(failure!=null)failure.accept(e);else alert("操作未保存",e.getMessage());});}});}
-    void swapDailyTasks(String source,String target){if(busy)return;run(()->{JSONObject before=state,preview=CourseTools.copy(state);double now=Planner.now();DailyTaskOrdering.swap(preview,source,target,now);Planner.validate(preview);busy=true;state=preview;render();worker.execute(()->{try{JSONObject fresh=database.load();DailyTaskOrdering.swap(fresh,source,target,now);Planner.refreshDiagnostics(fresh,now);Planner.validate(fresh);save(fresh);runOnUiThread(()->{state=fresh;busy=false;if(!isDestroyed())render();});}catch(Exception error){JSONObject latest=before;try{latest=database.load();}catch(Exception ignored){}final JSONObject restored=latest;runOnUiThread(()->{state=restored;busy=false;if(!isDestroyed()){render();alert("交换未保存",error.getMessage());}});}});});}
+    void mutate(Change change,boolean replan,Runnable done,java.util.function.Consumer<Exception> failure){
+        if(busy)return;
+        busy=true;ProgressDialog progress=new ProgressDialog(this);
+        progress.setMessage(replan?"正在保存并重新安排学习任务…":"正在保存…");progress.setCancelable(false);progress.show();
+        worker.execute(()->{try{
+            JSONObject next=database.load();change.run(next);
+            if(replan)Planner.replan(next,Planner.now());else Planner.refreshDiagnostics(next,Planner.now());
+            Planner.validate(next);save(next);
+            runOnUiThread(()->{busy=false;progress.dismiss();if(isDestroyed())return;
+                state=next;if(done!=null)done.run();render();resumeSyncRefresh();
+            });
+        }catch(Exception error){runOnUiThread(()->{busy=false;progress.dismiss();if(isDestroyed())return;
+            if(failure!=null)failure.accept(error);else alert("操作未保存",error.getMessage());
+            // Reload after conflicts as well as I/O failures; modal editor drafts stay open.
+            refreshSyncData();
+        });}});
+    }
+    void swapDailyTasks(String source,String target){if(busy)return;run(()->{JSONObject before=state,preview=CourseTools.copy(state);double now=Planner.now();DailyTaskOrdering.swap(preview,source,target,now);Planner.validate(preview);busy=true;state=preview;render();worker.execute(()->{try{JSONObject fresh=database.load();DailyTaskOrdering.swap(fresh,source,target,now);Planner.refreshDiagnostics(fresh,now);Planner.validate(fresh);save(fresh);runOnUiThread(()->{state=fresh;busy=false;if(!isDestroyed()){render();resumeSyncRefresh();}});}catch(Exception error){JSONObject latest=before;try{latest=database.load();}catch(Exception ignored){}final JSONObject restored=latest;runOnUiThread(()->{state=restored;busy=false;if(!isDestroyed()){render();alert("交换未保存",error.getMessage());resumeSyncRefresh();}});}});});}
     void receiveCourses(Intent data)throws Exception{String courseID=data.getStringExtra("courseID");if(courseID!=null){JSONObject course=Planner.course(state,courseID);if(course==null)throw new Exception("该课程已删除。");page=1;render();courseEditor(course);return;}String path=data.getStringExtra("captureFile");if(path==null)throw new Exception("导入结果缺失");File file=new File(path).getCanonicalFile();if(!file.getParentFile().equals(getCacheDir().getCanonicalFile())||!file.getName().matches("course-import-[A-Fa-f0-9-]+\\.json")||file.length()>25000000)throw new Exception("导入结果无效");JSONObject captured;try{captured=new JSONObject(read(new FileInputStream(file)));}finally{file.delete();}List<JSONObject> snapshots=Planner.list(captured.getJSONArray("snapshots"));double deadline=captured.getDouble("deadline");mutate(s->WebCourseImport.save(s,snapshots,deadline,Planner.now()),true,null);}
     int dp(int n){return (int)(n*getResources().getDisplayMetrics().density+.5f);}
     LinearLayout col(){LinearLayout v=new LinearLayout(this);v.setOrientation(1);return v;}
@@ -313,13 +339,15 @@ public class MainActivity extends Activity {
         worker.execute(()->{try{
             JSONObject latest=database.load();Planner.refreshDiagnostics(latest,Planner.now());
             runOnUiThread(()->{busy=false;progress.dismiss();if(isDestroyed())return;
-                state=latest;settingsDraft=null;captureSettingsDraft=null;render();
+                state=latest;settingsDraft=null;captureSettingsDraft=null;render();resumeSyncRefresh();
             });
-        }catch(Exception error){runOnUiThread(()->{busy=false;progress.dismiss();if(!isDestroyed())alert("读取失败",error.getMessage()+"\n未保存输入仍保留。");});}});
+        }catch(Exception error){runOnUiThread(()->{busy=false;progress.dismiss();if(!isDestroyed()){alert("读取失败",error.getMessage()+"\n未保存输入仍保留。");resumeSyncRefresh();}});}});
     }
     final BroadcastReceiver syncReceiver=new BroadcastReceiver(){public void onReceive(Context c,Intent i){if(CloudSync.ACTION.equals(i.getAction())){if(cloudLabel!=null)cloudLabel.setText(CloudSync.summary(c));refreshSyncData();return;}syncStatus=SyncWindowService.lastStatus;updateSyncLabel();updateSyncProgress();if(i.getBooleanExtra("changed",false))refreshSyncData();}};
-    void updateSyncProgress(){if(syncProgress!=null)syncProgress.setVisibility(CloudSync.get(this).isRunning()||syncRefreshing||SyncWindowService.transferring()?View.VISIBLE:View.GONE);}
-    void refreshSyncData(){if(!ready||busy){updateSyncProgress();return;}if(syncRefreshing){syncRefreshAgain=true;updateSyncProgress();return;}syncRefreshing=true;updateSyncProgress();worker.execute(()->{try{JSONObject latest=database.load();Planner.refreshDiagnostics(latest,Planner.now());String summary=syncSummary(database.metadata());runOnUiThread(()->{if(isDestroyed())return;if(!busy){state=latest;syncSummary=summary;render();}});}catch(Exception e){runOnUiThread(()->{syncStatus="读取同步结果失败："+e.getMessage();updateSyncLabel();});}finally{runOnUiThread(()->{syncRefreshing=false;updateSyncProgress();if(syncRefreshAgain){syncRefreshAgain=false;refreshSyncData();}});}});}
+    void updateSyncProgress(){if(syncProgress!=null)syncProgress.setVisibility(CloudSync.get(this).isRunning()||(syncRefresh!=null&&syncRefresh.isRunning())||SyncWindowService.transferring()?View.VISIBLE:View.GONE);}
+    void refreshSyncData(){if(syncRefresh!=null)syncRefresh.request();updateSyncProgress();}
+    void resumeSyncRefresh(){if(syncRefresh!=null)syncRefresh.resume();}
+
 
     static String syncSummary(JSONObject ledger){double time=ledger.optDouble("lastSuccess",0);return "今日自动同步："+(LocalDate.now(Planner.ZONE).toString().equals(ledger.optString("lastAutoDate"))?"已完成":"尚未完成")+"\n最后同步："+(time>0?Instant.ofEpochSecond((long)time).atZone(Planner.ZONE).format(java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm")):"尚无");}
     void updateSyncLabel(){if(syncLabel!=null)syncLabel.setText(syncStatus+"\n"+syncSummary);}

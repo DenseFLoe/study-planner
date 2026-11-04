@@ -101,3 +101,6 @@ mkdir -p Android/build/controller-tests
 
 "$JDK/bin/javac" -cp Android/tools/json.jar:Android/build/tests -d Android/build/tests Android/tests/SettingsDraftTests.java
 "$JDK/bin/java" -cp Android/tools/json.jar:Android/build/tests local.studyplanner.SettingsDraftTests
+
+"$JDK/bin/javac" -d Android/build/tests Android/src/local/studyplanner/DeferredRefresh.java Android/tests/DeferredRefreshTests.java
+"$JDK/bin/java" -cp Android/build/tests local.studyplanner.DeferredRefreshTests
