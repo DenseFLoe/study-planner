@@ -40,15 +40,16 @@ private func subtractImmediateIntervals(_ blocks: [(start: Date, end: Date)],
 }
 
 public enum ImmediateStudyError: Error, LocalizedError, Equatable {
-    case unavailable, invalidDate, noSpace, noFeasiblePlan, pinnedTask
+    case unavailable, unavailableTask, invalidDate, noSpace, noFeasiblePlan, pinnedTask
 
     public var errorDescription: String? {
         switch self {
         case .unavailable: "请选择已启用自动排课、还有未完成课节的分节研习。"
+        case .unavailableTask: "当前课表没有可继续的未确认课程，请查看今天或之后的课表。"
         case .invalidDate: "现在不在这门课程的开始与截止日期内，无法立即学习。"
-        case .noSpace: "当前没有可开始学习的空档：现在处于固定事项、可学习时段之外，或已确认学习后的 15 分钟休息内。未更改课表。"
+        case .noSpace: "当前空档不足以安排这次学习：请检查可学习时段、固定事项及已确认学习后的 15 分钟休息。未更改课表。"
         case .noFeasiblePlan: "未能按立即学习约束生成新课表，未更改原安排。请调整可学习时段或固定事项后重试。"
-        case .pinnedTask: "这节课已设为立即学习，优先于拖动顺序。请先取消右侧的立即学习安排，再交换位置。"
+        case .pinnedTask: "这节课是本次从现在开始重排的优先课程，暂不支持交换位置。可用「继续上课」更新开始时间，或选择另一节课重新排课。"
         }
     }
 }
@@ -61,6 +62,32 @@ extension PlannerState {
         }.sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
     }
 
+    /// Matches the course rows in the visible day timeline, including elapsed
+    /// but unconfirmed drafts. Fixed events and confirmed history are not courses to resume.
+    public func firstUnconfirmedTask(on day: Date, calendar: Calendar = .current) -> ScheduledTask? {
+        tasks.filter { task in
+            task.isUnconfirmed && calendar.isDate(task.start, inSameDayAs: day) &&
+            courses.contains { $0.id == task.courseID && !$0.isArchived }
+        }.min { $0.start != $1.start ? $0.start < $1.start : $0.id.uuidString < $1.id.uuidString }
+    }
+
+    /// Move the visible first course block to now, preserving its duration and
+    /// progress. Publish only after the entire replacement plan is validated.
+    @discardableResult
+    public mutating func continueStudying(on day: Date, now: Date = Date(),
+                                         calendar: Calendar = .current) throws -> ScheduleResult {
+        guard calendar.startOfDay(for: day) >= calendar.startOfDay(for: now),
+              let task = firstUnconfirmedTask(on: day, calendar: calendar),
+              let course = courses.first(where: { $0.id == task.courseID && $0.autoScheduleEnabled }),
+              let remaining = immediateStudyRemainingMinutes(for: task),
+              (1...1440).contains(task.durationMinutes), remaining >= task.durationMinutes else {
+            throw ImmediateStudyError.unavailableTask
+        }
+        return try scheduleStudyNow(course: course, lessonID: task.lessonID, lessonName: task.lessonName,
+                                    minutes: task.durationMinutes, remaining: remaining, allowShortening: false,
+                                    now: now, calendar: calendar)
+    }
+
     /// Builds and validates a complete replacement before publishing any mutation.
     @discardableResult
     public mutating func studyImmediately(courseID: UUID, lessonID: String? = nil,
@@ -71,6 +98,14 @@ extension PlannerState {
               }) else {
             throw ImmediateStudyError.unavailable
         }
+        return try scheduleStudyNow(course: course, lessonID: lesson.id, lessonName: lesson.name,
+                                    minutes: lesson.remainingMinutes, remaining: lesson.remainingMinutes,
+                                    allowShortening: true, now: now, calendar: calendar)
+    }
+
+    private mutating func scheduleStudyNow(course: Course, lessonID: String?, lessonName: String?,
+                                          minutes: Int, remaining: Int, allowShortening: Bool,
+                                          now: Date, calendar: Calendar) throws -> ScheduleResult {
         let start = Date(timeIntervalSince1970: ceil(now.timeIntervalSince1970 / 60) * 60)
         let day = calendar.startOfDay(for: start)
         guard day >= calendar.startOfDay(for: course.startDate), day <= calendar.startOfDay(for: course.deadline) else {
@@ -85,16 +120,16 @@ extension PlannerState {
         next.settings.actualStudyStart = start
         guard let free = next.immediateStudyFreeIntervals(on: day, calendar: calendar)
             .first(where: { $0.start <= start && start < $0.end }) else { throw ImmediateStudyError.noSpace }
-        let maximum = min(lesson.remainingMinutes, 1440, Int(floor(free.end.timeIntervalSince(start) / 60)))
-        guard maximum > 0 else { throw ImmediateStudyError.noSpace }
+        let maximum = min(minutes, 1440, Int(floor(free.end.timeIntervalSince(start) / 60)))
+        guard maximum > 0, allowShortening || maximum == minutes else { throw ImmediateStudyError.noSpace }
         func fittingTask(_ duration: Int) -> ScheduledTask? {
             let task = ScheduledTask(courseID: course.id, start: start, durationMinutes: duration,
-                                     lessonID: lesson.id, lessonName: lesson.name)
-            next.settings.immediateStudy = .init(task: task, continuesLesson: duration < lesson.remainingMinutes ? true : nil)
+                                     lessonID: lessonID, lessonName: lessonName)
+            next.settings.immediateStudy = .init(task: task, continuesLesson: lessonID != nil && duration < remaining ? true : nil)
             return next.validImmediateStudyTask(now: now, calendar: calendar)
         }
         var chosen = fittingTask(maximum)
-        if chosen == nil {
+        if chosen == nil && allowShortening {
             // Floating events may need some of this window. Find a shorter legal
             // first segment, rather than rejecting a lesson that can begin now.
             var low = 1, high = maximum - 1
@@ -105,7 +140,7 @@ extension PlannerState {
             }
         }
         guard let task = chosen else { throw ImmediateStudyError.noSpace }
-        next.settings.immediateStudy = .init(task: task, continuesLesson: task.durationMinutes < lesson.remainingMinutes ? true : nil)
+        next.settings.immediateStudy = .init(task: task, continuesLesson: lessonID != nil && task.durationMinutes < remaining ? true : nil)
         let result = next.replan(now: now, calendar: calendar)
         guard result.tasks.contains(where: { $0.id == task.id }) else { throw ImmediateStudyError.noFeasiblePlan }
         self = next
@@ -114,10 +149,23 @@ extension PlannerState {
 
     public func immediateStudyContinuation(now: Date = Date(), calendar: Calendar = .current) -> LessonWorkItem? {
         guard let request = settings.immediateStudy, request.continuesLesson == true,
-              let course = immediateStudyCourses.first(where: { $0.id == request.task.courseID }),
+              let course = courses.first(where: { $0.id == request.task.courseID && !$0.isArchived && $0.autoScheduleEnabled }),
               calendar.startOfDay(for: now) >= calendar.startOfDay(for: course.startDate),
               calendar.startOfDay(for: now) <= calendar.startOfDay(for: course.deadline) else { return nil }
         return lessonWorkItems(for: course).first { $0.id == request.task.lessonID && $0.remainingMinutes > 0 }
+    }
+
+    private func immediateStudyRemainingMinutes(for task: ScheduledTask) -> Int? {
+        guard let course = courses.first(where: { $0.id == task.courseID && !$0.isArchived && $0.autoScheduleEnabled }) else { return nil }
+        let remaining = remainingMinutes(for: course)
+        let lessons = lessonWorkItems(for: course)
+        let consistentLessons = !lessons.isEmpty && lessons.reduce(0, { $0 + $1.remainingMinutes }) == remaining
+        if let lessonID = task.lessonID {
+            guard consistentLessons else { return nil }
+            return lessons.first { $0.id == lessonID }?.remainingMinutes
+        }
+        // Ordinary time blocks are also used when imported lesson totals are inconsistent.
+        return consistentLessons ? nil : remaining
     }
 
     /// The first reserved segment expires at its end or confirmation; hard constraints win.
@@ -126,10 +174,8 @@ extension PlannerState {
               (1...1440).contains(task.durationMinutes), task.start < task.end, task.end > now,
               task.start.timeIntervalSince(now) < 60,
               !tasks.contains(where: { $0.id == task.id && !$0.isUnconfirmed }),
-              let course = immediateStudyCourses.first(where: { $0.id == task.courseID }),
-              let lesson = lessonWorkItems(for: course).first(where: { $0.id == task.lessonID && $0.remainingMinutes > 0 }),
-              lesson.remainingMinutes >= task.durationMinutes,
-              lessonWorkItems(for: course).reduce(0, { $0 + $1.remainingMinutes }) == remainingMinutes(for: course) else { return nil }
+              let course = courses.first(where: { $0.id == task.courseID }),
+              let remaining = immediateStudyRemainingMinutes(for: task), remaining >= task.durationMinutes else { return nil }
         let day = calendar.startOfDay(for: task.start)
         let engine = ScheduleEngine(calendar: calendar)
         guard calendar.isDate(task.start, inSameDayAs: now),

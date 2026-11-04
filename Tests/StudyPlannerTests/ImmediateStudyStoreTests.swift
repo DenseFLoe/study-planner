@@ -184,6 +184,52 @@ final class ImmediateStudyStoreTests: XCTestCase {
         XCTAssertNil(repository.saved)
     }
 
+    @MainActor func testContinueSavesFirstVisibleCourseAndUpdatesResult() async throws {
+        let (state, result, now) = fixture()
+        let repository = Repository()
+        let store = PlannerStore(state: state, repository: repository, result: result)
+        let first = try XCTUnwrap(state.firstUnconfirmedTask(on: now))
+        let later = now.addingTimeInterval(20 * 60)
+        let succeeded = await store.continueStudying(on: now, now: later)
+        XCTAssertTrue(succeeded)
+        XCTAssertEqual(store.result.tasks.first?.courseID, first.courseID)
+        XCTAssertEqual(store.result.tasks.first?.lessonID, first.lessonID)
+        XCTAssertEqual(store.result.tasks.first?.durationMinutes, first.durationMinutes)
+        XCTAssertEqual(store.result.tasks.first?.start, later)
+        XCTAssertEqual(repository.saved, store.state)
+        XCTAssertEqual(store.result.tasks, store.state.tasks)
+        XCTAssertTrue(store.state.completions.isEmpty)
+        XCTAssertNotNil(store.studyLoad)
+        XCTAssertNil(store.errorMessage)
+    }
+
+    @MainActor func testContinueSaveFailurePreservesPlanAndPreviousRequest() async throws {
+        var (state, result, now) = fixture()
+        result = try state.studyImmediately(courseID: state.courses[0].id, now: now)
+        let repository = Repository()
+        repository.fails = true
+        let store = PlannerStore(state: state, repository: repository, result: result)
+        let succeeded = await store.continueStudying(on: now, now: now.addingTimeInterval(600))
+        XCTAssertFalse(succeeded)
+        XCTAssertEqual(store.state, state)
+        XCTAssertEqual(store.result.tasks, result.tasks)
+        XCTAssertNil(repository.saved)
+        XCTAssertNotNil(store.errorMessage)
+    }
+
+    @MainActor func testEmptyContinueDoesNotWriteRepository() async {
+        let state = PlannerState()
+        let now = Date()
+        let result = ScheduleEngine().assessSavedPlan(state: state, now: now)
+        let repository = Repository()
+        let store = PlannerStore(state: state, repository: repository, result: result)
+        let succeeded = await store.continueStudying(on: now, now: now)
+        XCTAssertFalse(succeeded)
+        XCTAssertEqual(store.state, state)
+        XCTAssertNil(repository.saved)
+        XCTAssertNotNil(store.errorMessage)
+    }
+
     @MainActor func testSyncRefreshReappliesImmediateRequestToDisplayedPeerDrafts() async throws {
         let now = Date()
         let calendar = Calendar.current

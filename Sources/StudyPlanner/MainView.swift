@@ -600,17 +600,25 @@ struct MainView: View {
                 )
 
                 VStack(alignment: .leading, spacing: 10) {
+                    Button {
+                        Task {
+                            if await store.continueStudying(on: selectedDay) {
+                                selectedDay = Calendar.current.startOfDay(for: Date())
+                                month = selectedDay
+                            }
+                        }
+                    } label: {
+                        Label("继续上课", systemImage: "play.fill")
+                            .frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(!store.isReady || store.orderSaveBusy ||
+                        Calendar.current.startOfDay(for: selectedDay) < Calendar.current.startOfDay(for: Date()) ||
+                        store.state.firstUnconfirmedTask(on: selectedDay) == nil)
+                    .help("把当前查看课表中最上方的未确认课程移到现在（向上取整到分钟），保留该板块时长并重排后续课程；固定事项和已确认进度保留，空档不足时保留原课表")
                     ImmediateStudyMenu(store: store) {
                         selectedDay = Calendar.current.startOfDay(for: Date())
                         month = selectedDay
-                    }
-                    if let request = store.state.settings.immediateStudy,
-                       (request.task.end > Date() && store.state.tasks.contains(where: { $0.id == request.task.id && $0.isUnconfirmed })) ||
-                        store.state.immediateStudyContinuation() != nil {
-                        Text("立即学习：\(store.course(request.task.courseID)?.name ?? "课程") · \(request.task.lessonName ?? "下一课节")")
-                            .font(.caption).foregroundStyle(.secondary)
-                        Button("取消立即学习安排") { Task { await store.cancelImmediateStudy() } }
-                            .font(.caption).disabled(store.orderSaveBusy)
                     }
                 }
                 .padding(14).plannerSurface()

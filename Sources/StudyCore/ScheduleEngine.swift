@@ -253,10 +253,15 @@ public struct ScheduleEngine: Sendable {
             }
             // A partial first segment reserves only its own minutes. The rest
             // keeps the same lesson identity and stays ahead of the other lessons.
-            if let immediate, immediate.courseID == course.id,
-               let index = work.firstIndex(where: { $0.lessonID == immediate.lessonID }) {
-                work[index].minutes -= immediate.durationMinutes
-                if work[index].minutes == 0 { work.remove(at: index) }
+            if let immediate, immediate.courseID == course.id {
+                // A resumed time block can span several newly configured units.
+                var reserved = immediate.durationMinutes
+                for index in work.indices where work[index].lessonID == immediate.lessonID && reserved > 0 {
+                    let used = min(work[index].minutes, reserved)
+                    work[index].minutes -= used
+                    reserved -= used
+                }
+                work.removeAll { $0.minutes == 0 }
             }
             pending[course.id] = work
             let reservedMinutes = immediate.map { $0.courseID == course.id ? $0.durationMinutes : 0 } ?? 0
@@ -806,7 +811,7 @@ public struct ScheduleEngine: Sendable {
         if let immediate {
             tasks.append(immediate)
             tasks.sort { $0.start < $1.start }
-            adjustments.append("已优先安排立即学习课节，其余课程在满足日期、固定事项、课间休息与整节顺序后重排。")
+            adjustments.append("已将所选课程从当前时间开始安排，其余课程在满足日期、固定事项、课间休息与课节顺序后重排。")
         }
         var risks: [ScheduleRisk] = []
         for cutoff in Set(courses.map { calendar.startOfDay(for: $0.deadline) }).sorted() {

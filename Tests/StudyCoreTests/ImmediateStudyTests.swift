@@ -98,7 +98,7 @@ final class ImmediateStudyTests: XCTestCase {
         XCTAssertEqual(totals(result.tasks)[selected.id], 80)
     }
 
-    func testSelectedLessonSurvivesReloadAndCancelRestoresOriginalOrder() throws {
+    func testSelectedLessonReplanSurvivesReload() throws {
         var state = fixture()
         let selected = state.courses[1]
         let first = try state.studyImmediately(courseID: selected.id, lessonID: "乙-1", now: date(), calendar: cal).tasks.first!
@@ -106,9 +106,6 @@ final class ImmediateStudyTests: XCTestCase {
         let refreshed = state.replan(now: date(28, 8, 5), calendar: cal)
         XCTAssertEqual(refreshed.tasks.first, first)
         XCTAssertEqual(refreshed.tasks.filter { $0.courseID == selected.id }.map(\.lessonID), ["乙-1", "乙-0"])
-        state.settings.immediateStudy = nil
-        let cancelled = state.replan(now: date(28, 8, 5), calendar: cal)
-        assertSchedule(cancelled, state: state)
         XCTAssertEqual(state.completedMinutes(for: selected), 0)
     }
 

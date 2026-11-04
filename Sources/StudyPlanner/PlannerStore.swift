@@ -216,7 +216,12 @@ final class PlannerStore {
             try $0.studyImmediately(courseID: courseID, lessonID: lessonID, now: now)
         }
     }
-    func cancelImmediateStudy() async { await change { $0.settings.immediateStudy = nil } }
+    @discardableResult
+    func continueStudying(on day: Date, now: Date = Date()) async -> Bool {
+        await commit(state, replan: true, now: now) {
+            try $0.continueStudying(on: day, now: now)
+        }
+    }
     func setDailyWeight(_ weight: Double, for courseID: UUID) async {
         await change { state in
             guard let index = state.courses.firstIndex(where: { $0.id == courseID }) else { return }
