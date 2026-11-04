@@ -1,7 +1,7 @@
 import Foundation
 
 public enum FixedEventEditError: LocalizedError {
-    case removed, conflictingChanges, reviewChanged, removalChanged
+    case removed, conflictingChanges, reviewChanged, removalChanged, occurrenceChanged
 
     public var errorDescription: String? {
         switch self {
@@ -9,7 +9,26 @@ public enum FixedEventEditError: LocalizedError {
         case .conflictingChanges: "这条固定事项在编辑期间已有其他修改，与当前草稿冲突。草稿仍保留，最新数据未被覆盖，请重新打开事项后编辑。"
         case .reviewChanged: "冲突安排已发生变化，原来的跳过选择未保存。请返回修改后重新检查冲突。"
         case .removalChanged: "这条固定事项在确认删除前已更新，未执行删除。请重新查看最新规则后再确认。"
+        case .occurrenceChanged: "这一天的固定事项已更新，未移除或恢复旧安排。请重新查看当天时段后再操作。"
         }
+    }
+}
+
+public struct FixedEventOccurrenceEdit: Sendable {
+    public let reviewed: FixedEvent
+    public let day: Date
+    public let skipped: Bool
+    public init(reviewed: FixedEvent, on day: Date, skipped: Bool) {
+        self.reviewed = reviewed; self.day = day; self.skipped = skipped
+    }
+    public func apply(to state: inout PlannerState, now: Date, calendar: Calendar = .current) throws {
+        guard let current = state.fixedEvents.first(where: { $0.id == reviewed.id }),
+              current.title == reviewed.title, current.startMinute == reviewed.startMinute,
+              current.endMinute == reviewed.endMinute, current.floatingDurationMinutes == reviewed.floatingDurationMinutes,
+              current.occurs(on: day, calendar: calendar, includingExcluded: true),
+              reviewed.occurs(on: day, calendar: calendar, includingExcluded: true)
+        else { throw FixedEventEditError.occurrenceChanged }
+        try state.setFixedEventSkipped(id: reviewed.id, on: day, skipped: skipped, now: now, calendar: calendar)
     }
 }
 

@@ -4,6 +4,19 @@ import StudyPersistence
 @testable import StudyPlanner
 
 final class BackgroundEditingTests: XCTestCase {
+    @MainActor func testOccurrenceRestoreConflictIsVisibleWithoutLosingTheSkip() async {
+        let day = Calendar.current.startOfDay(for: Date()).addingTimeInterval(86400)
+        var event = FixedEvent(title: "待恢复", startMinute: 540, endMinute: 600, startDate: day, endDate: day)
+        event.excludedDates = [day]
+        var original = PlannerState()
+        original.fixedEvents = [event, .init(title: "新增占用", startMinute: 550, endMinute: 580, startDate: day, endDate: day)]
+        let repository = Repository(), store = store(original, repository)
+        await store.setEventSkipped(event, on: day, skipped: false)
+        XCTAssertEqual(store.state, original); XCTAssertNil(repository.saved)
+        XCTAssertTrue(store.errorMessage?.contains("本日安排未恢复") == true)
+        XCTAssertNil(store.pendingEventConflicts)
+        XCTAssertFalse(store.orderSaveBusy)
+    }
     @MainActor func testStaleConfirmationAndUndoKeepCurrentProgress() async throws {
         let now = Date(), original = fixture(), task = try XCTUnwrap(original.tasks.first)
         var moved = original; let index = try XCTUnwrap(moved.tasks.firstIndex { $0.id == task.id })

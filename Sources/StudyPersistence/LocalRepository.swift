@@ -21,11 +21,20 @@ public protocol PlannerRepository {
     @MainActor func saveChangesForInteraction(_ state: PlannerState, from baseline: PlannerState) async throws -> PlannerState
     @MainActor func saveFixedEventForInteraction(_ edit: FixedEventEdit,
                                                from baseline: PlannerState, now: Date) async throws -> PlannerState
+    @MainActor func saveFixedOccurrenceForInteraction(_ edit: FixedEventOccurrenceEdit,
+                                                     from baseline: PlannerState, now: Date) async throws -> PlannerState
     @MainActor func saveLessonOrderForInteraction(_ draft: LessonOrderDraft,
                                                 from baseline: PlannerState, now: Date) async throws -> PlannerState
 }
 
 extension PlannerRepository {
+    @MainActor public func saveFixedOccurrenceForInteraction(_ edit: FixedEventOccurrenceEdit,
+                                                            from baseline: PlannerState, now: Date) async throws -> PlannerState {
+        var next = baseline
+        try edit.apply(to: &next, now: now)
+        if next != baseline { _ = next.replan(now: now) }
+        return try await saveChangesForInteraction(next, from: baseline)
+    }
     @MainActor public func saveForInteraction(_ state: PlannerState) async throws { try save(state) }
     public func saveChanges(_ state: PlannerState, from baseline: PlannerState) throws -> PlannerState {
         try save(state)
@@ -192,6 +201,25 @@ public final class LocalRepository: PlannerRepository {
             _ = latest.replan(now: now)
             return latest
         }
+    }
+
+    public func saveFixedOccurrence(_ edit: FixedEventOccurrenceEdit, now: Date = Date()) throws -> PlannerState {
+        try update { latest, _ in
+            let previous = latest
+            try edit.apply(to: &latest, now: now)
+            if latest != previous { _ = latest.replan(now: now) }
+            return latest
+        }
+    }
+
+    @MainActor public func saveFixedOccurrenceForInteraction(_ edit: FixedEventOccurrenceEdit,
+                                                            from baseline: PlannerState, now: Date) async throws -> PlannerState {
+        let container = container, backup = migrationBackupURL, outbox = cloudOutboxURL
+        defer { discardCachedModels() }
+        return try await Task.detached(priority: .userInitiated) {
+            let worker = LocalRepository(container: container, migrationBackupURL: backup, cloudOutboxURL: outbox)
+            return try worker.saveFixedOccurrence(edit, now: now)
+        }.value
     }
 
     public func saveLessonOrder(_ draft: LessonOrderDraft, now: Date = Date()) throws -> PlannerState {

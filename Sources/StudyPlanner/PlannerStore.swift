@@ -116,6 +116,7 @@ final class PlannerStore {
                         backupReason: String? = "修改前自动备份", deletedCourseID: UUID? = nil,
                         clearError: Bool = true,
                         fixedEventEdit: FixedEventEdit? = nil,
+                        fixedOccurrenceEdit: FixedEventOccurrenceEdit? = nil,
                         lessonOrderDraft: LessonOrderDraft? = nil,
                         preparation: (@Sendable (inout PlannerState) throws -> ScheduleResult)? = nil) async -> Bool {
         guard !orderSaveBusy, let repository, isReady else { return false }
@@ -143,6 +144,8 @@ final class PlannerStore {
                 if let fixedEventEdit {
                     saved = try await repository.saveFixedEventForInteraction(fixedEventEdit,
                                                                              from: previous, now: now)
+                } else if let fixedOccurrenceEdit {
+                    saved = try await repository.saveFixedOccurrenceForInteraction(fixedOccurrenceEdit, from: previous, now: now)
                 } else if let lessonOrderDraft {
                     saved = try await repository.saveLessonOrderForInteraction(lessonOrderDraft,
                                                                               from: previous, now: now)
@@ -311,7 +314,16 @@ final class PlannerStore {
         await change { try $0.removeFixedEvent(reviewed: event) }
     }
     func setEventSkipped(_ event: FixedEvent, on day: Date, skipped: Bool) async {
-        await change { try $0.setFixedEventSkipped(id: event.id, on: day, skipped: skipped, now: Date()) }
+        let edit = FixedEventOccurrenceEdit(reviewed: event, on: day, skipped: skipped), now = Date()
+        pendingEventConflicts = nil
+        let saved = await commit(state, replan: true, now: now, fixedOccurrenceEdit: edit) {
+            try edit.apply(to: &$0, now: now)
+            return $0.replan(now: now)
+        }
+        if !saved, let conflicts = pendingEventConflicts, !conflicts.isEmpty {
+            errorMessage = "本日安排未恢复：" + PlannerError.fixedConflict(conflicts).localizedDescription
+            pendingEventConflicts = nil
+        }
     }
     func confirm(_ task: ScheduledTask, minutes: Int, studyDate: Date? = nil, now: Date = Date()) async -> Bool {
         await change(replan: task.confirmationRequiresReplan(actualMinutes: minutes, now: now), now: now) {

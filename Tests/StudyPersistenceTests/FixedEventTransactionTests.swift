@@ -3,6 +3,37 @@ import StudyCore
 @testable import StudyPersistence
 
 final class FixedEventTransactionTests: XCTestCase {
+    func testOccurrenceTransactionRejectsChangedTimeAndNewRestoreConflict() throws {
+        let repository = try LocalRepository(inMemory: true), baseline = fixture(), now = Date()
+        let event = baseline.fixedEvents[0], day = event.startDate
+        var changed = baseline; changed.fixedEvents[0].startMinute += 5
+        try repository.save(changed)
+        let edit = FixedEventOccurrenceEdit(reviewed: event, on: day, skipped: true)
+        let before = try repository.loadLedger().records
+        XCTAssertThrowsError(try repository.saveFixedOccurrence(edit, now: now))
+        XCTAssertEqual(try repository.loadLedger().records, before)
+
+        var skipped = baseline; skipped.fixedEvents[0].excludedDates = [day]
+        let restore = FixedEventOccurrenceEdit(reviewed: skipped.fixedEvents[0], on: day, skipped: false)
+        skipped.fixedEvents.append(.init(title: "稍后同步的占用", startMinute: 550, endMinute: 580, startDate: day, endDate: day))
+        try repository.save(skipped)
+        let records = try repository.loadLedger().records
+        XCTAssertThrowsError(try repository.saveFixedOccurrence(restore, now: now))
+        XCTAssertEqual(try repository.loadLedger().records, records)
+        XCTAssertEqual(try repository.load().fixedEvents.count, 2)
+    }
+
+    @MainActor func testInteractiveOccurrenceTransactionUsesFreshMetadata() async throws {
+        let repository = try LocalRepository(inMemory: true), baseline = fixture()
+        var latest = baseline; latest.fixedEvents[0].notes = "同步新备注"; latest.fixedEvents[0].color = "green"
+        try repository.save(latest)
+        let edit = FixedEventOccurrenceEdit(reviewed: baseline.fixedEvents[0], on: baseline.fixedEvents[0].startDate, skipped: true)
+        let storage: PlannerRepository = repository
+        let saved = try await storage.saveFixedOccurrenceForInteraction(edit, from: baseline, now: Date())
+        latest.fixedEvents[0].excludedDates = [baseline.fixedEvents[0].startDate]
+        XCTAssertEqual(saved.fixedEvents, latest.fixedEvents)
+        XCTAssertEqual(try repository.load().fixedEvents, latest.fixedEvents)
+    }
     private func fixture() -> PlannerState {
         let day = Calendar.current.date(byAdding: .day, value: 2, to: Calendar.current.startOfDay(for: Date()))!
         var state = PlannerState()
