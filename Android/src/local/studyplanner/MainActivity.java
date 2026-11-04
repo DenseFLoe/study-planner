@@ -291,25 +291,29 @@ public class MainActivity extends Activity {
         })));d.show();
     });}
     void review(){run(()->{
-        List<JSONObject> displayed=Planner.review(state,Planner.now());ConfirmationDraft draft=new ConfirmationDraft(displayed);
-        LinearLayout list=col();list.setPadding(dp(16),0,dp(16),dp(16));
+        double now=Planner.now();List<JSONObject> displayed=Planner.review(state,now);
+        if(displayed.isEmpty()){alert("学习完成确认","当前没有待确认的任务。");return;}
+        ConfirmationReview review=new ConfirmationReview(state,displayed,now);int[] page={0};Button[] buttons=new Button[2];
+        LinearLayout form=col(),list=col();form.setPadding(dp(16),0,dp(16),dp(8));
+        form.addView(text("留空不处理，翻页保留输入。保存会提交所有页面已填写的项目。",13,muted));TextView position=text("",12,muted);form.addView(position);
+        ScrollView sv=new ScrollView(this);sv.addView(list);form.addView(sv,new LinearLayout.LayoutParams(-1,dp(340)));
+        PlannerUi.Flow navigation=new PlannerUi.Flow(this);form.addView(navigation);
         Map<String,EditText> values=new LinkedHashMap<>(),studyDates=new LinkedHashMap<>();
-        for(JSONObject t:displayed){
-            JSONObject c=Planner.course(state,t.optString("courseID"));
-            EditText e=field(list,Planner.date(t.optDouble("start"))+" "+Planner.clock(Planner.planningStart(t))+(Planner.floatingTask(t)?"–"+Planner.clock(Planner.planningEnd(t))+" 内浮动":"")+" · "+c.optString("name")+(t.optString("lessonName").isEmpty()?"":" / "+t.optString("lessonName"))+"（最多 "+t.optInt("durationMinutes")+" 分钟）","",true);
-            e.setHint("留空暂不确认，0 表示未完成");values.put(t.optString("id"),e);
-            studyDates.put(t.optString("id"),dateField(list,"实际学习日期（补录请核对）",Planner.date(Math.min(t.optDouble("start"),Planner.now()))));
-        }
-        ScrollView sv=new ScrollView(this);sv.addView(list);
-        AlertDialog d=new AlertDialog.Builder(this).setTitle("逐项确认实际学习分钟").setView(sv).setNegativeButton("稍后",null).setPositiveButton("保存已填写项",null).create();
-        d.setOnShowListener(v->d.getButton(-1).setOnClickListener(x->run(()->{
-            Map<String,Integer> filled=new LinkedHashMap<>();Map<String,LocalDate> dates=new LinkedHashMap<>();
-            for(Map.Entry<String,EditText> e:values.entrySet())if(!value(e.getValue()).isEmpty()){
-                filled.put(e.getKey(),Integer.parseInt(value(e.getValue())));
-                dates.put(e.getKey(),LocalDate.parse(value(studyDates.get(e.getKey()))));
+        Runnable capture=()->{for(ConfirmationReview.Row row:review.page(page[0])){row.minutes=value(values.get(row.id));row.studyDate=value(studyDates.get(row.id));}};
+        Runnable render=()->{
+            list.removeAllViews();values.clear();studyDates.clear();position.setText("共 "+review.count()+" 项 · 第 "+(page[0]+1)+" / "+review.pageCount()+" 页");
+            for(ConfirmationReview.Row row:review.page(page[0])){
+                EditText minutes=field(list,row.label(),row.minutes,true);minutes.setHint("留空暂不确认，0 表示未完成");values.put(row.id,minutes);
+                studyDates.put(row.id,dateField(list,"实际学习日期（补录请核对）",row.studyDate));
             }
-            if(filled.isEmpty())throw new IllegalArgumentException("请至少填写一项");
-            confirmTasks(draft,filled,dates,d::dismiss);
+            buttons[0].setEnabled(page[0]>0);buttons[1].setEnabled(page[0]+1<review.pageCount());sv.scrollTo(0,0);
+        };
+        buttons[0]=button("上一页",()->{capture.run();page[0]--;render.run();});buttons[1]=button("下一页",()->{capture.run();page[0]++;render.run();});navigation.addView(buttons[0]);navigation.addView(buttons[1]);render.run();
+        AlertDialog d=new AlertDialog.Builder(this).setTitle("逐项确认实际学习分钟").setView(form).setNegativeButton("稍后",null).setPositiveButton("保存所有已填写项",null).create();
+        d.setOnShowListener(v->d.getButton(-1).setOnClickListener(x->run(()->{
+            capture.run();ConfirmationReview.Submission submission;
+            try{submission=review.submission(Planner.now());}catch(ConfirmationReview.InputError error){page[0]=error.index/ConfirmationReview.PAGE_SIZE;render.run();throw error;}
+            confirmTasks(review.draft,submission.minutes,submission.dates,d::dismiss);
         })));d.show();
     });}
     void showReviewNotice(){if(!reviewShown&&!Planner.review(state,Planner.now()).isEmpty()){reviewShown=true;render();}}
