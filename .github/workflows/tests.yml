@@ -35,6 +35,11 @@ jobs:
 
   tests:
     name: Swift, Java and Android
+    # Finish active native validation; retain the newest pending commit per ref.
+    # Linux still validates every push independently of the macOS runner queue.
+    concurrency:
+      group: ${{ github.workflow }}-macos-${{ github.ref }}
+      cancel-in-progress: false
     # macos-15 now selects arm64; that pool failed to acquire runners before any
     # step ran. Keep the full macOS suite on the standard Intel pool with Xcode 26.3.
     runs-on: macos-15-intel
