@@ -19,6 +19,19 @@ public final class RecurringRecognitionTests {
         Planner.validateEventWindow(value); checks += 3;
     }
     public static void main(String[] args) throws Exception {
+        for(String[] sample:new String[][]{
+            {"每周一至三、五","[2,3,4,6]"},{"每周一到三、五到日","[1,2,3,4,6,7]"},
+            {"每周五到一、三","[1,2,4,6,7]"},{"每周一–三","[2,3,4]"},
+            {"每星期一到星期三和星期五","[2,3,4,6]"},{"每周一、三至五、日","[1,2,4,5,6]"},
+            {"每周1-3,5","[2,3,4,6]"},{"每周１－３、５～７","[1,2,3,4,6,7]"}
+        }){
+            String text=sample[0]+" 09:00到10:00 复习";check(text,TODAY,sample[1]);JSONObject value=event(text);
+            if(!value.getString("title").equals("复习")||!value.getString("notes").equals(text))throw new AssertionError("Range changed title or notice: "+text);checks+=2;
+            for(int offset=0;offset<7;offset++){
+                LocalDate day=TODAY.plusDays(offset);int weekday=day.getDayOfWeek().getValue()%7+1;
+                if(Planner.occurs(value,day)!=sample[1].contains(String.valueOf(weekday)))throw new AssertionError("Wrong occurrence: "+text+" on "+day);checks++;
+            }
+        }
         for (String text : new String[]{"每周一、三、五18:00-19:00复习", "每周一、周三、周五18:00-19:00复习", "每星期一、星期三、星期五18:00-19:00复习"})
             check(text, TODAY, "[2,4,6]");
         check("每周一至五18:00-19:00复习", TODAY, "[2,3,4,5,6]");

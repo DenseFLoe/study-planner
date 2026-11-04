@@ -80,6 +80,29 @@ final class FixedEventTextParserTests: XCTestCase {
         XCTAssertEqual(try draft("工作日9:00-10:00早读").event.weekdays, Set(2...6))
         XCTAssertEqual(try draft("周末9:00-10:00早读").event.weekdays, [1, 7])
     }
+    func testMixedWeekdayRangesExpandEachRangeWithoutBecomingDates() throws {
+        let today = date(2026, 11, 4)
+        let samples: [(String, Set<Int>)] = [
+            ("每周一至三、五", [2, 3, 4, 6]),
+            ("每周一到三、五到日", [1, 2, 3, 4, 6, 7]),
+            ("每周五到一、三", [1, 2, 4, 6, 7]),
+            ("每周一–三", [2, 3, 4]),
+            ("每星期一到星期三和星期五", [2, 3, 4, 6]),
+            ("每周一、三至五、日", [1, 2, 4, 5, 6]),
+            ("每周1-3,5", [2, 3, 4, 6]),
+            ("每周１－３、５～７", [1, 2, 3, 4, 6, 7])
+        ]
+        for (description, weekdays) in samples {
+            let text = description + " 09:00到10:00 复习", value = try draft(text, now: today).event
+            XCTAssertEqual(value.weekdays, weekdays, text)
+            XCTAssertEqual(value.startDate, date(2026, 11, 4, 0), text)
+            XCTAssertEqual(value.title, "复习", text); XCTAssertEqual(value.notes, text)
+            for offset in 0..<7 {
+                let day = calendar.date(byAdding: .day, value: offset, to: today)!
+                XCTAssertEqual(value.occurs(on: day, calendar: calendar), weekdays.contains(calendar.component(.weekday, from: day)), text)
+            }
+        }
+    }
     func testRecurringListsKeepThisWeekAndExplicitStartIsNotAWeekday() throws {
         let today = date(2026, 11, 4)
         let samples: [(String, Int, Set<Int>)] = [

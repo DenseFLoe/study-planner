@@ -12,6 +12,8 @@ public final class FixedEventTextParser {
     static final String DATE="(?<![0-9:])(?:(20[0-9]{2})[年/\\-])?([0-9]{1,2})[月/\\-]([0-9]{1,2})(?:日|号)?(?![0-9:])";
     static final String RELATIVE="大后天|后天|明天|今天|今日|明日|后日|(?:下下|下|本|这)?(?:周|星期|礼拜)[一二三四五六日天1-7]";
     static final String WEEK_START="(?:从|自)?\\s*(下下|下|本|这)(?:周|星期|礼拜)\\s*(?:开始|起)";
+    static final String WEEKDAY_LIST="([一二三四五六日天1-7](?:\\s*(?:、|,|，|和|及|到|至|[-~—～–])\\s*(?:(?:每)?(?:周|星期|礼拜))?[一二三四五六日天1-7])*)";
+    static final String WEEKDAYS="(?:每(?:周|星期|礼拜)|每逢|周|星期|礼拜)"+WEEKDAY_LIST;
     public static final class Draft {
         public final JSONObject event;public final List<String> warnings;public final String source;
         Draft(JSONObject event,List<String> warnings,String source){this.event=event;this.warnings=new ArrayList<>(new TreeSet<>(warnings));this.source=source;}
@@ -26,9 +28,15 @@ public final class FixedEventTextParser {
     static int digit(char c){int n="零一二三四五六七八九".indexOf(c);return c=='〇'?0:c=='两'?2:n;}
     static int weekday(char c){int n="一二三四五六日".indexOf(c);if(c=='天')n=6;if(c>='1'&&c<='7')n=c-'1';return n;}
     static Set<Integer> weekdays(String text){Set<Integer> out=new TreeSet<>();if(has("每天|每日",text)){out.addAll(Arrays.asList(1,2,3,4,5,6,7));return out;}if(text.contains("工作日")){out.addAll(Arrays.asList(2,3,4,5,6));return out;}if(text.contains("周末")){out.addAll(Arrays.asList(1,7));return out;}
-        for(MatchResult m:matches("(?:每(?:周|星期|礼拜)|每逢|周|星期|礼拜)([一二三四五六日天1-7](?:\\s*(?:、|,|，|和|及|到|至|[-~—～])\\s*(?:(?:每)?(?:周|星期|礼拜))?[一二三四五六日天1-7])*)",text)){
-            String list=group(m,1);List<Integer> days=new ArrayList<>();for(MatchResult d:matches("[一二三四五六日天1-7]",list))days.add((weekday(group(d,0).charAt(0))+1)%7+1);
-            if(has("到|至|[-~—～]",list)&&days.size()==2){int d=days.get(0);for(int i=0;i<7;i++){out.add(d);if(d==days.get(1))break;d=d%7+1;}}else out.addAll(days);
+        for(MatchResult m:matches(WEEKDAYS,text)){
+            String list=group(m,1);int previous=-1,end=0;
+            for(MatchResult token:matches("[一二三四五六日天1-7]",list)){
+                int day=(weekday(group(token,0).charAt(0))+1)%7+1;
+                if(previous>=0&&has("到|至|[-~—～–]",list.substring(end,token.start()))){
+                    int cursor=previous;for(int i=0;i<7;i++){out.add(cursor);if(cursor==day)break;cursor=cursor%7+1;}
+                }
+                out.add(day);previous=day;end=token.end();
+            }
         }return out;
     }
     static boolean explicitRecurringStart(MatchResult match,String text){
@@ -43,6 +51,8 @@ public final class FixedEventTextParser {
     static Draft notice(String source,LocalDate today)throws Exception {
         String text=normalize(source);require(!has("取消|改期|推迟|延期|(?:时间|日期|会议|活动)待定|暂不|另择|任选|之间|时段内|浮动",text),"内容涉及取消、变更或浮动时段，请整理明确的日期与起止时间，或手动添加。");
         List<String> warnings=new ArrayList<>();List<MatchResult> dateMatches=matches(DATE,text),relativeMatches=matches(RELATIVE,text);List<LocalDate> dates=new ArrayList<>();Integer inferred=null;
+        List<MatchResult> weekdayLists=matches(WEEKDAYS,text);
+        dateMatches.removeIf(date->weekdayLists.stream().anyMatch(list->list.start()<=date.start()&&list.end()>=date.end()));
         for(MatchResult m:dateMatches){String y=group(m,1);int year=y.isEmpty()?(inferred==null?today.getYear():inferred):integer(y),month=integer(group(m,2)),day=integer(group(m,3));LocalDate date;
             try{date=LocalDate.of(year,month,day);}catch(DateTimeException e){throw new Reject("日期不存在，请核对原文中的月、日。");}
             if(y.isEmpty()){if(dates.isEmpty()?date.isBefore(today):date.isBefore(dates.get(dates.size()-1)))year++;try{date=LocalDate.of(year,month,day);}catch(DateTimeException e){throw new Reject("无法确定日期年份，请填写完整年月日。");}warnings.add("原文未写年份，按 "+year+" 年解释，请核对。");}inferred=year;dates.add(date);
@@ -82,7 +92,7 @@ public final class FixedEventTextParser {
     static String title(String text){for(String pattern:new String[]{"(?:事项|主题|活动名称|会议名称|名称)[：:]\\s*([^\\n，,。；;]{2,60})","(?:召开|举行|开展|举办)\\s*([^\\n，,。；;]{2,60})"}){List<MatchResult> m=matches(pattern,text);if(!m.isEmpty())return group(m.get(0),1).trim();}
         String dateDescription="(?:从|自|截止|截至|直到|至|到)?\\s*(?:"+DATE+"|"+RELATIVE+")\\s*(?:开始|起)?";
         String value=text;
-        for(String p:new String[]{WEEK_START,"(?:每(?:周|星期|礼拜)|每逢)[一二三四五六日天1-7](?:\\s*(?:、|,|，|和|及|到|至|[-~—～])\\s*(?:(?:每)?(?:周|星期|礼拜))?[一二三四五六日天1-7])*|每天|每日|工作日|周末",dateDescription,CLOCK,
+        for(String p:new String[]{WEEK_START,"(?:每(?:周|星期|礼拜)|每逢)"+WEEKDAY_LIST+"|每天|每日|工作日|周末",dateDescription,CLOCK,
                 "(?:持续|时长|共|约|用时)\\s*"+NUMBER+"\\s*(?:个半小时|小时半|个小时|小时|分钟|分|周)(?:\\s*"+NUMBER+"\\s*分(?:钟)?)?",
                 "(?<=\\s)[到至~—～–-](?=\\s)","@所有人"})value=value.replaceAll(p," ");
         for(String chunk:value.split("[\\n，,。；;]")){String s=chunk.replaceAll("^[\\s：:、-]+|[\\s：:、-]+$","");if(!s.isEmpty()&&!Arrays.asList("时间","日期","通知","地点另行通知").contains(s))return s.substring(0,Math.min(60,s.length()));}return "待命名事项";

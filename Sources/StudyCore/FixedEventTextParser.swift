@@ -30,6 +30,8 @@ public enum FixedEventTextParser {
     private static let relativePattern = "大后天|后天|明天|今天|今日|明日|后日|(?:下下|下|本|这)?(?:周|星期|礼拜)[一二三四五六日天1-7]"
 
     private static let weekStartPattern = "(?:从|自)?\\s*(下下|下|本|这)(?:周|星期|礼拜)\\s*(?:开始|起)"
+    private static let weekdayList = "([一二三四五六日天1-7](?:\\s*(?:、|,|，|和|及|到|至|[-~—～–])\\s*(?:(?:每)?(?:周|星期|礼拜))?[一二三四五六日天1-7])*)"
+    private static let weekdayListPattern = "(?:每(?:周|星期|礼拜)|每逢|周|星期|礼拜)" + weekdayList
 
     public static func parse(_ text: String, now: Date = Date(), calendar: Calendar = .current) -> FixedEventTextResult {
         let source = text.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -98,7 +100,11 @@ public enum FixedEventTextParser {
         }
         var warnings: [String] = []
         let today = calendar.startOfDay(for: now)
-        let dateMatches = matches(datePattern, text)
+        let weekdayLists = matches(weekdayListPattern, text)
+        // Numeric weekday ranges (周1-3) are not month/day dates.
+        let dateMatches = matches(datePattern, text).filter { date in
+            !weekdayLists.contains { $0.range.location <= date.range.location && NSMaxRange($0.range) >= NSMaxRange(date.range) }
+        }
         let relativeMatches = matches(relativePattern, text)
         var dates: [Date] = []
         var inferredYear: Int?
@@ -242,13 +248,20 @@ public enum FixedEventTextParser {
         if text.contains("周末") { return [1, 7] }
         let values: [String: Int] = ["一":2,"二":3,"三":4,"四":5,"五":6,"六":7,"日":1,"天":1,"1":2,"2":3,"3":4,"4":5,"5":6,"6":7,"7":1]
         var result: Set<Int> = []
-        for match in matches("(?:每(?:周|星期|礼拜)|每逢|周|星期|礼拜)([一二三四五六日天1-7](?:\\s*(?:、|,|，|和|及|到|至|[-~—～])\\s*(?:(?:每)?(?:周|星期|礼拜))?[一二三四五六日天1-7])*)", text) {
+        for match in matches(weekdayListPattern, text) {
             let list = capture(match, 1, text)
-            let days = matches("[一二三四五六日天1-7]", list).compactMap { values[capture($0, 0, list)] }
-            if !matches("到|至|[-~—～]", list).isEmpty && days.count == 2 {
-                var day = days[0]
-                for _ in 0..<7 { result.insert(day); if day == days[1] { break }; day = day % 7 + 1 }
-            } else { result.formUnion(days) }
+            var previous: (day: Int, end: Int)?
+            for token in matches("[一二三四五六日天1-7]", list) {
+                guard let day = values[capture(token, 0, list)] else { continue }
+                if let previous {
+                    let separator = (list as NSString).substring(with: NSRange(location: previous.end, length: token.range.location - previous.end))
+                    if !matches("到|至|[-~—～–]", separator).isEmpty {
+                        var cursor = previous.day
+                        for _ in 0..<7 { result.insert(cursor); if cursor == day { break }; cursor = cursor % 7 + 1 }
+                    }
+                }
+                result.insert(day); previous = (day, NSMaxRange(token.range))
+            }
         }
         return result
     }
@@ -291,7 +304,7 @@ public enum FixedEventTextParser {
         }
         let dateDescription = "(?:从|自|截止|截至|直到|至|到)?\\s*(?:\(datePattern)|\(relativePattern))\\s*(?:开始|起)?"
         var value = text
-        for pattern in [weekStartPattern, "(?:每(?:周|星期|礼拜)|每逢)[一二三四五六日天1-7](?:\\s*(?:、|,|，|和|及|到|至|[-~—～])\\s*(?:(?:每)?(?:周|星期|礼拜))?[一二三四五六日天1-7])*|每天|每日|工作日|周末", dateDescription, clockPattern,
+        for pattern in [weekStartPattern, "(?:每(?:周|星期|礼拜)|每逢)" + weekdayList + "|每天|每日|工作日|周末", dateDescription, clockPattern,
                         "(?:持续|时长|共|约|用时)\\s*\(number)\\s*(?:个半小时|小时半|个小时|小时|分钟|分|周)(?:\\s*\(number)\\s*分(?:钟)?)?",
                         "(?<=\\s)[到至~—～–-](?=\\s)", "@所有人"] {
             value = replacing(pattern, value, with: " ")
