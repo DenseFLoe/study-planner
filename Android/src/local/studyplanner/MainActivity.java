@@ -171,8 +171,24 @@ public class MainActivity extends Activity {
             buttons[0].setEnabled(page[0]>0);buttons[1].setEnabled(page[0]+1<preview.pageCount());scroll.scrollTo(0,0);
         };
         buttons[0]=button("上一页",()->{page[0]--;render.run();});buttons[1]=button("下一页",()->{page[0]++;render.run();});navigation.addView(buttons[0]);navigation.addView(buttons[1]);render.run();
-        new AlertDialog.Builder(this).setTitle("核对未完成的导入").setView(form).setNegativeButton("暂不导入",null)
-            .setPositiveButton("继续导入",(d,w)->run(()->receiveCourses(new Intent().putExtra("captureFile",file.getAbsolutePath()).putExtra("captureReviewFingerprint",preview.fingerprint())))).show();
+        AlertDialog dialog=new AlertDialog.Builder(this).setTitle("核对未完成的导入").setView(form).setNegativeButton("暂不导入",null)
+            .setPositiveButton("继续导入",(d,w)->run(()->receiveCourses(new Intent().putExtra("captureFile",file.getAbsolutePath()).putExtra("captureReviewFingerprint",preview.fingerprint()))))
+            .setNeutralButton("删除这份结果",null).create();
+        dialog.setOnShowListener(d->dialog.getButton(AlertDialog.BUTTON_NEUTRAL).setOnClickListener(v->{
+            if(busy)return;
+            new AlertDialog.Builder(this).setTitle("删除这份未完成的导入？")
+                .setMessage("这份抓取结果包含 "+preview.count()+" 门课程。删除后需要重新抓取；已经保存的课程、进度和日程不会删除。")
+                .setNegativeButton("保留",null).setPositiveButton("删除临时结果",(confirm,w)->discardCourseImport(file,preview,dialog)).show();
+        }));dialog.show();
+    }
+    void discardCourseImport(File file,CourseImportReceipt.Preview preview,AlertDialog review){
+        if(busy)return;busy=true;ProgressDialog progress=ProgressDialog.show(this,"","正在删除临时抓取结果…",true,false);
+        worker.execute(()->{try{
+            boolean removed=new CourseImportReceipt(getCacheDir(),file.getAbsolutePath()).discard(preview.fingerprint());
+            runOnUiThread(()->{busy=false;progress.dismiss();if(isDestroyed())return;review.dismiss();
+                alert("未完成的导入",removed?"这份临时抓取结果已删除，已保存的日程未改动。":"这份临时结果已不存在，已保存的日程未改动。");resumeSyncRefresh();
+            });
+        }catch(Exception error){runOnUiThread(()->{busy=false;progress.dismiss();if(isDestroyed())return;alert("未删除导入结果",error.getMessage());resumeSyncRefresh();});}});
     }
     int dp(int n){return (int)(n*getResources().getDisplayMetrics().density+.5f);}
     LinearLayout col(){LinearLayout v=new LinearLayout(this);v.setOrientation(1);return v;}

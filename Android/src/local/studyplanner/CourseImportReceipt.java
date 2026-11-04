@@ -8,7 +8,7 @@ import java.security.*;
 import java.util.*;
 import java.util.function.DoubleSupplier;
 
-/** A private handoff file is consumed only after the database confirms a durable save. */
+/** Automatic consumption follows a durable save; explicit discard requires a reviewed fingerprint. */
 final class CourseImportReceipt {
     static final long MAX_BYTES = 25_000_000;
     private final File file;
@@ -96,6 +96,16 @@ final class CourseImportReceipt {
         }
         if (rows.isEmpty()) throw new IOException("导入结果没有选中的课程。");
         return new Preview(rows, payload.fingerprint, Planner.date(payload.data.getDouble("deadline")), total);
+    }
+    /** Explicit user discard affects only the immutable staged file they reviewed. */
+    boolean discard(byte[] reviewedFingerprint) throws Exception {
+        if (reviewedFingerprint == null || reviewedFingerprint.length != 32)
+            throw new IOException("请先核对这份导入结果，再确认删除。");
+        if (!file.exists()) return false;
+        Payload current = read();
+        if (!MessageDigest.isEqual(reviewedFingerprint, current.fingerprint))
+            throw new IOException("导入文件在核对后发生变化，未删除。请重新查看未完成的导入。");
+        return Files.deleteIfExists(file.toPath());
     }
     static final class Result {
         final JSONObject state;

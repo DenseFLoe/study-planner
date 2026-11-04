@@ -124,9 +124,29 @@ public final class CourseImportReceiptTests {
         CourseImportReceipt.Result result = receipt.commit(store, () -> NOW, preview.fingerprint());
         check(result.removed && store.value.getJSONArray("courses").length() == 1, "Reviewed unchanged import did not save and consume file");
     }
+    static void reviewedDiscard(Path directory) throws Exception {
+        Path target = write(directory, payload().toString()), other = write(directory, payload().toString());
+        CourseImportReceipt receipt = new CourseImportReceipt(directory.toFile(), target.toString());
+        CourseImportReceipt.Preview preview = receipt.preview();
+        for (byte[] fingerprint : new byte[][]{null, new byte[0], new byte[31], new byte[32]}) {
+            try { receipt.discard(fingerprint); throw new AssertionError("Unreviewed file discarded"); }
+            catch (IOException expected) { check(Files.exists(target) && Files.exists(other), "Invalid discard removed a file"); }
+        }
+        byte[] changed = payload().put("deadline", NOW + 86400).toString().getBytes(StandardCharsets.UTF_8);
+        Files.write(target, changed);
+        try { receipt.discard(preview.fingerprint()); throw new AssertionError("Changed file discarded with old review"); }
+        catch (IOException expected) { check(Arrays.equals(changed, Files.readAllBytes(target)) && expected.getMessage().contains("未删除"), "Changed receipt not protected"); }
+        preview = receipt.preview();
+        check(receipt.discard(preview.fingerprint()) && !Files.exists(target), "Reviewed discard failed");
+        check(Files.exists(other) && CourseImportReceipt.pending(directory.toFile()).size() == 1, "Discard removed another pending import");
+        check(!receipt.discard(preview.fingerprint()), "Already removed file should report absence");
+        CourseImportReceipt remaining = new CourseImportReceipt(directory.toFile(), other.toString());
+        Store store = new Store();
+        check(remaining.commit(store, () -> NOW).removed && store.value.getJSONArray("courses").length() == 1, "Discard damaged a different import");
+    }
     public static void main(String[] args) throws Exception {
         Path directory = Files.createTempDirectory("study-import-receipt-");
-        try { successfulRetry(directory); invalidPayloads(directory); pathScope(directory); atomicStaging(directory); staleRetry(directory); reviewedImports(directory); }
+        try { successfulRetry(directory); invalidPayloads(directory); pathScope(directory); atomicStaging(directory); staleRetry(directory); reviewedImports(directory); reviewedDiscard(directory); }
         finally { try (Stream<Path> files = Files.walk(directory)) { for (Path path : (Iterable<Path>)files.sorted(Comparator.reverseOrder())::iterator) Files.deleteIfExists(path); } }
         System.out.println("CourseImportReceiptTests: " + checks + " checks passed");
     }
