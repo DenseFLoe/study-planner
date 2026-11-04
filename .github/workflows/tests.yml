@@ -10,7 +10,9 @@ permissions:
 jobs:
   tests:
     name: Swift, Java and Android
-    runs-on: macos-15
+    # macos-15 now selects arm64; that pool failed to acquire runners before any
+    # step ran. Keep the full macOS suite on the standard Intel pool with Xcode 26.3.
+    runs-on: macos-15-intel
     timeout-minutes: 30
     env:
       DEVELOPER_DIR: /Applications/Xcode_26.3.app/Contents/Developer
