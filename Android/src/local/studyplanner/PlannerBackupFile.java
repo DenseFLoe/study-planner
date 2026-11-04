@@ -22,9 +22,12 @@ public final class PlannerBackupFile {
     }
 
     public static PlannerBackupFile create(JSONObject state, double now) throws Exception {
+        return create(state, now, "Android 导出备份");
+    }
+    static PlannerBackupFile create(JSONObject state, double now, String reason) throws Exception {
         if (!Double.isFinite(now)) throw new IllegalArgumentException("备份时间无效");
         return new PlannerBackupFile(new JSONObject().put("format", 1).put("id", Planner.id()).put("createdAt", now)
-            .put("reason", "Android 导出备份").put("state", businessState(state)), false);
+            .put("reason", reason).put("state", businessState(state)), false);
     }
 
     public static PlannerBackupFile read(InputStream input) throws Exception { return read(input, MAX_BYTES); }
@@ -84,9 +87,12 @@ public final class PlannerBackupFile {
             candidate = file.state(); baseline = SyncLedger.canonical(businessState(current));
             summary = file.summary() + "\n\n手机当前：" + counts(current);
         }
-        public void apply(JSONObject current) throws Exception {
+        void check(JSONObject current) throws Exception {
             if (!baseline.equals(SyncLedger.canonical(businessState(current))))
                 throw new IllegalArgumentException("日程在核对备份期间已有更新，未执行恢复。请重新选择备份并核对最新记录。");
+        }
+        public void apply(JSONObject current) throws Exception {
+            check(current);
             JSONObject replacement = CourseTools.copy(candidate);
             List<String> keys = new ArrayList<>(); Iterator<String> names = current.keys(); while (names.hasNext()) keys.add(names.next());
             for (String key : keys) current.remove(key);

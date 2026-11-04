@@ -356,7 +356,7 @@ public class MainActivity extends Activity {
         }
         syncSettings(menu.page("localSync","热点局域网同步",0,false));
         CloudSettingsPanel.render(this,menu.page("cloudSync","云端同步",3,false));
-        LinearLayout backup=card(menu.page("data","数据与备份",1,false));backup.addView(title("数据与备份"));backup.addView(text("安装包不含个人日程；首次安装以空白日程开始。覆盖安装不会替换手机进度。卸载会删除手机数据，请先导出备份。",13,muted));PlannerUi.Flow backupActions=new PlannerUi.Flow(this);backup.addView(backupActions);backupActions.addView(button("导出手机日程备份",()->{Intent intent=new Intent(Intent.ACTION_CREATE_DOCUMENT);intent.setType("application/json");intent.addCategory(Intent.CATEGORY_OPENABLE);intent.putExtra(Intent.EXTRA_TITLE,"学习日程-"+LocalDate.now(Planner.ZONE)+".json");startActivityForResult(intent,EXPORT_BACKUP);}));backupActions.addView(button("从备份恢复",()->{Intent intent=new Intent(Intent.ACTION_OPEN_DOCUMENT);intent.setType("application/json");intent.addCategory(Intent.CATEGORY_OPENABLE);startActivityForResult(intent,IMPORT_BACKUP);}));JSONObject meta=new JSONObject(read(getAssets().open("snapshot-info.json")));backup.addView(text("初始数据："+meta.getJSONObject("counts").getInt("courses")+" 门课程 · "+meta.getJSONObject("counts").getInt("fixedEvents")+" 条固定规则 · "+meta.getJSONObject("counts").getInt("tasks")+" 条任务 · "+meta.getJSONObject("counts").getInt("completions")+" 条完成记录\n安卓版 "+getPackageManager().getPackageInfo(getPackageName(),0).versionName+" · Android 8.0 及以上",12,muted));
+        LinearLayout backup=card(menu.page("data","数据与备份",1,false));backup.addView(title("数据与备份"));backup.addView(text("安装包不含个人日程；首次安装以空白日程开始。覆盖安装不会替换手机进度。卸载会删除手机数据，请先导出备份。",13,muted));PlannerUi.Flow backupActions=new PlannerUi.Flow(this);backup.addView(backupActions);backupActions.addView(button("导出手机日程备份",()->{Intent intent=new Intent(Intent.ACTION_CREATE_DOCUMENT);intent.setType("application/json");intent.addCategory(Intent.CATEGORY_OPENABLE);intent.putExtra(Intent.EXTRA_TITLE,"学习日程-"+LocalDate.now(Planner.ZONE)+".json");startActivityForResult(intent,EXPORT_BACKUP);}));backupActions.addView(button("从备份恢复",()->{Intent intent=new Intent(Intent.ACTION_OPEN_DOCUMENT);intent.setType("application/json");intent.addCategory(Intent.CATEGORY_OPENABLE);startActivityForResult(intent,IMPORT_BACKUP);}));backupActions.addView(button("恢复前的日程",()->transferBackup(null,false)));backup.addView(text("每次从备份恢复前保留一份本机日程，可通过「恢复前的日程」找回。仅保留最近一次，卸载或清除数据也会删除；需要长期保存请导出文件。",13,muted));JSONObject meta=new JSONObject(read(getAssets().open("snapshot-info.json")));backup.addView(text("初始数据："+meta.getJSONObject("counts").getInt("courses")+" 门课程 · "+meta.getJSONObject("counts").getInt("fixedEvents")+" 条固定规则 · "+meta.getJSONObject("counts").getInt("tasks")+" 条任务 · "+meta.getJSONObject("counts").getInt("completions")+" 条完成记录\n安卓版 "+getPackageManager().getPackageInfo(getPackageName(),0).versionName+" · Android 8.0 及以上",12,muted));
         captureSettingsDraft=()->{
             draft.unit=unit.getText().toString();draft.notification=notification.getText().toString();
             for(int i=0;i<7;i++)draft.availability[i]=availability[i].getText().toString();
@@ -407,7 +407,7 @@ public class MainActivity extends Activity {
         worker.execute(()->{try{
             PlannerBackupFile.Restore review=null;
             if(exporting){PlannerBackupFile backup=PlannerBackupFile.create(database.load(),Planner.now());backup.write(getContentResolver().openOutputStream(uri,"wt"));}
-            else{PlannerBackupFile imported=PlannerBackupFile.read(getContentResolver().openInputStream(uri));review=new PlannerBackupFile.Restore(imported,database.load());}
+            else{PlannerBackupFile imported=uri==null?PlannerRuntime.get(this).restoreBackup.load():PlannerBackupFile.read(getContentResolver().openInputStream(uri));review=new PlannerBackupFile.Restore(imported,database.load());}
             final PlannerBackupFile.Restore reviewed=review;
             runOnUiThread(()->{busy=false;progress.dismiss();if(isDestroyed())return;
                 if(exporting)Toast.makeText(this,"备份已导出",Toast.LENGTH_LONG).show();else showBackupRestore(reviewed);
@@ -419,8 +419,8 @@ public class MainActivity extends Activity {
     }
     void showBackupRestore(PlannerBackupFile.Restore restore){
         new AlertDialog.Builder(this).setTitle("恢复此备份？")
-            .setMessage(restore.summary+"\n\n将替换手机当前日程。建议先导出当前备份；启用云同步时，此次恢复也会同步到其他设备。")
-            .setNegativeButton("取消",null).setPositiveButton("恢复",(a,b)->mutate(restore::apply,false,()->{settingsDraft=null;restoredSettingsDraft=null;captureSettingsDraft=null;})).show();
+            .setMessage(restore.summary+"\n\n将替换手机当前日程。恢复前会先保存一份本机当前日程；启用云同步时，此次恢复也会同步到其他设备。")
+            .setNegativeButton("取消",null).setPositiveButton("恢复",(a,b)->mutate(s->PlannerRuntime.get(this).restoreBackup.restore(s,restore,Planner.now()),false,()->{settingsDraft=null;restoredSettingsDraft=null;captureSettingsDraft=null;})).show();
     }
 
 }
