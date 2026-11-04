@@ -348,6 +348,7 @@ struct MainView: View {
                         .buttonStyle(CircularIconButtonStyle())
                         .focusEffectDisabled()
                         .help("后一天")
+                    CalendarDateJumpButton(selectedDay: $selectedDay, month: $month)
                     Button("今天") {
                         withAnimation(reduceMotion ? nil : PlannerTheme.spring) {
                             selectedDay = Calendar.current.startOfDay(for: Date())
