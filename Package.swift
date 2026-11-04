@@ -2,7 +2,7 @@
 import PackageDescription
 
 #if os(Linux)
-// The portable model/engine suite can run without waiting for a macOS runner.
+// Portable model/engine and Foundation file stores do not require a macOS runner.
 // SwiftData, AppKit and the desktop executable remain macOS-only targets below.
 let package = Package(
     name: "StudyPlanner",
@@ -11,7 +11,14 @@ let package = Package(
     targets: [
         .systemLibrary(name: "zlib", pkgConfig: "zlib", providers: [.apt(["zlib1g-dev"])]),
         .target(name: "StudyCore", dependencies: ["zlib", .product(name: "Crypto", package: "swift-crypto")]),
-        .testTarget(name: "StudyCoreTests", dependencies: ["StudyCore"])
+        .target(name: "StudyPersistence", dependencies: ["StudyCore"], exclude: ["LocalRepository.swift"]),
+        .testTarget(name: "StudyCoreTests", dependencies: ["StudyCore"]),
+        // Only SwiftData-backed repositories need the macOS test target below.
+        .testTarget(name: "StudyPersistenceTests", dependencies: ["StudyPersistence", "StudyCore"], exclude: [
+            "LocalRepositoryTests.swift", "FixedEventTransactionTests.swift", "MergedScheduleTransactionTests.swift",
+            "LessonOrderTransactionTests.swift", "DailyTaskSwapRepositoryTests.swift", "CourseDeletionTransactionTests.swift",
+            "PlannerBackupRestoreRepositoryTests.swift", "SettingsTransactionTests.swift", "WebSourcePrivacyTests.swift"
+        ])
     ]
 )
 #else

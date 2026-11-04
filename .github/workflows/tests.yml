@@ -28,7 +28,7 @@ jobs:
           package-manager-cache: false
       - name: Run independent Java and Android checks
         run: bash Scripts/test-java-ci.sh
-      - name: Run portable Swift core checks
+      - name: Run portable Swift core and file persistence checks
         # Official Swift 6.0.3 Jammy image; includes the zlib development headers.
         # The Java checks above generate the Android parity fixtures first.
         run: |
