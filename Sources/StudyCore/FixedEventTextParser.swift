@@ -128,10 +128,14 @@ public enum FixedEventTextParser {
         }
         let weekdays = recurring ? recurringWeekdays(recurrenceText as String) : []
         if recurring && weekdays.isEmpty { return fail("重复星期不明确，请补充例如“每周一、三”或“每天”。") }
+        let weekStarts = recurring ? matches("(?:从|自)?\\s*(下下|下|本|这)(?:周|星期|礼拜)\\s*(?:开始|起)", text).compactMap {
+            relativeDate(capture($0, 1, text) + "周一", today: today, calendar: calendar)
+        } : []
         let datePrefix = dateMatches.first.map { (text as NSString).substring(to: $0.range.location) } ?? ""
         let singleDateIsEnd = recurring && dates.count == 1 && !matches("(?:截止|截至|直到|至|到)\\s*$", datePrefix).isEmpty
         let start: Date
         if let date = dates.first, !singleDateIsEnd { start = date }
+        else if let weekStart = weekStarts.first { start = weekStart }
         else if let relative = starts.first {
             guard let value = relativeDate(capture(relative, 0, text), today: today, calendar: calendar) else { return fail("无法确定相对日期，请补充具体日期。") }
             start = value
@@ -139,6 +143,18 @@ public enum FixedEventTextParser {
         else { return fail("找到了时间，但没有明确日期；请补充“今天”“明天”或具体月日。") }
 
         if dates.count > 1 && !recurring { return fail("同一段出现多个日期，请将每项日程分行粘贴后分别识别。") }
+        if recurring {
+            guard weekStarts.allSatisfy({ calendar.isDate($0, inSameDayAs: start) }) else { return fail("重复日程的开始日期不一致，请核对或分行粘贴。") }
+            for match in starts {
+                let expression = capture(match, 0, text)
+                guard let implied = relativeDate(expression, today: today, calendar: calendar) else { return fail("无法确定相对日期，请补充具体日期。") }
+                let bare = expression.hasPrefix("周") || expression.hasPrefix("星期") || expression.hasPrefix("礼拜")
+                let consistent = !dates.isEmpty && !singleDateIsEnd && bare
+                    ? calendar.component(.weekday, from: implied) == calendar.component(.weekday, from: start)
+                    : calendar.isDate(implied, inSameDayAs: start)
+                if !consistent { return fail("重复日程的开始日期不一致，请核对或分行粘贴。") }
+            }
+        }
         if !recurring {
             for match in relativeMatches {
                 let relative = capture(match, 0, text)

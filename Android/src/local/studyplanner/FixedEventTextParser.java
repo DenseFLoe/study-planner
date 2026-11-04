@@ -52,9 +52,21 @@ public final class FixedEventTextParser {
         // Explicit start weekdays are not additional repeating weekdays.
         if(repeat)for(MatchResult match:starts)for(int i=match.start();i<match.end();i++)recurrenceText.setCharAt(i,' ');
         Set<Integer> weeks=repeat?weekdays(recurrenceText.toString()):new TreeSet<>();require(!repeat||!weeks.isEmpty(),"重复星期不明确，请补充例如“每周一、三”或“每天”。");
+        List<LocalDate> weekStarts=new ArrayList<>();
+        if(repeat)for(MatchResult match:matches("(?:从|自)?\\s*(下下|下|本|这)(?:周|星期|礼拜)\\s*(?:开始|起)",text))
+            weekStarts.add(relative(group(match,1)+"周一",today));
         String prefix=dateMatches.isEmpty()?"":text.substring(0,dateMatches.get(0).start());boolean onlyEnd=repeat&&dates.size()==1&&has("(?:截止|截至|直到|至|到)\\s*$",prefix);LocalDate start;
-        if(!dates.isEmpty()&&!onlyEnd)start=dates.get(0);else if(!starts.isEmpty())start=relative(group(starts.get(0),0),today);else if(repeat)start=today;else throw new Reject("找到了时间，但没有明确日期；请补充今天、明天或具体月日。");
+        if(!dates.isEmpty()&&!onlyEnd)start=dates.get(0);else if(!weekStarts.isEmpty())start=weekStarts.get(0);else if(!starts.isEmpty())start=relative(group(starts.get(0),0),today);else if(repeat)start=today;else throw new Reject("找到了时间，但没有明确日期；请补充今天、明天或具体月日。");
         require(start!=null,"无法确定相对日期，请补充具体日期。");require(repeat||dates.size()<=1,"同一段出现多个日期，请将每项日程分行粘贴。");
+        if(repeat){
+            for(LocalDate value:weekStarts)require(value.equals(start),"重复日程的开始日期不一致，请核对或分行粘贴。");
+            for(MatchResult match:starts){
+                String value=group(match,0);LocalDate implied=relative(value,today);
+                boolean bare=value.startsWith("周")||value.startsWith("星期")||value.startsWith("礼拜");
+                boolean consistent=!dates.isEmpty()&&!onlyEnd&&bare?implied.getDayOfWeek()==start.getDayOfWeek():implied.equals(start);
+                require(consistent,"重复日程的开始日期不一致，请核对或分行粘贴。");
+            }
+        }
         if(!repeat)for(MatchResult m:relativeMatches){String s=group(m,0);LocalDate implied=relative(s,today);boolean bare=s.startsWith("周")||s.startsWith("星期")||s.startsWith("礼拜");require(implied==null||(bare?implied.getDayOfWeek()==start.getDayOfWeek():implied.equals(start)),"同一段出现不一致的日期或星期，请核对或分行粘贴。");}
         LocalDate endDate=start;if(repeat){require(dates.size()<=2,"重复日程包含多组日期，请分段识别。");if(onlyEnd)endDate=dates.get(0);else if(dates.size()==2)endDate=dates.get(1);else{List<MatchResult> durations=matches("(?:持续|共|为期)\\s*([0-9一二三四五六七八九十]{1,3})\\s*周",text);int n=durations.isEmpty()?-1:integer(group(durations.get(0),1));if(n>=1&&n<=520)endDate=start.plusDays(n*7-1);else{endDate=start.plusDays(111);warnings.add("未写重复截止日期，暂按持续 16 周预填，请核对。");}}require(!endDate.isBefore(start),"重复结束日期早于开始日期，请核对。");}
         if(start.isBefore(today))warnings.add("识别日期已过去，请确认是否仍需添加。");if(repeat&&endDate.isBefore(today))warnings.add("重复日程的结束日期已过去，请修改日期。");

@@ -103,6 +103,33 @@ final class FixedEventTextParserTests: XCTestCase {
         }
     }
 
+    func testRecurringWeekStartMarkersAndConflictingDates() throws {
+        let today = date(2026, 11, 4)
+        for (text, day, weekdays) in [
+            ("从下周开始，每周一、三18:00-19:00复习", 9, Set([2, 4])),
+            ("下下周起，工作日18:00-19:00复习", 16, Set(2...6)),
+            ("从本周开始，每周一、三18:00-19:00复习", 2, Set([2, 4])),
+            ("从这星期起，每周五18:00-19:00复习", 2, Set([6])),
+            ("从下周开始，每周三18:00-19:00复习，截止2026年12月1日", 9, Set([4])),
+            ("从下周一开始，每周三18:00-19:00复习", 9, Set([4]))
+        ] {
+            let event = try draft(text, now: today).event
+            XCTAssertEqual(event.startDate, date(2026, 11, day, 0), text)
+            XCTAssertEqual(event.weekdays, weekdays, text)
+        }
+        let explicit = try draft("从2027年1月1日周五开始，每周一、三18:00-19:00复习", now: today).event
+        XCTAssertEqual(explicit.startDate, date(2027, 1, 1, 0))
+        XCTAssertEqual(explicit.weekdays, [2, 4])
+        for text in ["从下周开始，明天起每周一、三18:00-19:00复习", "从下周开始，从2026年11月6日起每周一、三18:00-19:00复习", "明天开始，后天起每周一、三18:00-19:00复习"] {
+            let result = parse(text, now: today)
+            XCTAssertTrue(result.drafts.isEmpty, text)
+            XCTAssertTrue(result.messages.contains { $0.contains("不一致") }, text)
+        }
+        // Relative weeks use Monday even when the system calendar starts on Sunday.
+        XCTAssertEqual(try draft("下周起每周三18:00-19:00复习", now: date(2026, 11, 8)).event.startDate, date(2026, 11, 9, 0))
+        XCTAssertEqual(try draft("下周起每周三18:00-19:00复习", now: date(2026, 12, 31)).event.startDate, date(2027, 1, 4, 0))
+    }
+
     func testRecurringListActuallyIncludesThisWednesdayAndFriday() throws {
         let value = try draft("每周一、三、五18:00-19:00复习", now: date(2026, 11, 4)).event
         XCTAssertTrue(value.occurs(on: date(2026, 11, 4, 0), calendar: calendar))

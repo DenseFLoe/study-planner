@@ -30,6 +30,25 @@ public final class RecurringRecognitionTests {
         check("明天起，每周一、三18:00-19:00复习", TODAY.plusDays(1), "[2,4]");
         check("从2026年11月6日开始，每周一、三18:00-19:00复习", TODAY.plusDays(2), "[2,4]");
         check("周五18:00-19:00复习", TODAY.plusDays(2), "[]");
+        check("从下周开始，每周一、三18:00-19:00复习", TODAY.plusDays(5), "[2,4]");
+        check("下下周起，工作日18:00-19:00复习", TODAY.plusDays(12), "[2,3,4,5,6]");
+        check("从本周开始，每周一、三18:00-19:00复习", TODAY.minusDays(2), "[2,4]");
+        check("从这星期起，每周五18:00-19:00复习", TODAY.minusDays(2), "[6]");
+        check("从下周开始，每周三18:00-19:00复习，截止2026年12月1日", TODAY.plusDays(5), "[4]");
+        check("从下周一开始，每周三18:00-19:00复习", TODAY.plusDays(5), "[4]");
+        check("从2027年1月1日周五开始，每周一、三18:00-19:00复习", LocalDate.of(2027,1,1), "[2,4]");
+        for(String text:new String[]{"从下周开始，明天起每周一、三18:00-19:00复习", "从下周开始，从2026年11月6日起每周一、三18:00-19:00复习", "明天开始，后天起每周一、三18:00-19:00复习"}){
+            FixedEventTextParser.Result result=FixedEventTextParser.parse(text,Planner.at(TODAY,600));
+            if(!result.drafts.isEmpty()||result.messages.isEmpty())throw new AssertionError("Conflicting starts accepted: "+text);
+            checks++;
+        }
+        for(LocalDate reference:new LocalDate[]{LocalDate.of(2026,11,8),LocalDate.of(2026,12,31)}){
+            FixedEventTextParser.Result result=FixedEventTextParser.parse("下周起每周三18:00-19:00复习",Planner.at(reference,600));
+            LocalDate monday=reference.plusDays(8-reference.getDayOfWeek().getValue());
+            if(result.drafts.size()!=1||!Planner.day(result.drafts.get(0).event.getDouble("startDate")).equals(monday))
+                throw new AssertionError("Next week did not cross the Monday/year boundary");
+            checks++;
+        }
         JSONObject weekly = event("每周一、三、五18:00-19:00复习");
         if (!Planner.occurs(weekly, TODAY) || !Planner.occurs(weekly, TODAY.plusDays(2)) || Planner.occurs(weekly, TODAY.plusDays(1)))
             throw new AssertionError("Current-week occurrences were lost or added");
