@@ -1,6 +1,5 @@
 import XCTest
-import StudyCore
-@testable import StudyPlanner
+@testable import StudyCore
 
 final class FixedEventFilterTests: XCTestCase {
     private var calendar: Calendar {
@@ -34,5 +33,25 @@ final class FixedEventFilterTests: XCTestCase {
         let original = value
         XCTAssertTrue(FixedEventFilter.matches(value, query: "实验", weekday: 2, calendar: calendar))
         XCTAssertEqual(value, original)
+    }
+    func testNormalizedNameNotesAndLocalDatesCombineWithWeekday() {
+        var value = event(weekdays: [2, 4]); value.title = "ＡＬＰＨＡ 化工"; value.notes = "实验楼 301"
+        XCTAssertTrue(FixedEventFilter.matches(value, query: "alpha　301 2026-11-16", weekday: 4, calendar: calendar))
+        XCTAssertFalse(FixedEventFilter.matches(value, query: "alpha 301", weekday: 3, calendar: calendar))
+        XCTAssertFalse(FixedEventFilter.matches(value, query: "alpha 缺失词", weekday: 0, calendar: calendar))
+        var single = value; single.weekdays = []
+        XCTAssertTrue(FixedEventFilter.matches(single, query: "2026-11-02", weekday: 2, calendar: calendar))
+        XCTAssertFalse(FixedEventFilter.matches(single, query: "2026-11-16", weekday: 0, calendar: calendar))
+        var utc = calendar; utc.timeZone = TimeZone(secondsFromGMT: 0)!
+        XCTAssertTrue(FixedEventFilter.matches(single, query: "2026-11-01", weekday: 1, calendar: utc))
+    }
+    func testBatchFilteringPreservesOrderInputAndSkippedRules() {
+        var first = event(weekdays: [2]), second = event(weekdays: [4]), third = event(weekdays: [])
+        first.notes = "重点"; second.notes = "普通"; third.notes = "重点"; third.excludedDates = [monday]
+        let input = [third, second, first], before = input
+        XCTAssertEqual(FixedEventFilter.matching(input, query: "重点", weekday: 2, calendar: calendar), [third, first])
+        XCTAssertEqual(FixedEventFilter.matching(input, query: "　", weekday: 0, calendar: calendar), input)
+        XCTAssertTrue(FixedEventFilter.matching(input, query: "不存在", weekday: 0, calendar: calendar).isEmpty)
+        XCTAssertEqual(input, before)
     }
 }

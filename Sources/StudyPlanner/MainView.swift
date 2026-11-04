@@ -39,6 +39,8 @@ struct MainView: View {
     @State private var showingCompletedFixedEvents = false
     @State private var fixedQuery = ""
     @State private var fixedWeekday = 0
+    @State private var matchingFixedEvents: [FixedEvent] = []
+    @State private var displayedFixedInput: FixedCatalogInput?
     @State private var courseQuery = ""
     @State private var courseScope = CourseCatalogScope.all
     @State private var courseOrder = CourseCatalogOrder.deadline
@@ -55,6 +57,12 @@ struct MainView: View {
         var order: CourseCatalogOrder
         var courses: [Course]
         var timeZone: TimeZone
+    }
+    private struct FixedCatalogInput: Equatable, Sendable {
+        var query: String
+        var weekday: Int
+        var events: [FixedEvent]
+        var calendar: Calendar
     }
 
     var body: some View {
@@ -771,18 +779,17 @@ struct MainView: View {
     }
 
     private func fixedList(at now: Date) -> some View {
-        let allEvents = store.state.fixedEvents.sorted {
-            $0.startDate == $1.startDate ? $0.id.uuidString < $1.id.uuidString : $0.startDate < $1.startDate
-        }
+        let input = FixedCatalogInput(query: fixedQuery, weekday: fixedWeekday, events: store.state.fixedEvents, calendar: .current)
+        let ready = displayedFixedInput == input
         let filtering = !fixedQuery.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || fixedWeekday != 0
-        let events = allEvents.filter { FixedEventFilter.matches($0, query: fixedQuery, weekday: fixedWeekday) }
+        let events = ready ? matchingFixedEvents : []
         let completed = events.filter { $0.hasEnded(at: now) }
         let completedIDs = Set(completed.map(\.id))
         let active = events.filter { !completedIDs.contains($0.id) }
         return ScrollView {
             VStack(alignment: .leading, spacing: 16) {
                 HStack {
-                    PlannerSectionTitle(title: "周期课表与固定事项", detail: "\(filtering ? "匹配：" : "")未完成 \(active.count) 项 · 已完成 \(completed.count) 项")
+                    PlannerSectionTitle(title: "周期课表与固定事项", detail: ready ? "\(filtering ? "匹配：" : "")未完成 \(active.count) 项 · 已完成 \(completed.count) 项" : "正在筛选事项…")
                     Button("添加固定事项", systemImage: "plus") { newFixed() }
                         .buttonStyle(SoftButtonStyle(prominent: true))
                 }
@@ -790,7 +797,7 @@ struct MainView: View {
                 HStack(spacing: 12) {
                     HStack {
                         Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
-                        TextField("搜索固定事项名称", text: $fixedQuery)
+                        TextField("搜索名称、备注或起止日期", text: $fixedQuery)
                             .textFieldStyle(.plain)
                             .accessibilityIdentifier("fixedEventSearch")
                     }
@@ -805,12 +812,13 @@ struct MainView: View {
                         Button("清除筛选") { fixedQuery = ""; fixedWeekday = 0 }
                     }
                 }
-                Text("星期按原定规则筛选；单次事项按发生日期，包含临时跳过的日期。")
+                Text("可组合名称、备注和日期（YYYY-MM-DD）关键词。星期按原定规则筛选；单次事项按发生日期，包含临时跳过的日期。")
                     .font(.caption).foregroundStyle(.secondary)
 
                 FixedEventRecognitionCard { event in
                     sheet = .fixed(event)
                 }
+                if !ready { ProgressView("正在读取固定事项…").controlSize(.small) }
 
                 ForEach(active) { event in
                     FixedEventListRow(
@@ -850,9 +858,9 @@ struct MainView: View {
                     )
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 80)
-                } else if events.isEmpty {
+                } else if ready && events.isEmpty {
                     ContentUnavailableView("没有匹配的固定事项", systemImage: "magnifyingglass",
-                                           description: Text("试试其他名称或星期，或清除筛选查看全部事项。"))
+                                           description: Text("试试其他关键词或星期，或清除筛选查看全部事项。"))
                         .frame(maxWidth: .infinity).padding(.vertical, 40)
                 }
             }
@@ -865,6 +873,21 @@ struct MainView: View {
         }
         .onChange(of: fixedWeekday) { _, _ in
             if filtering { showingCompletedFixedEvents = true }
+        }
+        .task(id: input) {
+            guard displayedFixedInput != input else { return }
+            displayedFixedInput = nil; matchingFixedEvents = []
+            if !input.query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                do { try await Task.sleep(for: .milliseconds(200)) } catch { return }
+            }
+            let result = await Task.detached(priority: .userInitiated) {
+                let ordered = input.events.sorted {
+                    $0.startDate == $1.startDate ? $0.id.uuidString < $1.id.uuidString : $0.startDate < $1.startDate
+                }
+                return FixedEventFilter.matching(ordered, query: input.query, weekday: input.weekday, calendar: input.calendar)
+            }.value
+            guard !Task.isCancelled else { return }
+            matchingFixedEvents = result; displayedFixedInput = input
         }
     }
 
