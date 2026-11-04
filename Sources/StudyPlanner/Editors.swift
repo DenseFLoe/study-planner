@@ -342,13 +342,34 @@ struct CompletionEditor: View {
     @State private var studyDate = Date()
     @State private var message = ""
     @State private var saving = false
+    @State private var latestTask: ScheduledTask?
+    @State private var unavailable = false
+    @State private var initialized = false
     @Environment(\.dismiss) private var dismiss
+    private func reloadTask() {
+        guard !saving, !store.orderSaveBusy else { return }
+        do {
+            latestTask = try store.state.pendingConfirmationTask(id: task.id)
+            unavailable = false; message = ""
+        } catch {
+            unavailable = true
+            message = error.localizedDescription + " 输入仍保留，请返回日历核对。"
+        }
+    }
+
     var body: some View {
+        let task = latestTask ?? self.task
         VStack(alignment: .leading, spacing: 20) {
             Text(task.planningStart > Date() ? "提前完成学习" : "确认学习完成情况").font(.title2.bold())
             Text(store.course(task.courseID)?.name ?? "课程").font(.headline)
             if let lessonName = task.lessonName { Text(lessonName).font(.callout).foregroundStyle(.secondary) }
             Text("\(task.planningStart.formatted(date: .abbreviated, time: .shortened))\(task.isFloating ? "–" + task.planningEnd.formatted(date: .omitted, time: .shortened) + " 时段内" : "") · 计划 \(hours(task.durationMinutes))").foregroundStyle(.secondary)
+            Button("载入最新安排", action: reloadTask).disabled(saving || store.orderSaveBusy)
+                .help("保留填写的分钟数和学习日期，载入当前待确认任务后重新核对")
+            if latestTask != nil && !unavailable {
+                Text("已载入最新安排，填写的分钟数和学习日期已保留；请核对后确认。")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
             CompletionInput(actual: $actual, planned: task.durationMinutes).disabled(saving)
             DatePicker("实际学习日期", selection: $studyDate, in: ...Date(), displayedComponents: .date).disabled(saving)
             Text("只有实际完成的学习量会计入进度；其余部分会自动重新分配。").font(.callout).foregroundStyle(.secondary)
@@ -356,7 +377,7 @@ struct CompletionEditor: View {
             if saving { ProgressView("正在保存确认并更新课表…").controlSize(.small) }
             HStack { Spacer(); Button("取消") { dismiss() }.keyboardShortcut(.cancelAction).disabled(saving)
                 Button("确认并重新排程") {
-                    guard !saving else { return }
+                    guard !saving, !unavailable, !store.orderSaveBusy else { return }
                     let minutes = actual, date = studyDate
                     saving = true; message = ""
                     Task {
@@ -364,10 +385,13 @@ struct CompletionEditor: View {
                         if await store.confirm(task, minutes: minutes, studyDate: date) { dismiss() }
                         else { message = store.errorMessage ?? "确认未保存" }
                     }
-                }.buttonStyle(.borderedProminent).disabled(saving || actual < 0 || actual > task.durationMinutes || store.orderSaveBusy)
+                }.buttonStyle(.borderedProminent).disabled(unavailable || saving || actual < 0 || actual > task.durationMinutes || store.orderSaveBusy)
             }
         }.padding(28).frame(width: 500).interactiveDismissDisabled(saving)
-        .onAppear { actual = task.durationMinutes; studyDate = min(task.start, Date()) }
+        .onAppear {
+            guard !initialized else { return }
+            actual = task.durationMinutes; studyDate = min(task.start, Date()); initialized = true
+        }
     }
 }
 struct DailyReviewView: View {

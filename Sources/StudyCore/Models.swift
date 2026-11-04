@@ -512,7 +512,7 @@ public struct PlannerState: Codable, Equatable, Sendable {
     /// Idempotent confirmations are essential: saving/reopening must never add progress twice.
     public mutating func confirm(taskID: UUID, actualMinutes: Int, now: Date, studyDate: Date? = nil, calendar: Calendar = .current) throws {
         guard let index = tasks.firstIndex(where: { $0.id == taskID }), tasks[index].isUnconfirmed,
-              let course = courses.first(where: { $0.id == tasks[index].courseID }) else { throw PlannerError.alreadyConfirmed }
+              let course = courses.first(where: { $0.id == tasks[index].courseID }), !course.isArchived else { throw PlannerError.alreadyConfirmed }
         guard actualMinutes >= 0, actualMinutes <= tasks[index].durationMinutes else { throw PlannerError.invalidCompletion }
         let actualDay = calendar.startOfDay(for: studyDate ?? now)
         guard actualDay <= calendar.startOfDay(for: now) else { throw PlannerError.invalidCompletion }
@@ -593,7 +593,7 @@ public enum PlannerError: Error, LocalizedError {
         case .invalidStudyStart: return "实际开课时间须为当天的 00:00–23:59。"
         case .pastFixedOccurrence: return "只能临时移除或恢复今天及未来的固定事项，往日记录保留。"
         case .invalidFixedOccurrence: return "该事项在所选日期没有安排，请刷新日程后重试。"
-        case .alreadyConfirmed: return "这项任务已确认或课程已删除，请刷新后重试。"
+        case .alreadyConfirmed: return "这项任务已确认，或所属课程已删除、归档，请刷新后重试。"
         case .notConfirmed: return "这项任务尚未确认，无需撤销。"
         case .invalidCompletion: return "实际学习时长必须在 0 与计划时长之间。"
         case .activeConflict: return "该固定事项与正在进行的学习任务冲突。请先确认该任务的实际完成量，或调整固定事项时间。"

@@ -8,6 +8,16 @@ public enum ConfirmationEditError: LocalizedError {
 }
 
 public extension PlannerState {
+    /// Reload one confirmation form without changing the user's inputs or plan.
+    /// Pausing automatic scheduling does not prevent confirming existing work.
+    func pendingConfirmationTask(id: UUID) throws -> ScheduledTask {
+        guard let task = tasks.first(where: { $0.id == id }), task.isUnconfirmed,
+              courses.contains(where: { $0.id == task.courseID && !$0.isArchived }) else {
+            throw PlannerError.alreadyConfirmed
+        }
+        return task
+    }
+
     func checkReviewedTask(_ reviewed: ScheduledTask) throws {
         guard tasks.first(where: { $0.id == reviewed.id }) == reviewed else { throw ConfirmationEditError.changed }
     }

@@ -10,6 +10,32 @@ final class ConfirmationEditingTests: XCTestCase {
         state.tasks = [ScheduledTask(courseID: course.id, start: now, durationMinutes: 60)]
         return state
     }
+    func testReloadReturnsLatestPendingTaskWithoutChangingStateOrRequiringAutomaticScheduling() throws {
+        var state = fixture(); let id = state.tasks[0].id
+        state.tasks[0].start += 86400; state.tasks[0].durationMinutes = 30
+        state.tasks[0].lessonName = "Updated"; state.courses[0].autoScheduleEnabled = false
+        let before = state, loaded = try state.pendingConfirmationTask(id: id)
+        XCTAssertEqual(loaded, state.tasks[0]); XCTAssertEqual(state, before)
+        try state.confirm(reviewed: loaded, actualMinutes: 20, now: now, studyDate: now - 86400)
+        XCTAssertEqual(state.completions.first?.minutes, 20)
+        let confirmed = state
+        XCTAssertThrowsError(try state.pendingConfirmationTask(id: id))
+        XCTAssertEqual(state, confirmed)
+    }
+    func testUnavailableCourseOrTaskCannotReloadOrAcceptConfirmation() throws {
+        let original = fixture(), task = original.tasks[0]
+        for missing in [0, 1, 2] {
+            var state = original
+            if missing == 0 { state.courses[0].isArchived = true }
+            else if missing == 1 { state.courses = [] }
+            else { state.tasks = [] }
+            let before = state
+            XCTAssertThrowsError(try state.pendingConfirmationTask(id: task.id))
+            XCTAssertThrowsError(try state.confirm(taskID: task.id, actualMinutes: 20, now: now))
+            XCTAssertThrowsError(try state.confirm(reviewed: task, actualMinutes: 20, now: now))
+            XCTAssertEqual(state, before)
+        }
+    }
     func testChangedReviewedTaskCannotBeConfirmed() throws {
         let original = fixture(), task = original.tasks[0]
         let edits: [(inout ScheduledTask) -> Void] = [
