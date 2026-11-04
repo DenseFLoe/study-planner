@@ -19,6 +19,17 @@ public final class RecurringRecognitionTests {
         Planner.validateEventWindow(value); checks += 3;
     }
     public static void main(String[] args) throws Exception {
+        for(String[] sample:new String[][]{{"半小时","30"},{"半个小时","30"},{"1.5小时","90"},{"０．７５小时","45"},{"0.1小时","6"},{"1.5小时30分钟","120"},{"一个半小时","90"}}){
+            String text="明天09:00复习，持续"+sample[0];FixedEventTextParser.Result result=FixedEventTextParser.parse(text,Planner.at(TODAY,600));
+            if(result.drafts.size()!=1)throw new AssertionError("Explicit duration rejected: "+text);JSONObject value=result.drafts.get(0).event;
+            if(value.getInt("endMinute")-value.getInt("startMinute")!=Integer.parseInt(sample[1])||result.drafts.get(0).warnings.stream().anyMatch(s->s.contains("未写结束")))throw new AssertionError("Explicit duration replaced by default: "+text);checks+=2;
+            if(!value.getString("title").equals("复习")||!value.getString("notes").equals(text))throw new AssertionError("Duration changed title or source");checks+=2;
+        }
+        if(event("明天09:00到10:30复习，时长1.5小时").getInt("endMinute")!=630||!event("持续半小时，明天09:00复习").getString("title").equals("复习")||event("每周三09:00复习，持续4周，时长半小时").getInt("endMinute")!=570)throw new AssertionError("Duration/range or repeat interval confused");checks+=3;
+        for(String text:new String[]{"明天09:00到10:00复习，持续2小时", "明天09:00复习，持续半小时，用时1小时", "明天09:00复习，持续0.5分钟", "明天09:00复习，持续1.333小时", "明天09:00复习，持续0小时", "明天23:30复习，持续0.75小时"}){
+            FixedEventTextParser.Result result=FixedEventTextParser.parse(text,Planner.at(TODAY,600));
+            if(!result.drafts.isEmpty()||result.messages.isEmpty())throw new AssertionError("Invalid/conflicting duration accepted: "+text);checks+=2;
+        }
         for(String text:new String[]{"隔周周三09:00到10:00复习", "每周三（单周）09:00到10:00复习",
             "双周周三09:00到10:00复习", "从明天起每两天09:00到10:00复习", "从明天起隔两天09:00到10:00复习",
             "从明天起每个月09:00到10:00复习", "从明天起每年09:00到10:00复习", "从明天起每隔一周09:00到10:00复习",

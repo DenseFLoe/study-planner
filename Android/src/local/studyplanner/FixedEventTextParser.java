@@ -14,6 +14,8 @@ public final class FixedEventTextParser {
     static final String WEEK_START="(?:从|自)?\\s*(下下|下|本|这)(?:周|星期|礼拜)\\s*(?:开始|起)";
     static final String WEEKDAY_LIST="([一二三四五六日天1-7](?:\\s*(?:、|,|，|和|及|到|至|[-~—～–])\\s*(?:(?:每)?(?:周|星期|礼拜))?[一二三四五六日天1-7])*)";
     static final String WEEKDAYS="(?:每(?:周|星期|礼拜)|每逢|周|星期|礼拜)"+WEEKDAY_LIST;
+    static final String DURATION_AMOUNT="(?:[0-9]{1,3}(?:\\.[0-9]{1,3})?|[零〇一二两三四五六七八九十]{1,3}|半)";
+    static final String DURATION="(?:持续|时长|共|约|用时)\\s*("+DURATION_AMOUNT+")\\s*(个半小时|小时半|个小时|小时|分钟|分)(?:\\s*("+NUMBER+")\\s*分(?:钟)?)?";
     public static final class Draft {
         public final JSONObject event;public final List<String> warnings;public final String source;
         Draft(JSONObject event,List<String> warnings,String source){this.event=event;this.warnings=new ArrayList<>(new TreeSet<>(warnings));this.source=source;}
@@ -88,8 +90,17 @@ public final class FixedEventTextParser {
         List<MatchResult> times=matches(CLOCK,text);require(!times.isEmpty()&&times.size()<=2,"同一段存在多组时间，请把每项日程分行。");List<Clock> clocks=new ArrayList<>();
         for(MatchResult m:times){boolean colon=!group(m,2).isEmpty();String period=group(m,colon?1:4),suffix=group(m,6);int hour=integer(group(m,colon?2:5));int minute=colon?integer(group(m,3)):suffix.equals("半")?30:suffix.equals("一刻")?15:suffix.equals("三刻")?45:Math.max(0,integer(group(m,7)));require(hour>=0&&hour<=24,"小时超出范围，请核对时间。");require(minute>=0&&minute<=59&&(hour<24||minute==0),"分钟超出范围，请核对时间。");int converted=clock(hour,minute,period);require(converted>=0,"时段与小时不一致，请核对上午、下午或晚上。");clocks.add(new Clock(converted,hour,period,m));}
         Clock first=clocks.get(0);if(first.period.isEmpty()&&first.hour>0&&first.hour<12)warnings.add("原文未说明上午或下午，按 24 小时制解释，请核对。");int end;
+        Integer declaredMinutes=null;
+        for(MatchResult duration:matches(DURATION,text)){
+            String value=group(duration,1),unit=group(duration,2);double amount;
+            if(value.equals("半"))amount=.5;else if(integer(value)>=0)amount=integer(value);else try{amount=Double.parseDouble(value);}catch(NumberFormatException error){throw new Reject("无法确定活动时长，请用小时或分钟填写。");}
+            double minutes=unit.contains("小时")?amount*60+(unit.contains("半")?30:0)+Math.max(0,integer(group(duration,3))):amount;
+            require(Double.isFinite(minutes)&&minutes>0&&minutes<=1440&&Math.abs(minutes-Math.rint(minutes))<.000001,"活动时长须为大于 0 的整分钟，且不超过一天，请核对。");
+            int count=(int)Math.round(minutes);require(declaredMinutes==null||declaredMinutes==count,"同一段的活动时长不一致，请核对或分行粘贴。");declaredMinutes=count;
+        }
         if(clocks.size()==2){Clock second=clocks.get(1);require(has("^\\s*(?:到|至|[-~—–～])\\s*$",text.substring(first.match.end(),second.match.start())),"两处时间不是明确的起止区间，请只保留活动时间，或用到连接。");if(second.period.isEmpty()&&!first.period.isEmpty()&&second.hour<12){int n=clock(second.hour,second.minute%60,first.period);if(n>=0)second.minute=n;}else if(first.period.isEmpty()&&!second.period.isEmpty()&&first.hour<12){int n=clock(first.hour,first.minute%60,second.period);if(n>=0)first.minute=n;}end=second.minute;
-        }else{List<MatchResult> durations=matches("(?:持续|时长|共|约|用时)\\s*("+NUMBER+")\\s*(个半小时|小时半|个小时|小时|分钟|分)(?:\\s*("+NUMBER+")\\s*分(?:钟)?)?",text);if(!durations.isEmpty()){MatchResult d=durations.get(0);int amount=integer(group(d,1));String unit=group(d,2);int minutes=unit.contains("小时")?amount*60+(unit.contains("半")?30:0)+Math.max(0,integer(group(d,3))):amount;require(minutes>0,"活动时长必须大于 0，请核对。");end=first.minute+minutes;}else{end=Math.min(first.minute+60,1440);warnings.add("未写结束时间，暂按 "+(end-first.minute)+" 分钟预填，保存前请核对。");}}
+            require(declaredMinutes==null||declaredMinutes==end-first.minute,"活动时长与起止时间不一致，请核对后重新识别。");
+        }else{if(declaredMinutes!=null){end=first.minute+declaredMinutes;}else{end=Math.min(first.minute+60,1440);warnings.add("未写结束时间，暂按 "+(end-first.minute)+" 分钟预填，保存前请核对。");}}
         require(first.minute<end&&first.minute<1440&&end<=1440,"结束时间须晚于开始时间；跨午夜活动请拆成两条事项。");String title=title(text);if(title.equals("待命名事项"))warnings.add("未确定事项名称，请在编辑页补充。");
         JSONObject event=new JSONObject().put("id",Planner.id()).put("title",title).put("startMinute",first.minute).put("endMinute",end).put("startDate",Planner.at(start,0)).put("endDate",Planner.at(endDate,0)).put("weekdays",new JSONArray(weeks)).put("excludedDates",new JSONArray()).put("color","orange").put("notes",source);return new Draft(event,warnings,source);
     }
@@ -97,7 +108,7 @@ public final class FixedEventTextParser {
         String dateDescription="(?:从|自|截止|截至|直到|至|到)?\\s*(?:"+DATE+"|"+RELATIVE+")\\s*(?:开始|起)?";
         String value=text;
         for(String p:new String[]{WEEK_START,"(?:每(?:周|星期|礼拜)|每逢)"+WEEKDAY_LIST+"|每天|每日|工作日|周末",dateDescription,CLOCK,
-                "(?:持续|时长|共|约|用时)\\s*"+NUMBER+"\\s*(?:个半小时|小时半|个小时|小时|分钟|分|周)(?:\\s*"+NUMBER+"\\s*分(?:钟)?)?",
+                DURATION,"(?:持续|共|为期)\\s*"+NUMBER+"\\s*周",
                 "(?<=\\s)[到至~—～–-](?=\\s)","@所有人"})value=value.replaceAll(p," ");
         for(String chunk:value.split("[\\n，,。；;]")){String s=chunk.replaceAll("^[\\s：:、-]+|[\\s：:、-]+$","");if(!s.isEmpty()&&!Arrays.asList("时间","日期","通知","地点另行通知").contains(s))return s.substring(0,Math.min(60,s.length()));}return "待命名事项";
     }

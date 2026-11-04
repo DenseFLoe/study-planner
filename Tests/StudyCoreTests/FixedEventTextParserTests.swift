@@ -183,6 +183,24 @@ final class FixedEventTextParserTests: XCTestCase {
         XCTAssertEqual(try draft("明天18:00开会，持续一小时半").event.endMinute, 1170)
         XCTAssertEqual(try draft("明天下午三点一刻到五点三刻开会").event.startMinute, 915)
     }
+    func testExplicitHalfAndDecimalDurationsAndConflictingRanges() throws {
+        for (duration, minutes) in [("半小时", 30), ("半个小时", 30), ("1.5小时", 90), ("０．７５小时", 45),
+                                    ("0.1小时", 6), ("1.5小时30分钟", 120), ("一个半小时", 90)] {
+            let text = "明天09:00复习，持续" + duration, value = try draft(text)
+            XCTAssertEqual(value.event.endMinute - value.event.startMinute, minutes, text)
+            XCTAssertFalse(value.warnings.contains { $0.contains("未写结束") }, text)
+            XCTAssertEqual(value.event.title, "复习"); XCTAssertEqual(value.event.notes, text)
+        }
+        XCTAssertEqual(try draft("明天09:00到10:30复习，时长1.5小时").event.endMinute, 630)
+        XCTAssertEqual(try draft("持续半小时，明天09:00复习").event.title, "复习")
+        XCTAssertEqual(try draft("每周三09:00复习，持续4周，时长半小时").event.endMinute, 570)
+        for text in ["明天09:00到10:00复习，持续2小时", "明天09:00复习，持续半小时，用时1小时",
+                     "明天09:00复习，持续0.5分钟", "明天09:00复习，持续1.333小时", "明天09:00复习，持续0小时",
+                     "明天23:30复习，持续0.75小时"] {
+            XCTAssertTrue(parse(text).drafts.isEmpty, text)
+            XCTAssertFalse(parse(text).messages.isEmpty, text)
+        }
+    }
     func testRefusesMissingDatesInvalidDatesAndAmbiguousTimes() {
         for text in ["18:00开会", "2026年2月30日18:00开会", "明天25:00开会", "明天上午18:00开会", "明天18:60开会", "明天23:00到次日1:00值班", "明天18:00集合19:00开会", "明天18:00开会后天19:00上课", "明天安排待定"] {
             let result = parse(text)

@@ -32,6 +32,8 @@ public enum FixedEventTextParser {
     private static let weekStartPattern = "(?:从|自)?\\s*(下下|下|本|这)(?:周|星期|礼拜)\\s*(?:开始|起)"
     private static let weekdayList = "([一二三四五六日天1-7](?:\\s*(?:、|,|，|和|及|到|至|[-~—～–])\\s*(?:(?:每)?(?:周|星期|礼拜))?[一二三四五六日天1-7])*)"
     private static let weekdayListPattern = "(?:每(?:周|星期|礼拜)|每逢|周|星期|礼拜)" + weekdayList
+    private static let durationAmount = "(?:[0-9]{1,3}(?:\\.[0-9]{1,3})?|[零〇一二两三四五六七八九十]{1,3}|半)"
+    private static let durationPattern = "(?:持续|时长|共|约|用时)\\s*(\(durationAmount))\\s*(个半小时|小时半|个小时|小时|分钟|分)(?:\\s*(\(number))\\s*分(?:钟)?)?"
 
     public static func parse(_ text: String, now: Date = Date(), calendar: Calendar = .current) -> FixedEventTextResult {
         let source = text.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -211,6 +213,20 @@ public enum FixedEventTextParser {
         var first = clocks[0]
         // A period immediately before the clock is already consumed by the pattern.
         if first.period.isEmpty && first.hour > 0 && first.hour < 12 { warnings.append("原文未说明上午或下午，按 24 小时制解释，请核对。") }
+        var declaredMinutes: Int?
+        for duration in matches(durationPattern, text) {
+            let amountText = capture(duration, 1, text), unit = capture(duration, 2, text)
+            guard let amount = amountText == "半" ? 0.5 : (Double(amountText) ?? integer(amountText).map { Double($0) }) else {
+                return fail("无法确定活动时长，请用小时或分钟填写。")
+            }
+            let minutes = unit.contains("小时") ? amount * 60 + (unit.contains("半") ? 30 : 0) + Double(integer(capture(duration, 3, text)) ?? 0) : amount
+            guard minutes.isFinite, minutes > 0, minutes <= 1440, abs(minutes - minutes.rounded()) < 0.000001 else {
+                return fail("活动时长须为大于 0 的整分钟，且不超过一天，请核对。")
+            }
+            let value = Int(minutes.rounded())
+            if let declaredMinutes, declaredMinutes != value { return fail("同一段的活动时长不一致，请核对或分行粘贴。") }
+            declaredMinutes = value
+        }
         var endMinute: Int
         if clocks.count == 2 {
             var second = clocks[1]
@@ -222,13 +238,12 @@ public enum FixedEventTextParser {
                 first.minute = clockMinute(hour: first.hour, minute: first.minute % 60, period: second.period) ?? first.minute
             }
             endMinute = second.minute
+            if let declaredMinutes, declaredMinutes != endMinute - first.minute {
+                return fail("活动时长与起止时间不一致，请核对后重新识别。")
+            }
         } else {
-            let durationPattern = "(?:持续|时长|共|约|用时)\\s*(\(number))\\s*(个半小时|小时半|个小时|小时|分钟|分)(?:\\s*(\(number))\\s*分(?:钟)?)?"
-            if let duration = matches(durationPattern, text).first, let amount = integer(capture(duration, 1, text)) {
-                let unit = capture(duration, 2, text)
-                let minutes = unit.contains("小时") ? amount * 60 + (unit.contains("半") ? 30 : 0) + (integer(capture(duration, 3, text)) ?? 0) : amount
-                guard minutes > 0 else { return fail("活动时长必须大于 0，请核对。") }
-                endMinute = first.minute + minutes
+            if let declaredMinutes {
+                endMinute = first.minute + declaredMinutes
             } else {
                 endMinute = min(first.minute + 60, 1440)
                 warnings.append("未写结束时间，暂按 \(endMinute - first.minute) 分钟预填，保存前请核对。")
@@ -311,7 +326,7 @@ public enum FixedEventTextParser {
         let dateDescription = "(?:从|自|截止|截至|直到|至|到)?\\s*(?:\(datePattern)|\(relativePattern))\\s*(?:开始|起)?"
         var value = text
         for pattern in [weekStartPattern, "(?:每(?:周|星期|礼拜)|每逢)" + weekdayList + "|每天|每日|工作日|周末", dateDescription, clockPattern,
-                        "(?:持续|时长|共|约|用时)\\s*\(number)\\s*(?:个半小时|小时半|个小时|小时|分钟|分|周)(?:\\s*\(number)\\s*分(?:钟)?)?",
+                        durationPattern, "(?:持续|共|为期)\\s*\(number)\\s*周",
                         "(?<=\\s)[到至~—～–-](?=\\s)", "@所有人"] {
             value = replacing(pattern, value, with: " ")
         }
