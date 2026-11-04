@@ -276,10 +276,16 @@ public final class Planner {
     }
     public static JSONArray parseManualLessons(String lines,JSONObject course)throws Exception {
         List<JSONObject> rows=new ArrayList<>(),old=course.optJSONArray("manualLessons")==null?new ArrayList<>():list(course.optJSONArray("manualLessons"));
-        for(String line:lines.split("\n")){line=line.trim();if(line.isEmpty())continue;int colon=line.lastIndexOf(':');
-            if(colon<=0)throw new IllegalArgumentException("课节格式为：名称:分钟，每行一节");
-            String name=line.substring(0,colon).trim();int minutes=Integer.parseInt(line.substring(colon+1).trim());
-            if(name.isEmpty()||minutes<1||minutes>1440)throw new IllegalArgumentException("课节名称不能为空，时长须为 1–1440 分钟");
+        int lineNumber=0;
+        for(String line:lines.split("\r\n|\r|\n",-1)){lineNumber++;line=line.trim();if(line.isEmpty())continue;int colon=Math.max(line.lastIndexOf(':'),line.lastIndexOf('：'));
+            String location="第 "+lineNumber+" 行：";
+            if(colon<0)throw new IllegalArgumentException(location+"请按「名称：分钟」填写，每行一节，中英文冒号均可。");
+            String name=line.substring(0,colon).trim();
+            if(name.isEmpty())throw new IllegalArgumentException(location+"课节名称不能为空。");
+            int minutes;
+            try{minutes=Integer.parseInt(line.substring(colon+1).trim());}
+            catch(NumberFormatException error){throw new IllegalArgumentException(location+"时长须为 1–1440 的整数分钟。");}
+            if(minutes<1||minutes>1440)throw new IllegalArgumentException(location+"时长须为 1–1440 的整数分钟。");
             rows.add(new JSONObject().put("name",name).put("durationMinutes",minutes));
         }
         if(rows.isEmpty())throw new IllegalArgumentException("请至少录入一节课");
