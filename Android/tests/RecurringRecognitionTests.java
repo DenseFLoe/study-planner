@@ -53,6 +53,16 @@ public final class RecurringRecognitionTests {
         if (!Planner.occurs(weekly, TODAY) || !Planner.occurs(weekly, TODAY.plusDays(2)) || Planner.occurs(weekly, TODAY.plusDays(1)))
             throw new AssertionError("Current-week occurrences were lost or added");
         checks += 3;
+        for(String text:new String[]{"从下周开始，每周一、三18:00-19:00复习", "从周五开始，每周一、三18:00-19:00复习", "从2026年11月6日到2026年12月1日，每周一、三18:00-19:00复习", "每周一、三、五18:00-19:00复习", "每周一、周三、周五18:00-19:00复习", "截止2026年12月1日，每周一、三18:00-19:00复习", "持续一个半小时，明天18:00复习"}){
+            JSONObject value=event(text);
+            if(!value.getString("title").equals("复习")||!value.getString("notes").equals(text))throw new AssertionError("Title or original notice damaged: "+text+" => "+value.getString("title"));
+            checks+=2;
+        }
+        for(String text:new String[]{"明天下午三点到五点从零到一复习", "明天下午3:00-5:00从零到一复习"}){
+            if(!event(text).getString("title").equals("从零到一复习"))throw new AssertionError("Title connector removed");checks++;
+        }
+        if(!event("明天18:00，主题：从零开始").getString("title").equals("从零开始"))throw new AssertionError("Explicit title replaced");checks++;
+        if(!event("从下周开始，每周一、三18:00-19:00").getString("title").equals("待命名事项"))throw new AssertionError("Date fragment became a title");checks++;
         System.out.println("PASS " + checks + " recurring recognition checks");
     }
 }

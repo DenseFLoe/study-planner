@@ -130,6 +130,22 @@ final class FixedEventTextParserTests: XCTestCase {
         XCTAssertEqual(try draft("下周起每周三18:00-19:00复习", now: date(2026, 12, 31)).event.startDate, date(2027, 1, 4, 0))
     }
 
+    func testDateDescriptionsDoNotBecomeTitlesOrEraseTitleWords() throws {
+        let today = date(2026, 11, 4)
+        for text in ["从下周开始，每周一、三18:00-19:00复习", "从周五开始，每周一、三18:00-19:00复习", "从2026年11月6日到2026年12月1日，每周一、三18:00-19:00复习", "每周一、三、五18:00-19:00复习", "每周一、周三、周五18:00-19:00复习", "截止2026年12月1日，每周一、三18:00-19:00复习", "持续一个半小时，明天18:00复习"] {
+            let event = try draft(text, now: today).event
+            XCTAssertEqual(event.title, "复习", text)
+            XCTAssertEqual(event.notes, text)
+        }
+        for text in ["明天下午三点到五点从零到一复习", "明天下午3:00-5:00从零到一复习"] {
+            XCTAssertEqual(try draft(text, now: today).event.title, "从零到一复习")
+        }
+        XCTAssertEqual(try draft("明天18:00，主题：从零开始", now: today).event.title, "从零开始")
+        let unnamed = try draft("从下周开始，每周一、三18:00-19:00", now: today)
+        XCTAssertEqual(unnamed.event.title, "待命名事项")
+        XCTAssertTrue(unnamed.warnings.contains { $0.contains("名称") })
+    }
+
     func testRecurringListActuallyIncludesThisWednesdayAndFriday() throws {
         let value = try draft("每周一、三、五18:00-19:00复习", now: date(2026, 11, 4)).event
         XCTAssertTrue(value.occurs(on: date(2026, 11, 4, 0), calendar: calendar))

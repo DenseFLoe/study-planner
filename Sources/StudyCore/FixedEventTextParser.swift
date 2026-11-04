@@ -29,6 +29,8 @@ public enum FixedEventTextParser {
     private static let datePattern = "(?<![0-9:])(?:(20[0-9]{2})[年/\\-])?([0-9]{1,2})[月/\\-]([0-9]{1,2})(?:日|号)?(?![0-9:])"
     private static let relativePattern = "大后天|后天|明天|今天|今日|明日|后日|(?:下下|下|本|这)?(?:周|星期|礼拜)[一二三四五六日天1-7]"
 
+    private static let weekStartPattern = "(?:从|自)?\\s*(下下|下|本|这)(?:周|星期|礼拜)\\s*(?:开始|起)"
+
     public static func parse(_ text: String, now: Date = Date(), calendar: Calendar = .current) -> FixedEventTextResult {
         let source = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !source.isEmpty else { return .init(messages: ["请先粘贴通知、聊天内容或日程描述。"] ) }
@@ -128,7 +130,7 @@ public enum FixedEventTextParser {
         }
         let weekdays = recurring ? recurringWeekdays(recurrenceText as String) : []
         if recurring && weekdays.isEmpty { return fail("重复星期不明确，请补充例如“每周一、三”或“每天”。") }
-        let weekStarts = recurring ? matches("(?:从|自)?\\s*(下下|下|本|这)(?:周|星期|礼拜)\\s*(?:开始|起)", text).compactMap {
+        let weekStarts = recurring ? matches(weekStartPattern, text).compactMap {
             relativeDate(capture($0, 1, text) + "周一", today: today, calendar: calendar)
         } : []
         let datePrefix = dateMatches.first.map { (text as NSString).substring(to: $0.range.location) } ?? ""
@@ -287,8 +289,11 @@ public enum FixedEventTextParser {
         if let match = matches("(?:召开|举行|开展|举办)\\s*([^\\n，,。；;]{2,60})", text).first {
             return capture(match, 1, text).trimmingCharacters(in: .whitespacesAndNewlines)
         }
+        let dateDescription = "(?:从|自|截止|截至|直到|至|到)?\\s*(?:\(datePattern)|\(relativePattern))\\s*(?:开始|起)?"
         var value = text
-        for pattern in [datePattern, relativePattern, clockPattern, "(?:每天|每日|每周|每星期|每礼拜|工作日|周末)(?:[一二三四五六日天1-7、，,到至和及\\- ]*)", "(?:持续|时长|共|约|用时)\\s*\(number)\\s*(?:小时|分钟|分|周)", "[到至~—～]", "@所有人"] {
+        for pattern in [weekStartPattern, "(?:每(?:周|星期|礼拜)|每逢)[一二三四五六日天1-7](?:\\s*(?:、|,|，|和|及|到|至|[-~—～])\\s*(?:(?:每)?(?:周|星期|礼拜))?[一二三四五六日天1-7])*|每天|每日|工作日|周末", dateDescription, clockPattern,
+                        "(?:持续|时长|共|约|用时)\\s*\(number)\\s*(?:个半小时|小时半|个小时|小时|分钟|分|周)(?:\\s*\(number)\\s*分(?:钟)?)?",
+                        "(?<=\\s)[到至~—～–-](?=\\s)", "@所有人"] {
             value = replacing(pattern, value, with: " ")
         }
         let chunks = value.components(separatedBy: CharacterSet(charactersIn: "\n，,。；;"))

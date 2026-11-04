@@ -11,6 +11,7 @@ public final class FixedEventTextParser {
     static final String CLOCK="(?:("+PERIOD+")\\s*)?(?<![0-9])([0-9]{1,2})[:：]([0-9]{2})(?![0-9])|(?:("+PERIOD+")\\s*)?("+NUMBER+")\\s*[点时]\\s*(?:(半|一刻|三刻)|([0-9零〇一二两三四五六七八九十]{1,3})分?)?";
     static final String DATE="(?<![0-9:])(?:(20[0-9]{2})[年/\\-])?([0-9]{1,2})[月/\\-]([0-9]{1,2})(?:日|号)?(?![0-9:])";
     static final String RELATIVE="大后天|后天|明天|今天|今日|明日|后日|(?:下下|下|本|这)?(?:周|星期|礼拜)[一二三四五六日天1-7]";
+    static final String WEEK_START="(?:从|自)?\\s*(下下|下|本|这)(?:周|星期|礼拜)\\s*(?:开始|起)";
     public static final class Draft {
         public final JSONObject event;public final List<String> warnings;public final String source;
         Draft(JSONObject event,List<String> warnings,String source){this.event=event;this.warnings=new ArrayList<>(new TreeSet<>(warnings));this.source=source;}
@@ -53,7 +54,7 @@ public final class FixedEventTextParser {
         if(repeat)for(MatchResult match:starts)for(int i=match.start();i<match.end();i++)recurrenceText.setCharAt(i,' ');
         Set<Integer> weeks=repeat?weekdays(recurrenceText.toString()):new TreeSet<>();require(!repeat||!weeks.isEmpty(),"重复星期不明确，请补充例如“每周一、三”或“每天”。");
         List<LocalDate> weekStarts=new ArrayList<>();
-        if(repeat)for(MatchResult match:matches("(?:从|自)?\\s*(下下|下|本|这)(?:周|星期|礼拜)\\s*(?:开始|起)",text))
+        if(repeat)for(MatchResult match:matches(WEEK_START,text))
             weekStarts.add(relative(group(match,1)+"周一",today));
         String prefix=dateMatches.isEmpty()?"":text.substring(0,dateMatches.get(0).start());boolean onlyEnd=repeat&&dates.size()==1&&has("(?:截止|截至|直到|至|到)\\s*$",prefix);LocalDate start;
         if(!dates.isEmpty()&&!onlyEnd)start=dates.get(0);else if(!weekStarts.isEmpty())start=weekStarts.get(0);else if(!starts.isEmpty())start=relative(group(starts.get(0),0),today);else if(repeat)start=today;else throw new Reject("找到了时间，但没有明确日期；请补充今天、明天或具体月日。");
@@ -79,7 +80,11 @@ public final class FixedEventTextParser {
         JSONObject event=new JSONObject().put("id",Planner.id()).put("title",title).put("startMinute",first.minute).put("endMinute",end).put("startDate",Planner.at(start,0)).put("endDate",Planner.at(endDate,0)).put("weekdays",new JSONArray(weeks)).put("excludedDates",new JSONArray()).put("color","orange").put("notes",source);return new Draft(event,warnings,source);
     }
     static String title(String text){for(String pattern:new String[]{"(?:事项|主题|活动名称|会议名称|名称)[：:]\\s*([^\\n，,。；;]{2,60})","(?:召开|举行|开展|举办)\\s*([^\\n，,。；;]{2,60})"}){List<MatchResult> m=matches(pattern,text);if(!m.isEmpty())return group(m.get(0),1).trim();}
-        String value=text;for(String p:new String[]{DATE,RELATIVE,CLOCK,"(?:每天|每日|每周|每星期|每礼拜|工作日|周末)(?:[一二三四五六日天1-7、，,到至和及\\- ]*)","(?:持续|时长|共|约|用时)\\s*"+NUMBER+"\\s*(?:小时|分钟|分|周)","[到至~—～]","@所有人"})value=value.replaceAll(p," ");
+        String dateDescription="(?:从|自|截止|截至|直到|至|到)?\\s*(?:"+DATE+"|"+RELATIVE+")\\s*(?:开始|起)?";
+        String value=text;
+        for(String p:new String[]{WEEK_START,"(?:每(?:周|星期|礼拜)|每逢)[一二三四五六日天1-7](?:\\s*(?:、|,|，|和|及|到|至|[-~—～])\\s*(?:(?:每)?(?:周|星期|礼拜))?[一二三四五六日天1-7])*|每天|每日|工作日|周末",dateDescription,CLOCK,
+                "(?:持续|时长|共|约|用时)\\s*"+NUMBER+"\\s*(?:个半小时|小时半|个小时|小时|分钟|分|周)(?:\\s*"+NUMBER+"\\s*分(?:钟)?)?",
+                "(?<=\\s)[到至~—～–-](?=\\s)","@所有人"})value=value.replaceAll(p," ");
         for(String chunk:value.split("[\\n，,。；;]")){String s=chunk.replaceAll("^[\\s：:、-]+|[\\s：:、-]+$","");if(!s.isEmpty()&&!Arrays.asList("时间","日期","通知","地点另行通知").contains(s))return s.substring(0,Math.min(60,s.length()));}return "待命名事项";
     }
     public static Result parse(String input,double now){Result result=new Result();String source=input.trim();if(source.isEmpty()){result.messages.add("请先粘贴包含日期和时间的通知或聊天文字。");return result;}if(source.codePointCount(0,source.length())>30000){result.messages.add("一次最多识别 30000 字，请分段粘贴。");return result;}
