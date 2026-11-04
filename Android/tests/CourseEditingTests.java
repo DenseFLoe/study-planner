@@ -80,8 +80,34 @@ public final class CourseEditingTests {
         CourseEditing.save(state, draft, baseline, NOW);
         check(Planner.course(state, baseline.getString("id")).getString("notes").equals("更新"), "Identical edit did not preserve notes");
     }
+    static void manualEditorDeletionHistory() throws Exception {
+        for (int actual : new int[]{0, 20, 60}) {
+            JSONObject baseline = course(), state = state(baseline), edited = CourseTools.copy(baseline);
+            CourseEditing.Draft session = new CourseEditing.Draft(state, baseline);
+            Planner.updateManualLessons(edited, new JSONArray().put(CourseTools.copy(edited.getJSONArray("manualLessons").getJSONObject(1))));
+            JSONObject task = Planner.task(baseline.getString("id"), NOW, 60).put("lessonID", "a");
+            state.getJSONArray("tasks").put(task); Planner.confirm(state, task.getString("id"), actual, NOW + 1);
+            rejected(state, () -> session.save(state, edited, NOW), "Manual form deleted a new " + actual + " minute confirmation");
+            check(edited.getJSONArray("manualLessons").length() == 1, "Rejected deletion changed the form draft");
+        }
+        JSONObject baseline = course(), state = state(baseline), edited = CourseTools.copy(baseline);
+        CourseEditing.Draft session = new CourseEditing.Draft(state, baseline);
+        Planner.updateManualLessons(edited, new JSONArray().put(CourseTools.copy(edited.getJSONArray("manualLessons").getJSONObject(1))));
+        JSONObject task = Planner.task(baseline.getString("id"), NOW, 60).put("lessonID", "b");
+        state.getJSONArray("tasks").put(task); Planner.confirm(state, task.getString("id"), 20, NOW + 1);
+        String records = state.getJSONArray("completions").toString();
+        session.save(state, edited, NOW);
+        check(Planner.course(state, baseline.getString("id")).getInt("totalMinutes") == 120 && records.equals(state.getJSONArray("completions").toString()), "Manual deletion lost unrelated completion");
+
+        state = state(baseline);
+        task = Planner.task(baseline.getString("id"), NOW, 60).put("lessonID", "a");
+        state.getJSONArray("tasks").put(task); Planner.confirm(state, task.getString("id"), 20, NOW + 1);
+        session = new CourseEditing.Draft(state, baseline);
+        session.save(state, edited, NOW);
+        check(state.getJSONArray("completions").length() == 0 && state.getJSONArray("tasks").length() == 0, "Reviewed history was not deleted atomically");
+    }
     public static void main(String[] args) throws Exception {
-        displayAndProgress(); conflictingAndDeleted(); schedulingAndDeletion(); defaultsAndIdenticalEdits();
+        displayAndProgress(); conflictingAndDeleted(); schedulingAndDeletion(); defaultsAndIdenticalEdits(); manualEditorDeletionHistory();
         System.out.println("CourseEditingTests: " + checks + " checks passed");
     }
 }

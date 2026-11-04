@@ -83,6 +83,15 @@ public final class LessonOrderDraft {
         return SyncLedger.canonical(new JSONObject().put("remaining", remaining).put("tasks", tasks).put("completions", records));
     }
 
+    /** Also used by the manual-course editor, where removing a text row deletes a lesson. */
+    public void checkDeletionHistory(JSONObject state, Set<String> deleted) throws Exception {
+        JSONObject current = Planner.course(state, course.getString("id"));
+        if (current == null || current.optBoolean("isArchived")) throw removed();
+        if (!new HashSet<>(originalOrder).containsAll(deleted)) throw changed("待删除课节不在原草稿中");
+        if (!deleted.isEmpty() && !deletionHistory(history, course, deleted).equals(deletionHistory(state, current, deleted)))
+            throw changed("待删除课节的学习记录或进度已有变化，未执行删除");
+    }
+
     public void apply(JSONObject state, List<String> order, Set<String> deleted) throws Exception {
         apply(state, order, deleted, false);
     }
@@ -108,8 +117,7 @@ public final class LessonOrderDraft {
             (!Objects.equals(current.opt("lessonOrderCustomized"), course.opt("lessonOrderCustomized")) &&
              !Objects.equals(current.opt("lessonOrderCustomized"), customized)))
             throw changed("课节顺序在编辑期间已被修改");
-        if (!deleted.isEmpty() && !deletionHistory(history, course, deleted).equals(deletionHistory(state, current, deleted)))
-            throw changed("待删除课节的学习记录或进度已有变化，未执行删除");
+        checkDeletionHistory(state, deleted);
         JSONObject next = CourseTools.copy(state);
         if (!deleted.isEmpty()) CourseTools.removeLessons(next, course.getString("id"), deleted);
         Planner.course(next, course.getString("id")).put("lessonOrder", new JSONArray(order)).put("lessonOrderCustomized", customized);

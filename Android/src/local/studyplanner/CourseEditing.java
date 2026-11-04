@@ -1,10 +1,37 @@
 package local.studyplanner;
 
 import org.json.*;
+import java.util.*;
 
 /** Reapply a form's intent to the course read inside the database worker. */
 public final class CourseEditing {
     private CourseEditing() {}
+
+    public static final class Draft {
+        private final JSONObject baseline;
+        private final LessonOrderDraft deletionGuard;
+
+        public Draft(JSONObject state, JSONObject original) throws Exception {
+            baseline = original == null ? null : CourseTools.copy(original);
+            deletionGuard = original != null && original.optJSONArray("manualLessons") != null &&
+                Planner.isManualLessonCourse(original, original.optString("type"))
+                ? new LessonOrderDraft(state, original.getString("id")) : null;
+        }
+
+        public void save(JSONObject state, JSONObject edited, double now) throws Exception {
+            JSONObject resolved = resolve(state, edited, baseline);
+            JSONObject current = Planner.course(state, resolved.getString("id"));
+            if (deletionGuard != null && current != null && resolved.optJSONArray("manualLessons") != null &&
+                Planner.isManualLessonCourse(resolved, resolved.optString("type"))) {
+                Set<String> removed = new HashSet<>(), retained = new HashSet<>();
+                for (JSONObject lesson : Planner.list(resolved.getJSONArray("manualLessons"))) retained.add(lesson.getString("id"));
+                for (JSONObject lesson : Planner.list(current.optJSONArray("manualLessons")))
+                    if (!retained.contains(lesson.getString("id"))) removed.add(lesson.getString("id"));
+                deletionGuard.checkDeletionHistory(state, removed);
+            }
+            CourseTools.updateCourse(state, resolved, now);
+        }
+    }
 
     static IllegalArgumentException conflict() {
         return new IllegalArgumentException("这门课程在编辑期间已有其他修改，与当前草稿冲突。草稿仍保留，最新数据未被覆盖，请重新打开课程后编辑。");
@@ -52,7 +79,8 @@ public final class CourseEditing {
         return merged;
     }
 
-    public static void save(JSONObject state, JSONObject edited, JSONObject baseline, double now) throws Exception {
+    // Low-level merge entry for non-UI callers; interactive forms use Draft to capture history.
+    static void save(JSONObject state, JSONObject edited, JSONObject baseline, double now) throws Exception {
         CourseTools.updateCourse(state, resolve(state, edited, baseline), now);
     }
 }
