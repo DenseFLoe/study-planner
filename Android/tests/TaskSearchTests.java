@@ -46,6 +46,46 @@ public final class TaskSearchTests {
         void run() { work.remove().run(); }
         void drain() { while (!work.isEmpty()) run(); }
     }
+    static List<String> ids(TaskSearch.Result result) {
+        List<String> ids = new ArrayList<>();
+        for (int page = 0; page < result.pageCount(); page++) for (TaskSearch.Hit hit : result.page(page)) ids.add(hit.id);
+        return ids;
+    }
+    static void scopes() throws Exception {
+        JSONObject state = fixture(), course = state.getJSONArray("courses").getJSONObject(0); String id = course.getString("id");
+        double today = Planner.at(DAY, 0), now = Planner.at(DAY, 720); JSONArray tasks = new JSONArray(); state.put("tasks", tasks);
+        tasks.put(Planner.task(id, today - 86400, 60).put("id", "old"));
+        tasks.put(Planner.task(id, today - 3600, 60).put("id", "midnight"));
+        tasks.put(Planner.task(id, today - 1800, 60).put("id", "overnight"));
+        tasks.put(Planner.task(id, today - 7200, 30).put("id", "floating")
+                .put("floatingWindowStart", today - 7200).put("floatingWindowEnd", today + 3600));
+        tasks.put(Planner.task(id, today + 3600, 60).put("id", "today"));
+        tasks.put(Planner.task(id, today + 86400, 60).put("id", "future"));
+        tasks.put(Planner.task(id, today + 172800, 60).put("id", "confirmed-future").put("confirmedAt", now).put("completedMinutes", 60).put("status", "completed"));
+        tasks.put(Planner.task(id, today - 86400, 60).put("id", "a-old-tie"));
+        String before = SyncLedger.canonical(state);
+        List<String> upcoming = ids(TaskSearch.find(state, "高数", TaskSearch.Scope.UPCOMING, now));
+        List<String> history = ids(TaskSearch.find(state, "高数", TaskSearch.Scope.HISTORY, now));
+        check(upcoming.equals(Arrays.asList("floating", "overnight", "today", "future")), "Upcoming scope lost today or overnight windows");
+        check(history.equals(Arrays.asList("confirmed-future", "midnight", "a-old-tie", "old")), "History scope/order or stable date ties wrong");
+        Set<String> union = new HashSet<>(upcoming); union.addAll(history);
+        check(union.equals(new HashSet<>(ids(TaskSearch.find(state, "高数", TaskSearch.Scope.ALL, now)))) && upcoming.size() + history.size() == union.size(),
+                "Scopes overlap or omit visible tasks");
+        check(TaskSearch.find(state, "高数 2026-11-06", TaskSearch.Scope.UPCOMING, now).count() == 0, "Date query bypassed scope");
+        check(TaskSearch.find(state, "高数 2026-11-06", TaskSearch.Scope.HISTORY, now).count() == 1, "Date terms lost confirmed future history");
+        check(SyncLedger.canonical(state).equals(before), "Scoped search mutated source");
+        Queue worker = new Queue(), ui = new Queue(); List<TaskSearch.Result> accepted = new ArrayList<>();
+        TaskSearchController controller = new TaskSearchController(worker, ui, accepted::add, error -> { throw new AssertionError(error); });
+        controller.search(state, "高数", TaskSearch.Scope.UPCOMING, now); worker.run();
+        controller.search(state, "高数", TaskSearch.Scope.HISTORY, now); ui.drain(); worker.drain(); ui.drain();
+        check(accepted.size() == 1 && ids(accepted.get(0)).equals(history), "Scope change accepted an obsolete query");
+        course.put("isArchived", true);
+        check(TaskSearch.find(state, "高数", TaskSearch.Scope.UPCOMING, now).count() == 0, "Archived pending tasks remain upcoming");
+        check(ids(TaskSearch.find(state, "高数", TaskSearch.Scope.ALL, now)).equals(Collections.singletonList("confirmed-future")), "Archived recorded history was lost");
+        state.put("courses", new JSONArray());
+        check(ids(TaskSearch.find(state, "已删除课程", TaskSearch.Scope.HISTORY, now)).equals(Collections.singletonList("confirmed-future")), "Deleted-course recorded history was lost");
+        check(TaskSearch.find(state, "已删除课程", TaskSearch.Scope.UPCOMING, now).count() == 0, "Orphaned pending tasks shown as upcoming");
+    }
     static void asynchronousQueries() throws Exception {
         JSONObject state = fixture(); Queue worker = new Queue(), ui = new Queue();
         List<TaskSearch.Result> accepted = new ArrayList<>(); List<Exception> errors = new ArrayList<>();
@@ -65,7 +105,7 @@ public final class TaskSearchTests {
         check(accepted.size() == 2, "Closed search updated UI");
     }
     public static void main(String[] args) throws Exception {
-        filteringAndPages(); stableTiesAndDetachedHits(); asynchronousQueries();
+        filteringAndPages(); stableTiesAndDetachedHits(); asynchronousQueries(); scopes();
         System.out.println("TaskSearchTests: " + checks + " checks passed");
     }
 }

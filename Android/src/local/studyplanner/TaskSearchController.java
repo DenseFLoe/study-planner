@@ -13,6 +13,9 @@ final class TaskSearchController {
     void clear() { work.clear(); }
     void close() { work.close(); }
     void search(JSONObject state, String query) {
-        work.submit(() -> TaskSearch.find(state, query));
+        search(state, query, TaskSearch.Scope.ALL, Planner.now());
+    }
+    void search(JSONObject state, String query, TaskSearch.Scope scope, double now) {
+        work.submit(() -> TaskSearch.find(state, query, scope, now));
     }
 }

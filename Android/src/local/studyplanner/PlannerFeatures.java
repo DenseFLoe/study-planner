@@ -55,9 +55,12 @@ final class PlannerFeatures {
  void search(){
   LinearLayout form=app.col();form.setPadding(app.dp(16),0,app.dp(16),0);
   EditText query=app.field(form,"课程、课节或日期（YYYY-MM-DD）","",false);
-  String hint="搜索全部历史和未来安排，可组合多个关键词，点结果跳转到当天。";
+  TaskSearch.Scope[] scopes=TaskSearch.Scope.values();
+  Spinner scope=app.spinner(form,"搜索范围",new String[]{scopes[0].title,scopes[1].title,scopes[2].title},0);
+  TextView explanation=app.text(scopes[0].explanation,12,app.muted);form.addView(explanation);
+  String hint="可组合多个关键词，点结果跳转到当天。";
   TextView count=app.text(hint,12,app.muted);form.addView(count);
-  LinearLayout rows=app.col();ScrollView scroll=new ScrollView(app);scroll.addView(rows);form.addView(scroll,new LinearLayout.LayoutParams(-1,app.dp(380)));
+  LinearLayout rows=app.col();ScrollView scroll=new ScrollView(app);scroll.addView(rows);form.addView(scroll,new LinearLayout.LayoutParams(-1,app.dp(300)));
   PlannerUi.Flow navigation=new PlannerUi.Flow(app);form.addView(navigation);
   AlertDialog dialog=new AlertDialog.Builder(app).setTitle("搜索课程日期").setView(form).setNegativeButton("关闭",null).create();
   TaskSearch.Result[] result={null};int[] page={0};Button[] pages=new Button[2];
@@ -65,7 +68,7 @@ final class PlannerFeatures {
    rows.removeAllViews();int total=result[0]==null?0:result[0].count(),number=result[0]==null?0:result[0].pageCount();
    pages[0].setEnabled(page[0]>0);pages[1].setEnabled(page[0]+1<number);
    if(result[0]==null)return;
-   count.setText(total==0?"没有找到匹配的安排":"找到 "+total+" 项安排 · 第 "+(page[0]+1)+" / "+number+" 页 · 按日期排序");
+   count.setText(total==0?"没有找到匹配的安排，可切换范围或缩短关键词":"找到 "+total+" 项安排 · 第 "+(page[0]+1)+" / "+number+" 页");
    for(TaskSearch.Hit hit:result[0].page(page[0]))rows.addView(app.button(hit.label(),()->{
     app.selected=Planner.day(hit.start);app.month=app.selected.withDayOfMonth(1);app.page=0;dialog.dismiss();app.render();
    }));scroll.scrollTo(0,0);
@@ -76,15 +79,21 @@ final class PlannerFeatures {
    if(app.isDestroyed()||!dialog.isShowing())return;result[0]=value;page[0]=0;render.run();
   },error->{if(!app.isDestroyed()&&dialog.isShowing())count.setText("搜索失败："+error.getMessage());});
   Runnable[] pending={null};
+  Runnable search=()->{
+   if(pending[0]!=null)app.handler.removeCallbacks(pending[0]);controller.clear();result[0]=null;page[0]=0;render.run();
+   TaskSearch.Scope selected=scopes[scope.getSelectedItemPosition()];explanation.setText(selected.explanation);
+   String term=query.getText().toString();if(TaskSearch.normalize(term).isEmpty()){count.setText(hint);return;}
+   count.setText("正在搜索…");JSONObject snapshot=app.state;double now=Planner.now();
+   pending[0]=()->controller.search(snapshot,term,selected,now);app.handler.postDelayed(pending[0],200);
+  };
   query.addTextChangedListener(new TextWatcher(){
    public void beforeTextChanged(CharSequence s,int start,int n,int after){}
-   public void onTextChanged(CharSequence s,int start,int before,int n){
-    if(pending[0]!=null)app.handler.removeCallbacks(pending[0]);controller.clear();result[0]=null;page[0]=0;render.run();
-    String text=s.toString();if(TaskSearch.normalize(text).isEmpty()){count.setText(hint);return;}
-    count.setText("正在搜索…");JSONObject snapshot=app.state;
-    pending[0]=()->controller.search(snapshot,text);app.handler.postDelayed(pending[0],200);
-   }
+   public void onTextChanged(CharSequence s,int start,int before,int n){search.run();}
    public void afterTextChanged(Editable s){}
+  });
+  scope.setOnItemSelectedListener(new android.widget.AdapterView.OnItemSelectedListener(){
+   public void onItemSelected(android.widget.AdapterView<?> parent,View view,int position,long id){search.run();}
+   public void onNothingSelected(android.widget.AdapterView<?> parent){}
   });
   dialog.setOnDismissListener(d->{controller.close();if(pending[0]!=null)app.handler.removeCallbacks(pending[0]);});dialog.show();
  }
