@@ -223,6 +223,8 @@ Mac 普通保存的排课、数据库写入和学习负担计算在后台完成�
 
 Linux 开发环境具备 Swift 6 和 zlib 开发头文件后，可直接运行 `swift test --jobs 2`。Linux 包只包含 `StudyCore` 和它的测试，使用固定版本的 [Swift Crypto](https://github.com/apple/swift-crypto/tree/3.9.1) 实现 CryptoKit 接口；Mac 的依赖和应用目标保持原样。先运行 Android 测试可补齐跨平台样本；需要 Swift→Java→Swift 顺序生成的往返样本仍由 Mac 完整入口验证。
 
+Mac CI 在测试成功后运行 `bash Scripts/test-dmg-ci.sh`，调用现有脚本生成调试 DMG 并验证签名、镜像、SHA-256 和打包源码提交。文件只保留在临时执行器内，不上传、不安装；日常 `build-dmg.sh` 的默认 Release 构建方式不变。该检查验证打包流程，实际安装与原生交互仍需单独验收。
+
 `Android/test.sh` 还在 256 MiB 堆下运行 300 组固定种子的合成排程与同步检查，覆盖固定/浮动事项冲突、排不下、历史记录、跨日及可学习时段边界；失败会输出场景编号和临时复现文件。运行后可执行 `java -Xmx512m -cp Android/tools/json.jar:Android/build/tests local.studyplanner.SyncScheduleStressTests --large`，追加 32 门和 128 门课程、240 天范围的大计划及同步记录往返检查。这两种运行都设有 110 秒总时限，输出实际任务数和耗时，不读取正式日程。
 
 真实网站诊断 `TempSiteForensics` 默认跳过，避免普通测试依赖公网和网站状态。需要手动排查时运行 `STUDYPLANNER_LIVE_SITE_FORENSICS=1 ./Scripts/test.sh --filter TempSiteForensics`；该诊断会访问学丞网站并输出响应摘要。

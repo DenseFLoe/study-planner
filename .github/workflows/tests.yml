@@ -66,6 +66,8 @@ jobs:
         run: ./Scripts/test.sh --filter 'BrowserCourseSessionTests|CloudSyncPresentationTests|CloudSSHTests'
       - name: Run tests
         run: bash Scripts/test-ci.sh
+      - name: Verify macOS DMG packaging
+        run: bash Scripts/test-dmg-ci.sh
       - name: Capture failing test backtrace
         if: failure() && steps.concurrency.outcome == 'failure'
         timeout-minutes: 5
