@@ -102,7 +102,7 @@ final class PlannerFeatures {
    builder.setSingleChoiceItems(DAILY_WEIGHT_NAMES,checked,(target,index)->{
     target.dismiss();
     if(index==checked&&Math.abs(current-DAILY_WEIGHTS[index])<.001)return;
-    app.mutate(s->{JSONObject latest=Planner.course(s,course.getString("id"));if(latest==null)throw new IllegalArgumentException("该课程已删除，请刷新课程列表。");latest.put("dailyStudyWeight",DAILY_WEIGHTS[index]);},true,null,error->app.alert("每日加量未保存",error.getMessage()+"\n原有设置已保留。"));
+    app.mutate(s->CourseEditing.setDailyWeight(s,course.getString("id"),current,DAILY_WEIGHTS[index]),true,null,error->app.alert("每日加量未保存",error.getMessage()+"\n原有设置已保留。"));
    });
    builder.setNegativeButton("取消",null);
    builder.show();

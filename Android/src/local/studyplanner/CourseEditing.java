@@ -61,6 +61,21 @@ public final class CourseEditing {
         return new IllegalArgumentException("这门课程在编辑期间已有其他修改，与当前草稿冲突。草稿仍保留，最新数据未被覆盖，请重新打开课程后编辑。");
     }
 
+    /** A quick weight choice changes only that field, preserving freshly synced progress. */
+    static void setDailyWeight(JSONObject state, String courseID, double displayed, double desired) throws Exception {
+        if (!Double.isFinite(displayed) || displayed < 1 || displayed > 3 ||
+                !Double.isFinite(desired) || desired < 1 || desired > 3)
+            throw new IllegalArgumentException("每日加量应在 1–3 倍之间。");
+        JSONObject current = Planner.course(state, courseID);
+        if (current == null || current.optBoolean("isArchived"))
+            throw new IllegalArgumentException("该课程已删除或归档，请刷新课程列表。");
+        if (desired == displayed) return;
+        double latest = Planner.dailyWeight(current);
+        if (latest != displayed && latest != desired)
+            throw new IllegalArgumentException("每日加量已在另一端修改，未覆盖新设置。请重新打开选择窗口后核对。");
+        current.put("dailyStudyWeight", desired);
+    }
+
     static JSONObject schedulingInputs(JSONObject course) throws Exception {
         JSONObject value = CourseTools.copy(course);
         for (String field : new String[]{"name", "notes", "color"}) value.remove(field);

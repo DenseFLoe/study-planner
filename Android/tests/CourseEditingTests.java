@@ -140,8 +140,36 @@ public final class CourseEditingTests {
         check(state.getJSONArray("tasks").length() == 1 && retained.equals(SyncLedger.canonical(state.getJSONArray("tasks").getJSONObject(0))), "Unrelated tasks changed");
         check(state.getJSONArray("completions").length() == 1 && state.getJSONArray("completions").getJSONObject(0).getString("courseID").equals(other.getString("id")), "Unrelated history removed");
     }
+    static void quickDailyWeight() throws Exception {
+        JSONObject baseline = course(), state = state(baseline); String id = baseline.getString("id");
+        JSONObject current = Planner.course(state, id);
+        current.put("name", "同步的新名称").put("initialCompletedMinutes", 30).put("notes", "新的备注");
+        JSONObject task = Planner.task(id, NOW, 60).put("lessonID", "a");
+        state.getJSONArray("tasks").put(task); Planner.confirm(state, task.getString("id"), 20, NOW);
+        String records = SyncLedger.canonical(state.getJSONArray("completions"));
+        CourseEditing.setDailyWeight(state, id, 1, 1.5);
+        check(Planner.dailyWeight(current) == 1.5 && current.getString("name").equals("同步的新名称") && current.getInt("initialCompletedMinutes") == 30, "Weight choice lost synced course fields");
+        check(records.equals(SyncLedger.canonical(state.getJSONArray("completions"))), "Weight choice changed study records");
+        current.put("dailyStudyWeight", 3);
+        rejected(state, () -> CourseEditing.setDailyWeight(state, id, 1.5, 2), "Old quick choice overwrote remote weight");
+        CourseEditing.setDailyWeight(state, id, 1.5, 3);
+        check(Planner.dailyWeight(current) == 3, "Identical concurrent choice was rejected");
+        CourseEditing.setDailyWeight(state, id, 1.5, 1.5);
+        check(Planner.dailyWeight(current) == 3, "Unchanged choice reverted remote weight");
+        current.put("dailyStudyWeight", JSONObject.NULL);
+        CourseEditing.setDailyWeight(state, id, 1, 2);
+        check(Planner.dailyWeight(current) == 2, "Implicit default weight treated as a conflict");
+        for (double invalid : new double[]{0, 4, Double.NaN, Double.POSITIVE_INFINITY}) {
+            rejected(state, () -> CourseEditing.setDailyWeight(state, id, 2, invalid), "Invalid desired weight accepted");
+            rejected(state, () -> CourseEditing.setDailyWeight(state, id, invalid, 2), "Invalid displayed weight accepted");
+        }
+        current.put("isArchived", true);
+        rejected(state, () -> CourseEditing.setDailyWeight(state, id, 2, 3), "Archived course changed from old picker");
+        Planner.removeCourse(state, id);
+        rejected(state, () -> CourseEditing.setDailyWeight(state, id, 2, 3), "Deleted course recreated from old picker");
+    }
     public static void main(String[] args) throws Exception {
-        displayAndProgress(); conflictingAndDeleted(); schedulingAndDeletion(); defaultsAndIdenticalEdits(); manualEditorDeletionHistory(); wholeCourseDeletion();
+        displayAndProgress(); conflictingAndDeleted(); schedulingAndDeletion(); defaultsAndIdenticalEdits(); manualEditorDeletionHistory(); wholeCourseDeletion(); quickDailyWeight();
         System.out.println("CourseEditingTests: " + checks + " checks passed");
     }
 }
