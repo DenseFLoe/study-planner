@@ -37,6 +37,8 @@ struct MainView: View {
     @State private var showingAddMenu = false
     @State private var dismissedDeletion: UUID?
     @State private var showingCompletedFixedEvents = false
+    @State private var fixedQuery = ""
+    @State private var fixedWeekday = 0
     @AppStorage("dailyStudyLoadWarningMinutes") private var dailyLoadWarningMinutes = 480
     @Namespace private var navigationSelection
     @Environment(\.scenePhase) private var scenePhase
@@ -525,41 +527,38 @@ struct MainView: View {
         .environment(\.plannerScrollingContent, true)
     }
 
-    private var confirmedSummary: String {
-        var total = 0
-        for record in store.state.completions where Calendar.current.isDate(record.recordedAt, inSameDayAs: selectedDay) {
-            let (next, overflow) = total.addingReportingOverflow(record.minutes)
-            guard !overflow else { return "合计超出范围" }
-            total = next
-        }
-        return hours(total)
-    }
-
     private var summaryBand: some View {
-        HStack(spacing: 0) {
-            SummaryMetric(
-                title: "安排学习",
-                value: hours(dayTasks.filter(\.isUnconfirmed).reduce(0) { $0 + $1.durationMinutes }),
-                icon: "book.closed.fill",
-                color: PlannerTheme.accent
-            )
-            metricDivider
-            SummaryMetric(
-                title: "已确认",
-                value: confirmedSummary,
-                icon: "checkmark",
-                color: .teal
-            )
-            metricDivider
-            SummaryMetric(
-                title: "固定事项",
-                value: "\(dayEvents.count) 项",
-                icon: "calendar",
-                color: .purple
-            )
+        let confirmed = ConfirmedStudySummary(state: store.state, day: selectedDay)
+        return VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 0) {
+                SummaryMetric(
+                    title: "待学计划",
+                    value: studyDuration(dayTasks.filter(\.isUnconfirmed).reduce(0) { $0 + $1.durationMinutes }),
+                    icon: "book.closed.fill",
+                    color: PlannerTheme.accent
+                )
+                metricDivider
+                SummaryMetric(
+                    title: "实际已学",
+                    value: confirmed.value,
+                    icon: "checkmark",
+                    color: .teal
+                )
+                metricDivider
+                SummaryMetric(
+                    title: "固定事项",
+                    value: "\(dayEvents.count) 项",
+                    icon: "calendar",
+                    color: .purple
+                )
+            }
+            .padding(.vertical, 15)
+            .plannerSurface(radius: 18, material: .thinMaterial)
+            Text(confirmed.note)
+                .font(.caption)
+                .foregroundStyle(confirmed.ambiguousRecordCount > 0 || confirmed.minutes == nil ? Color.orange : .secondary)
+                .fixedSize(horizontal: false, vertical: true)
         }
-        .padding(.vertical, 15)
-        .plannerSurface(radius: 18, material: .thinMaterial)
     }
 
     private var metricDivider: some View {
@@ -593,13 +592,14 @@ struct MainView: View {
     private var insightsPanel: some View {
         ScrollView {
             VStack(spacing: 16) {
-                WeeklyStudyChart(
-                    selectedDay: selectedDay,
-                    tasks: store.state.tasks,
-                    courses: store.courses
-                )
-
                 VStack(alignment: .leading, spacing: 10) {
+                    if let task = store.state.firstUnconfirmedTask(on: selectedDay) {
+                        Text(task.lessonName ?? store.course(task.courseID)?.name ?? "待学习课程")
+                            .font(.subheadline.weight(.semibold))
+                            .fixedSize(horizontal: false, vertical: true)
+                        Text("当前所选日期的首项未确认课程 · \(studyDuration(task.durationMinutes))")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
                     Button {
                         Task {
                             if await store.continueStudying(on: selectedDay) {
@@ -627,14 +627,20 @@ struct MainView: View {
                     ScheduleHealthWarning(health: health, adjustments: store.result.adjustments, showDetails: { sheet = .risks })
                 }
 
-                if !store.courses.isEmpty { DailyConsequencesView(store: store) }
-
                 CourseProgressPanel(
                     courses: store.courses,
                     demands: store.result.demands,
                     completedMinutes: { store.state.completedMinutes(for: $0) },
                     edit: { sheet = .course($0) }
                 )
+
+                WeeklyStudyChart(
+                    selectedDay: selectedDay,
+                    tasks: store.state.tasks,
+                    courses: store.courses
+                )
+
+                if !store.courses.isEmpty { DailyConsequencesView(store: store) }
 
                 Label("计划会随学习进度动态变化", systemImage: "arrow.triangle.2.circlepath")
                     .font(.caption)
@@ -709,19 +715,42 @@ struct MainView: View {
     }
 
     private func fixedList(at now: Date) -> some View {
-        let events = store.state.fixedEvents.sorted {
+        let allEvents = store.state.fixedEvents.sorted {
             $0.startDate == $1.startDate ? $0.id.uuidString < $1.id.uuidString : $0.startDate < $1.startDate
         }
+        let filtering = !fixedQuery.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || fixedWeekday != 0
+        let events = allEvents.filter { FixedEventFilter.matches($0, query: fixedQuery, weekday: fixedWeekday) }
         let completed = events.filter { $0.hasEnded(at: now) }
         let completedIDs = Set(completed.map(\.id))
         let active = events.filter { !completedIDs.contains($0.id) }
         return ScrollView {
             VStack(alignment: .leading, spacing: 16) {
                 HStack {
-                    PlannerSectionTitle(title: "周期课表与固定事项", detail: "未完成 \(active.count) 项 · 已完成 \(completed.count) 项")
+                    PlannerSectionTitle(title: "周期课表与固定事项", detail: "\(filtering ? "匹配：" : "")未完成 \(active.count) 项 · 已完成 \(completed.count) 项")
                     Button("添加固定事项", systemImage: "plus") { newFixed() }
                         .buttonStyle(SoftButtonStyle(prominent: true))
                 }
+
+                HStack(spacing: 12) {
+                    HStack {
+                        Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
+                        TextField("搜索固定事项名称", text: $fixedQuery)
+                            .textFieldStyle(.plain)
+                            .accessibilityIdentifier("fixedEventSearch")
+                    }
+                    .padding(10).plannerSurface(radius: 10, shadow: false)
+                    Picker("星期", selection: $fixedWeekday) {
+                        Text("全部星期").tag(0)
+                        ForEach([2, 3, 4, 5, 6, 7, 1], id: \.self) { day in
+                            Text(weekdayNames[day] ?? "").tag(day)
+                        }
+                    }.frame(width: 150)
+                    if filtering {
+                        Button("清除筛选") { fixedQuery = ""; fixedWeekday = 0 }
+                    }
+                }
+                Text("星期按原定规则筛选；单次事项按发生日期，包含临时跳过的日期。")
+                    .font(.caption).foregroundStyle(.secondary)
 
                 FixedEventRecognitionCard { event in
                     sheet = .fixed(event)
@@ -763,12 +792,22 @@ struct MainView: View {
                     )
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 80)
+                } else if events.isEmpty {
+                    ContentUnavailableView("没有匹配的固定事项", systemImage: "magnifyingglass",
+                                           description: Text("试试其他名称或星期，或清除筛选查看全部事项。"))
+                        .frame(maxWidth: .infinity).padding(.vertical, 40)
                 }
             }
             .padding(PlannerTheme.pagePadding)
         }
         .scrollIndicators(.hidden)
         .disabled(store.orderSaveBusy)
+        .onChange(of: fixedQuery) { _, _ in
+            if filtering { showingCompletedFixedEvents = true }
+        }
+        .onChange(of: fixedWeekday) { _, _ in
+            if filtering { showingCompletedFixedEvents = true }
+        }
     }
 
     private var timelineItems: [TimelineItem] {
@@ -1138,7 +1177,7 @@ private struct TimelineRow: View {
                                 .font(.system(size: 18, weight: .semibold))
                                 .fixedSize(horizontal: false, vertical: true)
                         }
-                        Text([hours(task.durationMinutes), task.isFloating ? "按当前顺序预估 · 顺序可调" : (task.end < Date() ? "待确认" : "可调度学习")].joined(separator: " · "))
+                        Text([studyDuration(task.durationMinutes), task.isFloating ? "按当前顺序预估 · 顺序可调" : (task.end < Date() ? "待确认" : "可调度学习")].joined(separator: " · "))
                             .font(.caption)
                             .foregroundStyle(.secondary)
                             .help(
@@ -1160,9 +1199,6 @@ private struct TimelineRow: View {
                 Spacer(minLength: 8)
 
                 if let task = item.task {
-                    Text(hours(task.durationMinutes))
-                        .font(.system(size: 14, weight: .semibold, design: .rounded))
-                        .foregroundStyle(.secondary)
                     Button { confirm(task) } label: {
                         Image(systemName: "checkmark")
                             .font(.system(size: 13, weight: .bold))
@@ -1318,12 +1354,14 @@ private struct WeeklyStudyChart: View {
         let seriesColors = seriesNames.map { name in
             courseColor(courses.first { $0.name == name }?.color ?? "blue")
         }
-        let names = Set(seriesNames)
-        let legendCourses = Array(courses.filter { names.contains($0.name) }.prefix(4))
-        let legendOverflow = max(0, seriesNames.count - legendCourses.count)
+        let legendCourses = seriesNames.compactMap { name in courses.first { $0.name == name } }
         let totalMinutes = segments.reduce(0) { $0 + $1.minutes }
         VStack(alignment: .leading, spacing: 16) {
-            PlannerSectionTitle(title: "本周学习", detail: "总计 \(hours(totalMinutes))")
+            PlannerSectionTitle(title: "周计划时长", detail: "合计 \(hours(totalMinutes))")
+            Text("\(weekStart.formatted(.dateTime.month().day()))–\(calendar.date(byAdding: .day, value: 6, to: weekStart)!.formatted(.dateTime.month().day())) · 含已确认任务的原计划")
+                .font(.caption).foregroundStyle(.secondary)
+            Text("这里统计计划时长；实际学习按学习日期计入“实际已学”。")
+                .font(.caption2).foregroundStyle(.secondary)
 
             if segments.isEmpty {
                 VStack(spacing: 10) {
@@ -1343,6 +1381,8 @@ private struct WeeklyStudyChart: View {
                     )
                     .foregroundStyle(by: .value("课程", segment.courseName))
                     .cornerRadius(4)
+                    .accessibilityLabel("\(segment.dayLabel)，\(segment.courseName)")
+                    .accessibilityValue("计划 \(studyDuration(segment.minutes))")
                 }
                 .chartForegroundStyleScale(domain: seriesNames, range: seriesColors)
                 .chartLegend(.hidden)
@@ -1366,7 +1406,7 @@ private struct WeeklyStudyChart: View {
                 .frame(height: 190)
                 .animation(.easeOut(duration: 0.7), value: appeared)
 
-                FlowLegend(courses: legendCourses, overflow: legendOverflow)
+                FlowLegend(courses: legendCourses)
             }
         }
         .padding(18)
@@ -1381,20 +1421,16 @@ private struct WeeklyStudyChart: View {
 
 private struct FlowLegend: View {
     var courses: [Course]
-    var overflow: Int = 0
 
     var body: some View {
-        HStack(spacing: 12) {
+        VStack(alignment: .leading, spacing: 8) {
             ForEach(courses) { course in
-                HStack(spacing: 5) {
-                    Circle().fill(courseColor(course.color)).frame(width: 7, height: 7)
-                    Text(course.name).lineLimit(1)
+                HStack(alignment: .top, spacing: 7) {
+                    Circle().fill(courseColor(course.color)).frame(width: 7, height: 7).padding(.top, 4)
+                    Text(course.name).fixedSize(horizontal: false, vertical: true)
                 }
                 .font(.caption2)
                 .foregroundStyle(.secondary)
-            }
-            if overflow > 0 {
-                Text("另有 \(overflow) 门").font(.caption2).foregroundStyle(.tertiary)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -1420,15 +1456,19 @@ private struct CourseProgressPanel: View {
                 ForEach(courses.prefix(5)) { course in
                     Button { edit(course) } label: {
                         VStack(alignment: .leading, spacing: 8) {
-                            HStack {
+                            HStack(alignment: .firstTextBaseline) {
                                 Text(course.name)
                                     .font(.system(size: 13, weight: .semibold))
                                     .foregroundStyle(.primary)
+                                    .fixedSize(horizontal: false, vertical: true)
                                 Spacer()
-                                Text("\(hours(completedMinutes(course))) / \(hours(course.totalMinutes))")
-                                    .font(.caption)
+                                Text("\(Int(progress(course) * 100))%")
+                                    .font(.caption.monospacedDigit())
                                     .foregroundStyle(.secondary)
+                                    .fixedSize()
                             }
+                            Text("已学 \(hours(completedMinutes(course))) / 共 \(hours(course.totalMinutes))")
+                                .font(.caption).foregroundStyle(.secondary)
 
                             GeometryReader { proxy in
                                 ZStack(alignment: .leading) {
@@ -1440,14 +1480,8 @@ private struct CourseProgressPanel: View {
                             }
                             .frame(height: 7)
 
-                            HStack(alignment: .firstTextBaseline, spacing: 8) {
-                                Text(dailyRecommendation(course))
-                                    .foregroundStyle(.secondary)
-                                Spacer(minLength: 0)
-                                Text("\(Int(progress(course) * 100))%")
-                                    .foregroundStyle(.tertiary)
-                            }
-                            .font(.caption2)
+                            Text(dailyRecommendation(course))
+                                .foregroundStyle(.secondary).font(.caption2)
                         }
                         .contentShape(Rectangle())
                     }

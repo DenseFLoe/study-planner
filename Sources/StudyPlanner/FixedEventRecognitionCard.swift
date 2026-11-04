@@ -12,6 +12,7 @@ struct FixedEventRecognitionCard: View {
     @State private var recognized: FixedEventRecognitionPayload?
     @State private var isRecognizing = false
     @State private var recognitionID = UUID()
+    @State private var isExpanded = false
 
     private static let example = "明天下午 3 点到 5 点开会"
     private static let limit = 20
@@ -28,29 +29,34 @@ struct FixedEventRecognitionCard: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            VStack(alignment: .leading, spacing: 3) {
-                Label("粘贴文字，识别日程", systemImage: "text.viewfinder")
-                    .font(.system(size: 15, weight: .semibold, design: .rounded))
+        DisclosureGroup(isExpanded: $isExpanded) {
+            VStack(alignment: .leading, spacing: 12) {
                 Text("在本机识别，不上传文字；相对日期按今天（\(todayText)）换算。")
                     .font(.caption)
                     .foregroundStyle(.secondary)
-            }
+                editor
 
-            editor
+                HStack(spacing: 10) {
+                    Text("支持一次粘贴多条；识别结果需核对后再添加。")
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                    Spacer(minLength: 8)
+                    recognizeButton
+                }
 
-            HStack(spacing: 10) {
-                Text("支持一次粘贴多条；识别结果需核对后再添加。")
-                    .font(.caption2)
-                    .foregroundStyle(.tertiary)
-                Spacer(minLength: 8)
-                recognizeButton
-            }
-
-            if let recognized {
-                results(recognized)
+                if let recognized {
+                    results(recognized)
+                }
+            }.padding(.top, 12)
+        } label: {
+            VStack(alignment: .leading, spacing: 4) {
+                Label("粘贴文字，识别日程", systemImage: "text.viewfinder")
+                    .font(.system(size: 15, weight: .semibold, design: .rounded))
+                Text(isRecognizing ? "正在识别…" : (text.isEmpty ? "展开后粘贴文字，在本机识别并核对" : "已保留输入，展开继续核对"))
+                    .font(.caption).foregroundStyle(.secondary)
             }
         }
+        .accessibilityIdentifier("fixedEventImportDisclosure")
         .padding(16)
         .frame(maxWidth: .infinity, alignment: .leading)
         .plannerSurface(radius: 18, material: .thinMaterial, shadow: false)

@@ -3,6 +3,45 @@ import StudyCore
 @testable import StudyPlanner
 
 final class ScheduleSearchTests: XCTestCase {
+    func testScopesSeparatePendingPlansFromHistoryWithStableOrdering() {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(identifier: "Asia/Shanghai")!
+        let today = calendar.date(from: .init(year: 2026, month: 11, day: 4))!
+        let course = Course(name: "数学", totalMinutes: 600, startDate: today, deadline: today)
+        let oldPending = ScheduledTask(courseID: course.id, start: today.addingTimeInterval(-86400), durationMinutes: 60)
+        let endedAtMidnight = ScheduledTask(courseID: course.id, start: today.addingTimeInterval(-3600), durationMinutes: 60)
+        let overnight = ScheduledTask(courseID: course.id, start: today.addingTimeInterval(-1800), durationMinutes: 60)
+        let earlierToday = ScheduledTask(courseID: course.id, start: today.addingTimeInterval(3600), durationMinutes: 60)
+        let future = ScheduledTask(courseID: course.id, start: today.addingTimeInterval(86400), durationMinutes: 60)
+        var confirmedFuture = ScheduledTask(courseID: course.id, start: today.addingTimeInterval(2 * 86400), durationMinutes: 60)
+        confirmedFuture.confirmedAt = today
+        confirmedFuture.status = .completed
+        let tasks = [future, oldPending, confirmedFuture, earlierToday, overnight, endedAtMidnight]
+        func search(_ scope: ScheduleSearchScope) -> [UUID] {
+            ScheduleSearch.matches(query: "数学", tasks: tasks, courses: [course], scope: scope,
+                                   now: today.addingTimeInterval(12 * 3600), calendar: calendar).map(\.id)
+        }
+        XCTAssertEqual(search(.upcoming), [overnight.id, earlierToday.id, future.id])
+        XCTAssertEqual(search(.history), [confirmedFuture.id, endedAtMidnight.id, oldPending.id])
+        XCTAssertEqual(search(.all), [oldPending.id, endedAtMidnight.id, overnight.id, earlierToday.id, future.id, confirmedFuture.id])
+        XCTAssertEqual(Set(search(.upcoming) + search(.history)), Set(tasks.map(\.id)))
+    }
+
+    func testFloatingWindowCrossingTodayRemainsUpcomingAndArchiveStaysHidden() {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(secondsFromGMT: 0)!
+        let today = calendar.date(from: .init(year: 2026, month: 11, day: 4))!
+        var course = Course(name: "数学", totalMinutes: 60, startDate: today, deadline: today)
+        var task = ScheduledTask(courseID: course.id, start: today.addingTimeInterval(-7200), durationMinutes: 30)
+        task.floatingWindowStart = task.start
+        task.floatingWindowEnd = today.addingTimeInterval(3600)
+        XCTAssertEqual(ScheduleSearch.matches(query: "数学", tasks: [task], courses: [course], scope: .upcoming,
+                                            now: today, calendar: calendar).map(\.id), [task.id])
+        course.isArchived = true
+        XCTAssertTrue(ScheduleSearch.matches(query: "数学", tasks: [task], courses: [course], scope: .upcoming,
+                                            now: today, calendar: calendar).isEmpty)
+    }
+
     func testSearchFindsLessonAcrossDatesAndCoursesInDateOrder() {
         let day = Date(timeIntervalSince1970: 1_791_000_000)
         let politics = Course(name: "政治强化", totalMinutes: 120, startDate: day, deadline: day)

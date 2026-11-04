@@ -1,18 +1,37 @@
 import SwiftUI
 import StudyCore
 
+enum ScheduleSearchScope: String, CaseIterable, Identifiable {
+    case upcoming = "接下来", history = "历史", all = "全部"
+    var id: Self { self }
+    var explanation: String {
+        switch self {
+        case .upcoming: "今天及以后的未确认安排 · 最近的在前"
+        case .history: "已确认记录与往日安排 · 最近的在前"
+        case .all: "全部已排日程 · 按日期从早到晚"
+        }
+    }
+}
+
 enum ScheduleSearch {
-    static func matches(query: String, tasks: [ScheduledTask], courses: [Course]) -> [ScheduledTask] {
+    static func matches(query: String, tasks: [ScheduledTask], courses: [Course],
+                        scope: ScheduleSearchScope = .all, now: Date = Date(),
+                        calendar: Calendar = .current) -> [ScheduledTask] {
         let terms = query.split(whereSeparator: \.isWhitespace).map(String.init)
         guard !terms.isEmpty else { return [] }
         let coursesByID = Dictionary(courses.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        let today = calendar.startOfDay(for: now)
         return tasks.filter { task in
             let course = coursesByID[task.courseID]
             guard course?.isArchived == false || !task.isUnconfirmed else { return false }
+            // Include unfinished work from today and windows crossing midnight.
+            let upcoming = task.isUnconfirmed && (task.start >= today || task.planningEnd > today)
+            if scope == .upcoming && !upcoming { return false }
+            if scope == .history && upcoming { return false }
             let text = [course?.name, task.lessonName].compactMap { $0 }.joined(separator: " ")
             return terms.allSatisfy { text.localizedStandardContains($0) }
         }.sorted {
-            if $0.start != $1.start { return $0.start < $1.start }
+            if $0.start != $1.start { return scope == .history ? $0.start > $1.start : $0.start < $1.start }
             return $0.id.uuidString < $1.id.uuidString
         }
     }
@@ -31,11 +50,12 @@ struct ScheduleSearchView: View {
     let courses: [Course]
     let selectDate: (Date) -> Void
     @State private var query = ""
+    @State private var scope = ScheduleSearchScope.upcoming
     @FocusState private var searchFocused: Bool
     @Environment(\.dismiss) private var dismiss
 
     private var results: [ScheduledTask] {
-        ScheduleSearch.matches(query: query, tasks: tasks, courses: courses)
+        ScheduleSearch.matches(query: query, tasks: tasks, courses: courses, scope: scope)
     }
 
     var body: some View {
@@ -60,15 +80,23 @@ struct ScheduleSearchView: View {
             }
             .padding(12)
             .background(.quaternary, in: RoundedRectangle(cornerRadius: 10))
+            Picker("搜索范围", selection: $scope) {
+                ForEach(ScheduleSearchScope.allCases) { value in Text(value.rawValue).tag(value) }
+            }
+            .pickerStyle(.segmented)
+            .accessibilityIdentifier("scheduleSearchScope")
+            Text(scope.explanation).font(.caption).foregroundStyle(.secondary)
             let matches = results
             if query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 ContentUnavailableView("查找哪天学这节课", systemImage: "calendar.badge.magnifyingglass",
-                                       description: Text("搜索全部已排日程，包括历史记录和未来安排。点击结果即可跳转到当天。"))
+                                       description: Text("输入课程或课时名称，点击结果跳转到当天。历史记录可切换到“历史”或“全部”查看。"))
             } else if matches.isEmpty {
                 ContentUnavailableView("没有找到相关日程", systemImage: "magnifyingglass",
-                                       description: Text("试试更短的关键词；尚未排入日程的课时不会显示日期。"))
+                                       description: Text(scope == .all
+                                           ? "试试更短的关键词；尚未排入日程的课时不会显示日期。"
+                                           : "试试更短的关键词，或切换到“全部”查找其他日期。"))
             } else {
-                Text("找到 \(matches.count) 项安排 · 按日期排序")
+                Text("找到 \(matches.count) 项安排")
                     .font(.caption).foregroundStyle(.secondary)
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 10) {
@@ -80,7 +108,7 @@ struct ScheduleSearchView: View {
             }
         }
         .padding(24)
-        .frame(width: 660, height: 570)
+        .frame(width: 660, height: 570, alignment: .top)
         .onAppear { searchFocused = true }
     }
 

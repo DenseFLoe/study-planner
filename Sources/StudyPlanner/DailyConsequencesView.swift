@@ -37,8 +37,10 @@ struct DailyConsequencesView: View {
                             .id("\(day.id)-\(fraction)")
                     }
                     if controller.calculating { ProgressView("正在核算各档后果…").controlSize(.small) }
-                    Text("推演假设之后每天也只完成当天预排量的同一比例，最多查看未来90天；压力按预排课表估计，未找到排法不当作无解。")
-                        .font(.caption2).foregroundStyle(.secondary)
+                    DisclosureGroup("预报的计算假设") {
+                        Text("推演假设之后每天也只完成当天预排量的同一比例，最多查看未来90天；压力按预排课表估计，未找到排法不当作无解。")
+                            .foregroundStyle(.secondary)
+                    }.font(.caption2)
                     Text("达标表示今天已超过这一档少学量；整体压力仍以上方实时预警为准。")
                         .font(.caption2).foregroundStyle(.secondary)
                 } else {
@@ -133,7 +135,11 @@ private struct ConsequenceScenarioRow: View {
                         .font(.caption2)
                 } else {
                     Text("若今天停在这一档，明日起：").font(.caption2).foregroundStyle(.secondary)
-                    forecastDetails(forecast, outcome: outcome)
+                    ConsequenceOutcomeText(outcome: outcome)
+                    DisclosureGroup("查看持续按此进度的压力与极限") {
+                        Text(pressureText(forecast)).foregroundStyle(.secondary)
+                        Text(limitText(forecast)).foregroundStyle(.secondary)
+                    }.font(.caption2)
                 }
             } else if let unavailable = forecast?.unavailableTodayMinutes, !passed {
                 Text("按当前今日课表，这档还差 \(hours(unavailable)) 没有可执行安排，暂不把它当成能达成的假设。")
