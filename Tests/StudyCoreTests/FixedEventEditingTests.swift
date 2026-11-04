@@ -2,6 +2,30 @@ import XCTest
 @testable import StudyCore
 
 final class FixedEventEditingTests: XCTestCase {
+    func testDeletionRequiresTheReviewedRuleAndPreservesUnrelatedRules() throws {
+        let reviewed = event
+        let edits: [(inout FixedEvent) -> Void] = [
+            { $0.title = "同步新名称" }, { $0.notes = "新备注" }, { $0.color = "green" },
+            { $0.startMinute += 5 }, { $0.endMinute += 5 }, { $0.floatingDurationMinutes = 30 },
+            { $0.startDate.addTimeInterval(86400) }, { $0.endDate.addTimeInterval(86400) },
+            { $0.weekdays = [2] }, { $0.excludedDates = [self.day] }
+        ]
+        for edit in edits {
+            var changed = reviewed; edit(&changed)
+            var state = PlannerState(); state.fixedEvents = [changed]
+            let before = state
+            XCTAssertThrowsError(try state.removeFixedEvent(reviewed: reviewed)) { error in
+                guard case FixedEventEditError.removalChanged = error else { return XCTFail("Wrong conflict: \(error)") }
+            }
+            XCTAssertEqual(state, before)
+        }
+        var state = PlannerState(), other = reviewed; other.id = UUID()
+        state.fixedEvents = [reviewed, other]; state.settings.minimumScheduleUnit = 15
+        try state.removeFixedEvent(reviewed: reviewed)
+        XCTAssertEqual(state.fixedEvents, [other]); XCTAssertEqual(state.settings.minimumScheduleUnit, 15)
+        XCTAssertThrowsError(try state.removeFixedEvent(reviewed: reviewed))
+        XCTAssertEqual(state.fixedEvents, [other])
+    }
     private let calendar = Calendar(identifier: .gregorian)
     private var day: Date { calendar.date(from: DateComponents(year: 2026, month: 11, day: 5))! }
     private var event: FixedEvent { FixedEvent(title: "Original", startMinute: 540, endMinute: 600, startDate: day, endDate: day) }

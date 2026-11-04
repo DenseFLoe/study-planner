@@ -4,6 +4,25 @@ import SwiftData
 @testable import StudyPersistence
 
 final class LocalRepositoryTests: XCTestCase {
+    @MainActor func testFixedEventDeletionRejectsAChangeThatReachedDiskAfterReview() throws {
+        let day = Calendar.current.startOfDay(for: Date()).addingTimeInterval(86400)
+        var original = PlannerState()
+        let event = FixedEvent(title: "核对时的规则", startMinute: 540, endMinute: 600, startDate: day, endDate: day)
+        original.fixedEvents = [event]
+        let repository = try LocalRepository(inMemory: true)
+        try repository.save(original)
+        var edited = original; try edited.removeFixedEvent(reviewed: event); edited.settings.minimumScheduleUnit = 15
+        var remote = original; remote.fixedEvents[0].notes = "稍后同步的新备注"
+        try repository.save(remote)
+        XCTAssertThrowsError(try repository.saveChanges(edited, from: original)) { error in
+            guard case FixedEventEditError.removalChanged = error else { return XCTFail("Wrong conflict: \(error)") }
+        }
+        XCTAssertEqual(try repository.load(), remote)
+        var fresh = remote; try fresh.removeFixedEvent(reviewed: remote.fixedEvents[0])
+        let saved = try repository.saveChanges(fresh, from: remote)
+        XCTAssertTrue(saved.fixedEvents.isEmpty)
+        XCTAssertEqual(saved.settings, remote.settings)
+    }
     @MainActor func testDeletedFixedEventStaysAbsentAfterDiskReopenAndStaleSync() throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)

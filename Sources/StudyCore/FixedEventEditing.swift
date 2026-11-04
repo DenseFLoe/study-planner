@@ -1,14 +1,23 @@
 import Foundation
 
 public enum FixedEventEditError: LocalizedError {
-    case removed, conflictingChanges, reviewChanged
+    case removed, conflictingChanges, reviewChanged, removalChanged
 
     public var errorDescription: String? {
         switch self {
         case .removed: "这条固定事项已被删除，旧编辑窗口不能重新创建它。草稿仍保留，请关闭窗口后查看最新事项。"
         case .conflictingChanges: "这条固定事项在编辑期间已有其他修改，与当前草稿冲突。草稿仍保留，最新数据未被覆盖，请重新打开事项后编辑。"
         case .reviewChanged: "冲突安排已发生变化，原来的跳过选择未保存。请返回修改后重新检查冲突。"
+        case .removalChanged: "这条固定事项在确认删除前已更新，未执行删除。请重新查看最新规则后再确认。"
         }
+    }
+}
+
+public extension PlannerState {
+    mutating func removeFixedEvent(reviewed: FixedEvent) throws {
+        guard let current = fixedEvents.first(where: { $0.id == reviewed.id }) else { throw FixedEventEditError.removed }
+        guard current == reviewed else { throw FixedEventEditError.removalChanged }
+        removeFixedEvent(id: reviewed.id)
     }
 }
 

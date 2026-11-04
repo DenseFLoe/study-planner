@@ -760,7 +760,7 @@ struct MainView: View {
                     FixedEventListRow(
                         event: event,
                         edit: { sheet = .fixed(event) },
-                        delete: { Task { await store.deleteEvent(event) } }
+                        delete: { reviewed in Task { await store.deleteEvent(reviewed) } }
                     )
                 }
 
@@ -771,7 +771,7 @@ struct MainView: View {
                                 FixedEventListRow(
                                     event: event,
                                     edit: nil,
-                                    delete: { Task { await store.deleteEvent(event) } }
+                                    delete: { reviewed in Task { await store.deleteEvent(reviewed) } }
                                 )
                             }
                         }.padding(.top, 12)
@@ -1583,8 +1583,9 @@ private struct CourseListRow: View {
 private struct FixedEventListRow: View {
     var event: FixedEvent
     var edit: (() -> Void)?
-    var delete: () -> Void
+    var delete: (FixedEvent) -> Void
     @State private var deletePrompt = false
+    @State private var deletionReview: FixedEvent?
 
     var body: some View {
         HStack(spacing: 17) {
@@ -1620,14 +1621,14 @@ private struct FixedEventListRow: View {
             } else {
                 Text("已完成").font(.caption).foregroundStyle(.secondary)
             }
-            Button("删除", systemImage: "trash", role: .destructive) { deletePrompt = true }
+            Button("删除", systemImage: "trash", role: .destructive) { deletionReview = event; deletePrompt = true }
                 .buttonStyle(SoftButtonStyle())
                 .help("删除这条事项的全部过去和未来课表")
         }
         .padding(18)
         .plannerSurface(radius: 18, material: .thinMaterial, shadow: false)
-        .confirmationDialog("删除「\(event.title)」？", isPresented: $deletePrompt, titleVisibility: .visible) {
-            Button("删除事项", role: .destructive, action: delete)
+        .confirmationDialog("删除「\(deletionReview?.title ?? event.title)」？", isPresented: $deletePrompt, titleVisibility: .visible) {
+            Button("删除事项", role: .destructive) { if let deletionReview { delete(deletionReview) } }
         } message: {
             Text("将移除这条事项的全部过去和未来课表，并重新排程。")
         }

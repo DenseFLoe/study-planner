@@ -4,6 +4,20 @@ import StudyPersistence
 @testable import StudyPlanner
 
 final class BackgroundEditingTests: XCTestCase {
+    @MainActor func testStaleFixedEventDeletionDoesNotSaveOrRotateRecovery() async throws {
+        let day = Calendar.current.startOfDay(for: Date()).addingTimeInterval(86400)
+        let reviewed = FixedEvent(title: "待删除规则", startMinute: 540, endMinute: 600, startDate: day, endDate: day)
+        var current = PlannerState(), changed = reviewed; changed.notes = "另一端的新备注"; current.fixedEvents = [changed]
+        let repository = Repository(), backups = PlannerBackupRepository(inMemory: true, limit: 1)
+        let recovery = PlannerBackup(state: current, reason: "保留的恢复点")
+        try await backups.save(recovery)
+        let store = store(current, repository, backups: backups)
+        let deleted = await store.deleteEvent(reviewed)
+        XCTAssertFalse(deleted); XCTAssertEqual(store.state, current); XCTAssertNil(repository.saved)
+        XCTAssertTrue(store.errorMessage?.contains("未执行删除") == true)
+        let entries = try await backups.entries()
+        XCTAssertEqual(entries.map(\.id), [recovery.id])
+    }
     private final class Repository: PlannerRepository {
         var saved: PlannerState?
         var fails = false

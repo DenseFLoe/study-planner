@@ -83,9 +83,13 @@ struct FixedEventEditor: View {
                 }.buttonStyle(.borderedProminent).keyboardShortcut(.defaultAction).disabled(validation != nil || store.orderSaveBusy)
             }.padding(20)
         }.frame(width: 600, height: 740)
-        .confirmationDialog("删除「\(event.title)」？", isPresented: $deletePrompt, titleVisibility: .visible) {
+        .confirmationDialog("删除「\(baseline?.title ?? event.title)」？", isPresented: $deletePrompt, titleVisibility: .visible) {
             Button("删除事项", role: .destructive) {
-                Task { if await store.deleteEvent(event) { dismiss() } }
+                guard let baseline else { return }
+                Task {
+                    if await store.deleteEvent(baseline) { dismiss() }
+                    else { message = store.errorMessage ?? "删除未保存" }
+                }
             }
         } message: {
             Text("将移除这条事项的全部过去和未来课表，并重新排程。")

@@ -308,7 +308,7 @@ final class PlannerStore {
     }
     @discardableResult
     func deleteEvent(_ event: FixedEvent) async -> Bool {
-        await change { $0.removeFixedEvent(id: event.id) }
+        await change { try $0.removeFixedEvent(reviewed: event) }
     }
     func setEventSkipped(_ event: FixedEvent, on day: Date, skipped: Bool) async {
         await change { try $0.setFixedEventSkipped(id: event.id, on: day, skipped: skipped, now: Date()) }

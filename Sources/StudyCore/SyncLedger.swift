@@ -67,6 +67,12 @@ public struct SyncLedger: Codable, Sendable {
         // whole edit, including tasks computed from that edit.
         let resolved = try changes.map { change -> SyncRecord in
             var row = change
+            if row.deleted, row.kind == "fixedEvents", let before = original[row.key],
+               let current = records[row.key], !current.deleted {
+                let decoder = JSONDecoder()
+                guard try decoder.decode(FixedEvent.self, from: before.payload) == decoder.decode(FixedEvent.self, from: current.payload)
+                else { throw FixedEventEditError.removalChanged }
+            }
             if !row.deleted, let before = original[row.key], let current = records[row.key], !current.deleted {
                 // Editors submit whole models. Keep fields the editor did not
                 // change, such as a remote rename during a local weight edit.
