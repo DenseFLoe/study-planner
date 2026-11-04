@@ -113,6 +113,7 @@ final class BackgroundEditingTests: XCTestCase {
         var saved: PlannerState?
         var fails = false
         var rejection: Error?
+        var restoreIncoming: PlannerState?
         var holds = false
         @MainActor var resume: CheckedContinuation<Void, Never>?
         @MainActor var observer: CheckedContinuation<Void, Never>?
@@ -125,6 +126,14 @@ final class BackgroundEditingTests: XCTestCase {
         @MainActor func saveForInteraction(_ state: PlannerState) async throws {
             if holds { await withCheckedContinuation { resume = $0; observer?.resume(); observer = nil } }
             try save(state)
+        }
+        @MainActor func restoreBackupForInteraction(_ restore: PlannerBackupRestore,
+                                                    from baseline: PlannerState) async throws -> PlannerState {
+            var latest = restoreIncoming ?? baseline
+            if restoreIncoming != nil { saved = latest }
+            try restore.apply(to: &latest)
+            try await saveForInteraction(latest)
+            return latest
         }
         @MainActor func waitForSave() async {
             if resume == nil { await withCheckedContinuation { observer = $0 } }
@@ -224,6 +233,27 @@ final class BackgroundEditingTests: XCTestCase {
         let rejected = await store.restoreBackup(invalid, from: replacement)
         XCTAssertFalse(rejected)
         XCTAssertEqual(store.state, replacement)
+    }
+
+    @MainActor func testRestoreRefreshesAConfirmationReceivedAfterTheInitialReviewCheck() async throws {
+        let original = fixture(), repo = Repository(), store = store(original, repo)
+        var incoming = original
+        let task = try XCTUnwrap(incoming.tasks.first)
+        try incoming.confirm(taskID: task.id, actualMinutes: 20, now: Date())
+        repo.restoreIncoming = incoming
+        let backup = PlannerBackup(state: original, reason: "Before confirmation")
+        let rejected = await store.restoreBackup(backup, from: original)
+        XCTAssertFalse(rejected)
+        XCTAssertEqual(store.state, incoming); XCTAssertEqual(repo.saved, incoming)
+        XCTAssertTrue(store.errorMessage?.contains("核对备份期间") == true)
+        XCTAssertFalse(store.orderSaveBusy)
+
+        repo.restoreIncoming = nil
+        let retried = await store.restoreBackup(backup, from: incoming)
+        XCTAssertTrue(retried); XCTAssertEqual(store.state, original)
+        let entry = try XCTUnwrap(store.backupEntries.first)
+        let recovery = try await store.backups.load(entry.id)
+        XCTAssertEqual(recovery.state, incoming)
     }
 
     @MainActor func testBackupFailurePreventsDestructiveSave() async throws {

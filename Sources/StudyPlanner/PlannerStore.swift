@@ -116,6 +116,7 @@ final class PlannerStore {
     private func commit(_ next: PlannerState, replan: Bool, now: Date = Date(),
                         backupReason: String? = "修改前自动备份", deletedCourseID: UUID? = nil,
                         clearError: Bool = true,
+                        backupRestore: PlannerBackupRestore? = nil,
                         courseDeletionDraft: CourseDeletionDraft? = nil,
                         fixedEventEdit: FixedEventEdit? = nil,
                         fixedOccurrenceEdit: FixedEventOccurrenceEdit? = nil,
@@ -145,7 +146,9 @@ final class PlannerStore {
                 }
                 let saved: PlannerState
                 attemptedStorage = true
-                if let courseDeletionDraft {
+                if let backupRestore {
+                    saved = try await repository.restoreBackupForInteraction(backupRestore, from: previous)
+                } else if let courseDeletionDraft {
                     saved = try await repository.deleteCourseForInteraction(courseDeletionDraft, from: previous, now: now)
                 } else if let fixedEventEdit {
                     saved = try await repository.saveFixedEventForInteraction(fixedEventEdit,
@@ -175,7 +178,7 @@ final class PlannerStore {
                 let needsLatestState = (lessonOrderDraft != nil && error is LessonOrderEditError)
                     || (attemptedStorage && (error is ConfirmationEditError
                         || error is CourseEditError || error is FixedEventEditError
-                        || error is CourseDeletionError || error is SettingsEditError))
+                        || error is CourseDeletionError || error is SettingsEditError || error is PlannerBackupRestoreError))
                 if needsLatestState,
                    let latest = try? repository.load() {
                     let (assessment, load) = await Task.detached(priority: .userInitiated) {
@@ -394,7 +397,8 @@ final class PlannerStore {
             errorMessage = "日程在核对备份期间已有更新，未执行恢复。请重新选择备份并核对最新记录。"
             return false
         }
-        return await commit(backup.state, replan: false, backupReason: "恢复备份前") { state in
+        let restore = PlannerBackupRestore(backup: backup, reviewedState: reviewedState)
+        return await commit(backup.state, replan: false, backupReason: "恢复备份前", backupRestore: restore) { state in
             _ = try backup.validated()
             return ScheduleEngine().assessSavedPlan(state: state, now: Date())
         }
