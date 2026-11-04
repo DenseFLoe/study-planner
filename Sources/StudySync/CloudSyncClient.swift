@@ -144,6 +144,7 @@ public enum CloudSyncClient {
         }
         let pending = try CloudOutbox.files(in: outbox)
         for file in pending {
+            try CloudOutbox.sanitizeSourceURLsBeforeUpload(file)
             let reply = try await transport.upload(file); try reply.validate()
             guard reply.serverID == remote.serverID, reply.revision >= remote.revision else { throw SyncFailure.invalidData }
             remote = reply

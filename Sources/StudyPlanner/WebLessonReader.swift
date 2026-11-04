@@ -158,12 +158,13 @@ final class WebLessonReader: NSObject, WKScriptMessageHandler, WKNavigationDeleg
                 await readGeneric(generation: generation, page: page, forceCatalog: true, failOnReplayFailure: true)
                 if let readFailure { throw readFailure }
                 guard let result, result.issues.isEmpty,
-                      let found = result.snapshots.first(where: { $0.packageID == packageID }) else {
+                      let found = result.snapshots.first(where: { $0.packageID == packageID && WebCourseIdentity.origin($0.sourceURL) == WebCourseIdentity.origin(url.absoluteString) }) else {
                     throw WebsiteUpdateError.message("未取得完整的学丞课程，请在更新窗口检查登录和课程目录后重试。")
                 }
                 snapshot = found
             }
-            guard snapshot.packageID == packageID, snapshot.importProblem == nil else {
+            guard snapshot.packageID == packageID, snapshot.importProblem == nil,
+                  WebCourseIdentity.origin(snapshot.sourceURL) == WebCourseIdentity.origin(url.absoluteString) else {
                 throw WebsiteUpdateError.message("网站返回的课程不匹配或课节不完整，保留原课程，请检查后重试。")
             }
             await browser.stop()
@@ -395,7 +396,7 @@ final class WebLessonReader: NSObject, WKScriptMessageHandler, WKNavigationDeleg
                 result = WebCourseAccount(snapshots: merged, unavailable: [], issues: [], packageCount: merged.count)
                 lastRefresh = Date()
                 if let catalog, !catalog.rows.isEmpty {
-                    let course = merged.first { $0.packageID == "generic:" + catalog.courseID }
+                    let course = merged.first { $0.packageID == "generic:" + catalog.courseID && WebCourseIdentity.origin($0.sourceURL) == WebCourseIdentity.origin(address) }
                     let missing = course?.unknownDurations ?? 0
                     let pending = course?.lessons.filter { !$0.published }.count ?? 0
                     status = missing == 0
@@ -423,10 +424,10 @@ final class WebLessonReader: NSObject, WKScriptMessageHandler, WKNavigationDeleg
         var byID: [String: WebCourseSnapshot] = [:]
         var order: [String] = []
         for snapshot in existing {
-            if byID.updateValue(snapshot, forKey: snapshot.packageID) == nil { order.append(snapshot.packageID) }
+            if byID.updateValue(snapshot, forKey: snapshot.identityKey) == nil { order.append(snapshot.identityKey) }
         }
         for snapshot in fresh {
-            if var previous = byID[snapshot.packageID] {
+            if var previous = byID[snapshot.identityKey] {
                 var positions = Dictionary(uniqueKeysWithValues: previous.lessons.enumerated().map { ($0.element.id, $0.offset) })
                 var matched: Set<Int> = []
                 for lesson in snapshot.lessons {
@@ -438,7 +439,13 @@ final class WebLessonReader: NSObject, WKScriptMessageHandler, WKNavigationDeleg
                         matched.insert(position)
                         let old = previous.lessons[position]
                         var better = lesson
-                        if better.durationSeconds == nil { better.durationSeconds = old.durationSeconds }
+                        if better.durationSeconds == nil, old.durationSeconds != nil {
+                            better.durationSeconds = old.durationSeconds
+                            if better.kind == "unknown" {
+                                better.kind = old.kind; better.requiresDuration = old.requiresDuration
+                                better.published = old.published
+                            }
+                        }
                         if better.watchedPercent == nil || (better.watchedPercent == 0 && (old.watchedPercent ?? 0) > 0) {
                             better.watchedPercent = old.watchedPercent
                         }
@@ -451,6 +458,9 @@ final class WebLessonReader: NSObject, WKScriptMessageHandler, WKNavigationDeleg
                     }
                 }
                 if snapshot.name != "详情 - 学丞教育" { previous.name = snapshot.name }
+                if snapshot.packageID.hasPrefix("generic:") {
+                    previous.issues = Array(Set(previous.issues + snapshot.issues)).sorted()
+                }
                 if snapshot.sourceURL.contains("ixuecheng.cn/detail?") { previous.sourceURL = snapshot.sourceURL }
                 if snapshot.sourceURL.contains("ixuecheng.cn/detail?") {
                     previous.expectedOutlines = snapshot.expectedOutlines
@@ -458,10 +468,10 @@ final class WebLessonReader: NSObject, WKScriptMessageHandler, WKNavigationDeleg
                     previous.issues = snapshot.issues
                 }
                 previous.fetchedAt = snapshot.fetchedAt
-                byID[snapshot.packageID] = previous
+                byID[snapshot.identityKey] = previous
             } else {
-                byID[snapshot.packageID] = snapshot
-                order.append(snapshot.packageID)
+                byID[snapshot.identityKey] = snapshot
+                order.append(snapshot.identityKey)
             }
         }
         return order.compactMap { byID[$0] }
@@ -708,7 +718,7 @@ struct WebCourseImportSheet: View {
     @State private var deadline = Calendar.current.date(byAdding: .day, value: 90, to: Date())!
     @State private var message = ""
     private let timer = Timer.publish(every: 2, on: .main, in: .common).autoconnect()
-    private var chosen: [WebCourseSnapshot] { reader.result?.snapshots.filter { selected.contains($0.packageID) } ?? [] }
+    private var chosen: [WebCourseSnapshot] { reader.result?.snapshots.filter { selected.contains($0.identityKey) } ?? [] }
     var body: some View {
         let layout = WebImportLayout.size
         VStack(alignment: .leading, spacing: 14) {
@@ -752,7 +762,7 @@ struct WebCourseImportSheet: View {
         .onReceive(timer) { _ in reader.tick(autoRefresh: autoRefresh) }
         .onChange(of: reader.lastRefresh) { _, _ in
             // Re-identifying the same courses must not clear a selection the user already made.
-            let offered = Set(reader.result?.snapshots.filter { $0.importProblem == nil }.map(\.packageID) ?? [])
+            let offered = Set(reader.result?.snapshots.filter { $0.importProblem == nil }.map(\.identityKey) ?? [])
             if offered != lastOffered { lastOffered = offered; selected = offered }
         }
     }
@@ -770,7 +780,7 @@ struct WebCourseImportSheet: View {
                     .font(.caption).foregroundStyle(.secondary)
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 10) {
-                        ForEach(result.snapshots, id: \.packageID) { snapshot in
+                        ForEach(result.snapshots, id: \.identityKey) { snapshot in
                             courseCard(snapshot)
                         }
                         ForEach(Array(result.unavailable.enumerated()), id: \.offset) { _, item in
@@ -781,7 +791,7 @@ struct WebCourseImportSheet: View {
                     }
                     .padding(.vertical, 2)
                 }
-                Text("按课程包编号更新；网站观看进度会与应用内已确认记录核对。")
+                Text("按来源网站和课程包编号更新；网站观看进度会与应用内已确认记录核对。")
                     .font(.caption2).foregroundStyle(.tertiary)
             } else {
                 ContentUnavailableView("等待课程数据", systemImage: "square.stack.3d.up",
@@ -808,11 +818,15 @@ struct WebCourseImportSheet: View {
         .padding(12).frame(maxWidth: .infinity, alignment: .leading)
         .background(.quaternary.opacity(0.25), in: RoundedRectangle(cornerRadius: 12))
     }
+    private static func matchingProblem(_ snapshot: WebCourseSnapshot, courses: [Course]) -> String? {
+        do { _ = try snapshot.matchingCourseIndices(in: courses); return nil }
+        catch { return error.localizedDescription }
+    }
     private func courseCard(_ snapshot: WebCourseSnapshot) -> some View {
-        let existing = store.state.courses.first { $0.webCourse?.packageID == snapshot.packageID }
+        let existing = (try? snapshot.matchingCourseIndices(in: store.state.courses))?.first.map { store.state.courses[$0] }
         return VStack(alignment: .leading, spacing: 7) {
-            Toggle(snapshot.name, isOn: Binding(get: { selected.contains(snapshot.packageID) }, set: {
-                if $0 { selected.insert(snapshot.packageID) } else { selected.remove(snapshot.packageID) }
+            Toggle(snapshot.name, isOn: Binding(get: { selected.contains(snapshot.identityKey) }, set: {
+                if $0 { selected.insert(snapshot.identityKey) } else { selected.remove(snapshot.identityKey) }
             }))
             .font(.callout.weight(.semibold))
             .disabled(snapshot.importProblem != nil)
@@ -832,9 +846,12 @@ struct WebCourseImportSheet: View {
                 }
             }
             if let problem = snapshot.importProblem { Text(problem).font(.caption).foregroundStyle(.orange) }
+            if let problem = Self.matchingProblem(snapshot, courses: store.state.courses) {
+                Text(problem).font(.caption).foregroundStyle(.orange)
+            }
             ForEach(snapshot.issues, id: \.self) { Text($0).font(.caption).foregroundStyle(.orange) }
             DisclosureGroup("查看课节与编排预览") {
-                if let candidate = previewState(for: snapshot), let course = candidate.courses.first(where: { $0.webCourse?.packageID == snapshot.packageID }) {
+                if let candidate = previewState(for: snapshot), let course = candidate.courses.first(where: { $0.webCourse?.matchesIdentity(of: snapshot) == true }) {
                     LessonSchedulePreview(state: candidate, course: course)
                 } else {
                     ForEach(snapshot.lessons) { lesson in

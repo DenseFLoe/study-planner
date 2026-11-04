@@ -95,7 +95,7 @@ final class WebsiteCourseUpdater {
                 try await Task.sleep(for: .milliseconds(500))
             }
             guard let latest = store.course(courseID), !latest.isArchived, latest.mergedSources == nil,
-                  latest.webCourse?.packageID == previous.packageID,
+                  latest.webCourse?.matchesIdentity(of: previous) == true,
                   CourseWebsite.identify(latest.webCourse) == site,
                   sources[courseID]?.url == binding.url,
                   interactive || sources[courseID]?.enabled == true else {
@@ -111,7 +111,7 @@ final class WebsiteCourseUpdater {
             let saveTime = Date()
             let saved = await store.change(now: saveTime) { state in
                 guard let current = state.courses.first(where: { $0.id == courseID }), !current.isArchived,
-                      current.mergedSources == nil, current.webCourse?.packageID == previous.packageID,
+                      current.mergedSources == nil, current.webCourse?.matchesIdentity(of: previous) == true,
                       CourseWebsite.identify(current.webCourse) == site else {
                     throw WebsiteUpdateError.message("原课程已被修改或删除，本次更新取消。")
                 }
@@ -157,7 +157,7 @@ final class WebsiteCourseUpdater {
     }
     @discardableResult
     static func validate(_ snapshot: WebCourseSnapshot, replacing course: Course) throws -> WebCourseSnapshot {
-        guard let old = course.webCourse, snapshot.packageID == old.packageID,
+        guard let old = course.webCourse, snapshot.matchesIdentity(of: old),
               let site = CourseWebsite.identify(old), CourseWebsite.identify(snapshot) == site,
               snapshot.importProblem == nil else {
             throw WebsiteUpdateError.message("课程不匹配或抓取不完整，原课程已保留。")

@@ -29,7 +29,7 @@ public struct WebCourseLesson: Codable, Equatable, Identifiable, Sendable {
 public struct WebCourseSnapshot: Codable, Equatable, Sendable {
     public var packageID: String
     public var name: String
-    public var sourceURL: String
+    public var sourceURL: String { didSet { sourceURL = WebCourseIdentity.safeURL(sourceURL) } }
     public var fetchedAt: Date
     public var expectedOutlines: Int
     public var fetchedOutlines: Int
@@ -40,7 +40,7 @@ public struct WebCourseSnapshot: Codable, Equatable, Sendable {
     public init(packageID: String, name: String, sourceURL: String, fetchedAt: Date,
                 expectedOutlines: Int, fetchedOutlines: Int, lessons: [WebCourseLesson], issues: [String],
                 netdisk: NetdiskSnapshot? = nil) {
-        self.packageID = packageID; self.name = name; self.sourceURL = sourceURL; self.fetchedAt = fetchedAt
+        self.packageID = packageID; self.name = name; self.sourceURL = WebCourseIdentity.safeURL(sourceURL); self.fetchedAt = fetchedAt
         self.expectedOutlines = expectedOutlines; self.fetchedOutlines = fetchedOutlines
         self.lessons = lessons; self.issues = issues; self.netdisk = netdisk
     }
@@ -49,7 +49,7 @@ public struct WebCourseSnapshot: Codable, Equatable, Sendable {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         packageID = try container.decode(String.self, forKey: .packageID)
         name = try container.decode(String.self, forKey: .name)
-        sourceURL = try container.decode(String.self, forKey: .sourceURL)
+        sourceURL = WebCourseIdentity.safeURL(try container.decode(String.self, forKey: .sourceURL))
         fetchedAt = try container.decode(Date.self, forKey: .fetchedAt)
         expectedOutlines = try container.decode(Int.self, forKey: .expectedOutlines)
         fetchedOutlines = try container.decode(Int.self, forKey: .fetchedOutlines)
@@ -237,7 +237,7 @@ extension PlannerState {
     }
 
     public mutating func importWebCourses(_ snapshots: [WebCourseSnapshot], deadline: Date, now: Date) throws {
-        guard !snapshots.isEmpty, Set(snapshots.map(\.packageID)).count == snapshots.count,
+        guard !snapshots.isEmpty, Set(snapshots.map(\.identityKey)).count == snapshots.count,
               deadline >= Calendar.current.startOfDay(for: now),
               deadline <= Calendar.current.date(byAdding: .year, value: 10, to: now)! else {
             throw WebCourseImportError.invalid("请选择课程并设置未来十年内的截止日期。")
@@ -247,7 +247,7 @@ extension PlannerState {
             guard snapshot.importProblem == nil else {
                 throw WebCourseImportError.invalid(snapshot.name + "：" + snapshot.importProblem!)
             }
-            let matches = next.indices.filter { next[$0].webCourse?.packageID == snapshot.packageID }
+            let matches = try snapshot.matchingCourseIndices(in: next)
             guard matches.count <= 1 else { throw WebCourseImportError.invalid("已有多个课程绑定同一课程包，请先整理重复课程。") }
             let index = matches.first
             let course = index.map { next[$0] } ?? Course(name: snapshot.name, totalMinutes: 1, startDate: now, deadline: deadline)

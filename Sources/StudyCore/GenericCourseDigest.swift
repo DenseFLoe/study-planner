@@ -18,6 +18,8 @@ public enum GenericCourseDigest {
         var drafts: [String: CourseDraft] = [:]
         var order: [String] = []
         for response in responses {
+            guard let site = WebCourseIdentity.origin(pageURL),
+                  WebCourseIdentity.origin(response.url) == site else { continue }
             guard let data = response.body.data(using: .utf8),
                   let root = try? JSONSerialization.jsonObject(with: data, options: [.fragmentsAllowed]) else { continue }
             var nodes: [Node] = []
@@ -35,11 +37,11 @@ public enum GenericCourseDigest {
                         ?? (pageLabel.isEmpty ? nil : pageLabel)
                         ?? container(of: node).map { courseName($0, pageURL: pageURL, pageTitle: pageTitle) }
                         ?? fallbackName(pageURL: pageURL, pageTitle: pageTitle)
-                    source = node.sourceURL
+                    source = WebCourseIdentity.safeURL(pageURL)
                 } else if let container = container(of: node) {
                     key = courseKey(container, pageURL: pageURL, pageTitle: pageTitle)
                     name = courseName(container, pageURL: pageURL, pageTitle: pageTitle)
-                    source = container.sourceURL
+                    source = WebCourseIdentity.safeURL(pageURL)
                 } else {
                     continue
                 }
@@ -88,6 +90,7 @@ private struct Lesson {
     /// Already an exact number of seconds, because the site formatted it for display.
     var durationText: Double?
     var percentRaw: Double?
+    var explicitPercent: Bool
     var positionRaw: Double?
     var markedFinished: Bool
     /// Set when the lesson itself names the course it belongs to, which is the most reliable grouping.
@@ -105,27 +108,45 @@ private struct CourseDraft {
         // One response reports one unit for every lesson, so the scale is decided per course, not per value.
         let durationRaws = lessons.compactMap(\.durationRaw)
         let usesMilliseconds = (durationRaws.max() ?? 0) > 36_000
-        let progressRaws = lessons.compactMap(\.percentRaw)
+        let progressRaws = lessons.filter { !$0.explicitPercent }.compactMap(\.percentRaw)
         let usesRatio = !progressRaws.isEmpty && progressRaws.allSatisfy { $0 <= 1 }
-        var seen: Set<String> = []
+        var positions: [String: Int] = [:]
         var built: [WebCourseLesson] = []
+        var conflicts = Set<String>()
         for lesson in lessons {
             let identifier = lesson.identifier.isEmpty ? lesson.name : lesson.identifier
             let id = packageID + ":" + identifier
-            guard seen.insert(id).inserted else { continue }
             let seconds = lesson.durationText ?? lesson.durationRaw.flatMap { Self.seconds($0, milliseconds: usesMilliseconds) }
-            var percent = lesson.percentRaw.flatMap { Self.percentage($0, asRatio: usesRatio) }
+            var percent = lesson.percentRaw.flatMap { Self.percentage($0, asRatio: !lesson.explicitPercent && usesRatio) }
             if percent == nil, let position = lesson.positionRaw, let seconds, position > 0 {
                 let played = usesMilliseconds ? position / 1000 : position
                 if played <= seconds { percent = min(100, max(0, played / seconds * 100)) }
             }
-            built.append(WebCourseLesson(id: id, name: lesson.name, subject: "", stage: "", chapter: "",
-                                         kind: seconds == nil ? "unknown" : "video", published: true,
-                                         durationSeconds: seconds, watchedPercent: percent ?? 0,
-                                         markedFinished: lesson.markedFinished, requiresDuration: seconds != nil))
+            if let index = positions[id] {
+                // Merge evidence, never let an incomplete summary erase verified detail.
+                // Progress is cumulative within a capture; contradictory positive durations
+                // require a new capture instead of silently choosing one scheduling total.
+                if let seconds {
+                    if let before = built[index].durationSeconds, abs(before - seconds) > 0.001 {
+                        conflicts.insert(id)
+                    }
+                    built[index].durationSeconds = max(built[index].durationSeconds ?? 0, seconds)
+                    built[index].requiresDuration = true
+                    built[index].kind = "video"
+                }
+                built[index].watchedPercent = max(built[index].watchedPercent ?? 0, percent ?? 0)
+                built[index].markedFinished = built[index].markedFinished || lesson.markedFinished
+            } else {
+                positions[id] = built.count
+                built.append(WebCourseLesson(id: id, name: lesson.name, subject: "", stage: "", chapter: "",
+                                             kind: seconds == nil ? "unknown" : "video", published: true,
+                                             durationSeconds: seconds, watchedPercent: percent ?? 0,
+                                             markedFinished: lesson.markedFinished, requiresDuration: seconds != nil))
+            }
         }
         return WebCourseSnapshot(packageID: packageID, name: name, sourceURL: sourceURL, fetchedAt: now,
-                                 expectedOutlines: 1, fetchedOutlines: 1, lessons: built, issues: [])
+                                 expectedOutlines: 1, fetchedOutlines: 1, lessons: built,
+                                 issues: conflicts.isEmpty ? [] : ["同一课节返回了不同的有效时长，请重新打开课程后抓取并核对。"])
     }
 
     /// Durations arrive in seconds or milliseconds; the impossible reading for the whole course is corrected.
@@ -253,15 +274,25 @@ private extension GenericCourseDigest {
         var duration: Double?
         var durationText: Double?
         var percent: Double?
+        var percentPriority = -1
+        var explicitPercent = false
         var position: Double?
-        for (key, value) in object {
+        for key in object.keys.sorted() {
+            let value = object[key]!
             let field = normalized(key)
             if duration == nil, durationText == nil, isDurationKey(field) {
                 if let number = self.number(value) { duration = number }
                 else if let text = value as? String { durationText = clockSeconds(text) }
-            } else if percent == nil, isProgressKey(field) {
-                if let number = self.number(value) { percent = number }
-                else if let text = value as? String { percent = percentText(text) }
+            } else if isProgressKey(field) {
+                let formatted = (value as? String).flatMap(percentText)
+                let candidate = formatted ?? self.number(value)
+                let explicit = formatted != nil || field.hasSuffix("percent")
+                let priority = formatted != nil ? 2 : explicit ? 1 : 0
+                if let candidate, priority > percentPriority {
+                    percent = candidate
+                    explicitPercent = explicit
+                    percentPriority = priority
+                }
             } else if position == nil, isPositionKey(field), let number = self.number(value) {
                 position = number
             }
@@ -269,7 +300,7 @@ private extension GenericCourseDigest {
         guard duration != nil || durationText != nil || percent != nil else { return nil }
         let finished = object.contains { finishKeys.contains(normalized($0.key)) && ($0.value as? Bool) == true }
         return Lesson(name: name, identifier: identifierField(object) ?? "", durationRaw: duration,
-                      durationText: durationText, percentRaw: percent, positionRaw: position, markedFinished: finished,
+                      durationText: durationText, percentRaw: percent, explicitPercent: explicitPercent, positionRaw: position, markedFinished: finished,
                       courseKey: matchingText(object, keys: courseIdKeys),
                       courseLabel: matchingText(object, keys: courseNameKeys))
     }

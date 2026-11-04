@@ -1,0 +1,575 @@
+[
+  {
+    "name": "explicit-small-percent",
+    "bodies": [
+      {
+        "data": [
+          {
+            "id": "1",
+            "courseId": "88",
+            "name": "L1",
+            "duration": 3600,
+            "schedule": "1%"
+          },
+          {
+            "id": "2",
+            "courseId": "88",
+            "name": "L2",
+            "duration": 3600,
+            "schedule": "0.5%"
+          }
+        ]
+      }
+    ],
+    "percent": [
+      1,
+      0.5
+    ],
+    "seconds": [
+      3600,
+      3600
+    ],
+    "valid": true,
+    "totalMinutes": 120,
+    "completedMinutes": 0,
+    "workItems": 2
+  },
+  {
+    "name": "single-one-percent",
+    "bodies": [
+      {
+        "data": [
+          {
+            "id": "1",
+            "courseId": "88",
+            "name": "L1",
+            "duration": 3600,
+            "schedule": "1%"
+          }
+        ]
+      }
+    ],
+    "percent": [
+      1
+    ],
+    "seconds": [
+      3600
+    ],
+    "valid": true,
+    "totalMinutes": 60,
+    "completedMinutes": 0,
+    "workItems": 1
+  },
+  {
+    "name": "explicit-boundaries",
+    "bodies": [
+      {
+        "data": [
+          {
+            "id": "0",
+            "courseId": "88",
+            "name": "L0",
+            "duration": 3600,
+            "schedule": "0%"
+          },
+          {
+            "id": "1",
+            "courseId": "88",
+            "name": "L1",
+            "duration": 3600,
+            "schedule": "0.5%"
+          },
+          {
+            "id": "2",
+            "courseId": "88",
+            "name": "L2",
+            "duration": 3600,
+            "schedule": "1%"
+          },
+          {
+            "id": "3",
+            "courseId": "88",
+            "name": "L3",
+            "duration": 3600,
+            "schedule": "100%"
+          }
+        ]
+      }
+    ],
+    "percent": [
+      0,
+      0.5,
+      1,
+      100
+    ],
+    "seconds": [
+      3600,
+      3600,
+      3600,
+      3600
+    ],
+    "valid": true,
+    "totalMinutes": 240,
+    "completedMinutes": 60,
+    "workItems": 4
+  },
+  {
+    "name": "mixed-explicit-and-ratio",
+    "bodies": [
+      {
+        "data": [
+          {
+            "id": "1",
+            "courseId": "88",
+            "name": "L1",
+            "duration": 3600,
+            "schedule": "1%"
+          },
+          {
+            "id": "2",
+            "courseId": "88",
+            "name": "L2",
+            "duration": 3600,
+            "schedule": 0.5
+          },
+          {
+            "id": "3",
+            "courseId": "88",
+            "name": "L3",
+            "duration": 3600,
+            "schedule": 1
+          }
+        ]
+      }
+    ],
+    "percent": [
+      1,
+      50,
+      100
+    ],
+    "seconds": [
+      3600,
+      3600,
+      3600
+    ],
+    "valid": true,
+    "totalMinutes": 180,
+    "completedMinutes": 90,
+    "workItems": 3
+  },
+  {
+    "name": "numeric-percent-boundaries",
+    "bodies": [
+      {
+        "data": [
+          {
+            "id": "1",
+            "courseId": "88",
+            "name": "L1",
+            "duration": 3600,
+            "percent": 1
+          },
+          {
+            "id": "2",
+            "courseId": "88",
+            "name": "L2",
+            "duration": 3600,
+            "watched_percent": 0.5
+          }
+        ]
+      }
+    ],
+    "percent": [
+      1,
+      0.5
+    ],
+    "seconds": [
+      3600,
+      3600
+    ],
+    "valid": true,
+    "totalMinutes": 120,
+    "completedMinutes": 0,
+    "workItems": 2
+  },
+  {
+    "name": "numeric-ratios",
+    "bodies": [
+      {
+        "data": [
+          {
+            "id": "1",
+            "courseId": "88",
+            "name": "L1",
+            "duration": 3600,
+            "progress": 0.5
+          },
+          {
+            "id": "2",
+            "courseId": "88",
+            "name": "L2",
+            "duration": 3600,
+            "progress": 1
+          }
+        ]
+      }
+    ],
+    "percent": [
+      50,
+      100
+    ],
+    "seconds": [
+      3600,
+      3600
+    ],
+    "valid": true,
+    "totalMinutes": 120,
+    "completedMinutes": 90,
+    "workItems": 2
+  },
+  {
+    "name": "field-priority-False",
+    "bodies": [
+      {
+        "data": [
+          {
+            "id": "1",
+            "courseId": "88",
+            "name": "L1",
+            "duration": 3600,
+            "schedule": "1%",
+            "progress": 0.5
+          }
+        ]
+      }
+    ],
+    "percent": [
+      1
+    ],
+    "seconds": [
+      3600
+    ],
+    "valid": true,
+    "totalMinutes": 60,
+    "completedMinutes": 0,
+    "workItems": 1
+  },
+  {
+    "name": "field-priority-True",
+    "bodies": [
+      {
+        "data": [
+          {
+            "progress": 0.5,
+            "schedule": "1%",
+            "duration": 3600,
+            "name": "L1",
+            "courseId": "88",
+            "id": "1"
+          }
+        ]
+      }
+    ],
+    "percent": [
+      1
+    ],
+    "seconds": [
+      3600
+    ],
+    "valid": true,
+    "totalMinutes": 60,
+    "completedMinutes": 0,
+    "workItems": 1
+  },
+  {
+    "name": "thin-then-full",
+    "bodies": [
+      {
+        "data": [
+          {
+            "id": "1",
+            "courseId": "88",
+            "name": "L1",
+            "duration": 0,
+            "percent": 0
+          },
+          {
+            "id": "2",
+            "courseId": "88",
+            "name": "L2",
+            "duration": 3600,
+            "percent": 0
+          }
+        ]
+      },
+      {
+        "data": [
+          {
+            "id": "1",
+            "courseId": "88",
+            "name": "L1",
+            "duration": 3600,
+            "percent": 50
+          },
+          {
+            "id": "2",
+            "courseId": "88",
+            "name": "L2",
+            "duration": 3600,
+            "percent": 0
+          }
+        ]
+      }
+    ],
+    "percent": [
+      50,
+      0
+    ],
+    "seconds": [
+      3600,
+      3600
+    ],
+    "valid": true,
+    "totalMinutes": 120,
+    "completedMinutes": 30,
+    "workItems": 2
+  },
+  {
+    "name": "full-then-thin",
+    "bodies": [
+      {
+        "data": [
+          {
+            "id": "1",
+            "courseId": "88",
+            "name": "L1",
+            "duration": 3600,
+            "percent": 50
+          },
+          {
+            "id": "2",
+            "courseId": "88",
+            "name": "L2",
+            "duration": 3600,
+            "percent": 0
+          }
+        ]
+      },
+      {
+        "data": [
+          {
+            "id": "1",
+            "courseId": "88",
+            "name": "L1",
+            "duration": 0,
+            "percent": 0
+          },
+          {
+            "id": "2",
+            "courseId": "88",
+            "name": "L2",
+            "duration": 3600,
+            "percent": 0
+          }
+        ]
+      }
+    ],
+    "percent": [
+      50,
+      0
+    ],
+    "seconds": [
+      3600,
+      3600
+    ],
+    "valid": true,
+    "totalMinutes": 120,
+    "completedMinutes": 30,
+    "workItems": 2
+  },
+  {
+    "name": "identical-repeat",
+    "bodies": [
+      {
+        "data": [
+          {
+            "id": "1",
+            "courseId": "88",
+            "name": "L1",
+            "duration": 3600,
+            "percent": 50
+          },
+          {
+            "id": "2",
+            "courseId": "88",
+            "name": "L2",
+            "duration": 3600,
+            "percent": 0
+          }
+        ]
+      },
+      {
+        "data": [
+          {
+            "id": "1",
+            "courseId": "88",
+            "name": "L1",
+            "duration": 3600,
+            "percent": 50
+          },
+          {
+            "id": "2",
+            "courseId": "88",
+            "name": "L2",
+            "duration": 3600,
+            "percent": 0
+          }
+        ]
+      }
+    ],
+    "percent": [
+      50,
+      0
+    ],
+    "seconds": [
+      3600,
+      3600
+    ],
+    "valid": true,
+    "totalMinutes": 120,
+    "completedMinutes": 30,
+    "workItems": 2
+  },
+  {
+    "name": "progress-only-update",
+    "bodies": [
+      {
+        "data": [
+          {
+            "id": "1",
+            "courseId": "88",
+            "name": "L1",
+            "duration": 3600,
+            "percent": 50
+          },
+          {
+            "id": "2",
+            "courseId": "88",
+            "name": "L2",
+            "duration": 3600,
+            "percent": 0
+          }
+        ]
+      },
+      {
+        "data": [
+          {
+            "id": "1",
+            "courseId": "88",
+            "name": "L1",
+            "percent": 75
+          }
+        ]
+      }
+    ],
+    "percent": [
+      75,
+      0
+    ],
+    "seconds": [
+      3600,
+      3600
+    ],
+    "valid": true,
+    "totalMinutes": 120,
+    "completedMinutes": 45,
+    "workItems": 2
+  },
+  {
+    "name": "conflicting-complete-duration",
+    "bodies": [
+      {
+        "data": [
+          {
+            "id": "1",
+            "courseId": "88",
+            "name": "L1",
+            "duration": 3600,
+            "percent": 50
+          },
+          {
+            "id": "2",
+            "courseId": "88",
+            "name": "L2",
+            "duration": 3600,
+            "percent": 0
+          }
+        ]
+      },
+      {
+        "data": [
+          {
+            "id": "1",
+            "courseId": "88",
+            "name": "L1",
+            "duration": 1800,
+            "percent": 50
+          }
+        ]
+      }
+    ],
+    "percent": [
+      50,
+      0
+    ],
+    "seconds": [
+      3600,
+      3600
+    ],
+    "valid": false,
+    "totalMinutes": 120,
+    "completedMinutes": 30,
+    "workItems": 2
+  },
+  {
+    "name": "pending-and-quiz",
+    "bodies": [
+      {
+        "data": [
+          {
+            "id": "1",
+            "courseId": "88",
+            "name": "L1",
+            "duration": 3600,
+            "percent": 0
+          },
+          {
+            "id": "2",
+            "courseId": "88",
+            "name": "L2",
+            "duration": 0,
+            "percent": 0
+          },
+          {
+            "id": "quiz",
+            "courseId": "88",
+            "name": "Quiz",
+            "type": "4"
+          }
+        ]
+      }
+    ],
+    "percent": [
+      0,
+      0
+    ],
+    "seconds": [
+      3600,
+      0
+    ],
+    "valid": true,
+    "totalMinutes": 60,
+    "completedMinutes": 0,
+    "workItems": 1
+  }
+]
