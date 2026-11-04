@@ -1,7 +1,7 @@
 import SwiftUI
 import StudyCore
 
-enum ScheduleSearchScope: String, CaseIterable, Identifiable {
+enum ScheduleSearchScope: String, CaseIterable, Identifiable, Sendable {
     case upcoming = "接下来", history = "历史", all = "全部"
     var id: Self { self }
     var explanation: String {
@@ -57,14 +57,24 @@ struct ScheduleSearchView: View {
     let selectDate: (Date) -> Void
     @State private var query = ""
     @State private var scope = ScheduleSearchScope.upcoming
+    @State private var matches: [ScheduledTask] = []
+    @State private var displayedInput: SearchInput?
     @FocusState private var searchFocused: Bool
     @Environment(\.dismiss) private var dismiss
 
-    private var results: [ScheduledTask] {
-        ScheduleSearch.matches(query: query, tasks: tasks, courses: courses, scope: scope)
+    private struct SearchInput: Equatable, Sendable {
+        let query: String
+        let scope: ScheduleSearchScope
+        let tasks: [ScheduledTask]
+        let courses: [Course]
+        let day: Date
+        let calendar: Calendar
     }
 
     var body: some View {
+        let calendar = Calendar.current
+        let input = SearchInput(query: query, scope: scope, tasks: tasks, courses: courses,
+                                day: calendar.startOfDay(for: Date()), calendar: calendar)
         VStack(alignment: .leading, spacing: 16) {
             HStack {
                 Text("搜索课程日期").font(.title2.bold())
@@ -92,10 +102,11 @@ struct ScheduleSearchView: View {
             .pickerStyle(.segmented)
             .accessibilityIdentifier("scheduleSearchScope")
             Text(scope.explanation).font(.caption).foregroundStyle(.secondary)
-            let matches = results
             if query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 ContentUnavailableView("查找哪天学这节课", systemImage: "calendar.badge.magnifyingglass",
                                        description: Text("输入课程、课时名称或日期，也可用空格组合关键词。点击结果跳转到当天；历史记录可切换到“历史”或“全部”查看。"))
+            } else if displayedInput != input {
+                ProgressView("正在搜索…")
             } else if matches.isEmpty {
                 ContentUnavailableView("没有找到相关日程", systemImage: "magnifyingglass",
                                        description: Text(scope == .all
@@ -116,6 +127,18 @@ struct ScheduleSearchView: View {
         .padding(24)
         .frame(width: 660, height: 570, alignment: .top)
         .onAppear { searchFocused = true }
+        .task(id: input) {
+            displayedInput = nil; matches = []
+            guard !input.query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+            do { try await Task.sleep(for: .milliseconds(200)) }
+            catch { return }
+            let result = await Task.detached(priority: .userInitiated) {
+                ScheduleSearch.matches(query: input.query, tasks: input.tasks, courses: input.courses,
+                                       scope: input.scope, now: input.day, calendar: input.calendar)
+            }.value
+            guard !Task.isCancelled else { return }
+            matches = result; displayedInput = input
+        }
     }
 
     private func resultRow(_ task: ScheduledTask) -> some View {
