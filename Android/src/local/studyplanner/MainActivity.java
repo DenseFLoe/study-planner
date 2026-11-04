@@ -37,11 +37,23 @@ public class MainActivity extends Activity {
     FixedEventCatalog.Scope eventScope=FixedEventCatalog.Scope.CURRENT;
     CourseCatalog.Scope courseScope=CourseCatalog.Scope.ALL;
     static final int EXPORT_BACKUP=101,IMPORT_BACKUP=102,SCAN_PAIRING_QR=103,IMPORT_COURSES=104,IMPORT_SSH_KEY=105;
-    JSONObject state; String syncSummary=""; LinearLayout root,body,nav; int page=0; LocalDate selected=LocalDate.now(Planner.ZONE),month=selected.withDayOfMonth(1),lastDay=selected;
+    JSONObject state; String syncSummary=""; LinearLayout root,body,nav; int page=0; LocalDate selected=LocalDate.now(Planner.ZONE),month=selected.withDayOfMonth(1);
+    final DailyRollover dayRollover=new DailyRollover(selected);
     final int ink=0xff191919,blue=0xff07c160,muted=0xff555555,bg=0xffededed;
     boolean calendarExpanded=false;DailyConsequenceController consequences;LinearLayout consequencePanel;
     boolean busy=false,ready=false,reviewShown=false; AtomicFile storage; PlannerDatabase database; SyncWindow syncServer; String syncStatus="尚未同步"; TextView syncLabel; ExecutorService worker;Handler handler=new Handler();
-    final Runnable ticker=new Runnable(){public void run(){if(ready&&!busy){LocalDate today=LocalDate.now(Planner.ZONE);if(!today.equals(lastDay)){lastDay=today;mutate(s->{},true,null);}else showReviewNotice();}handler.postDelayed(this,30000);}};
+    final Runnable ticker=new Runnable(){public void run(){
+        if(ready&&!busy){
+            LocalDate today=LocalDate.now(Planner.ZONE);
+            if(dayRollover.due(today,SystemClock.elapsedRealtime())){
+                mutate(s->{},true,()->dayRollover.succeeded(today),error->{
+                    if(dayRollover.failed(today,SystemClock.elapsedRealtime()))
+                        alert("日期更新未保存","原日程已保留，稍后会自动重试（至少间隔5分钟）。\n"+error.getMessage());
+                });
+            }else showReviewNotice();
+        }
+        handler.postDelayed(this,30000);
+    }};
     interface Change{void run(JSONObject s)throws Exception;}
     interface Checked{void run()throws Exception;}
     @Override public void onCreate(Bundle b){super.onCreate(b);getWindow().setStatusBarColor(bg);getWindow().setNavigationBarColor(Color.WHITE);getWindow().getDecorView().setSystemUiVisibility(View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR|View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR);storage=new AtomicFile(new File(getFilesDir(),"planner-v1.json"));if(b!=null){pendingCourseResult=b.getParcelable("pendingCourseResult");restoredSettingsDraft=b.getString("studySettingsDraft");selected=LocalDate.parse(b.getString("selected",selected.toString()));month=selected.withDayOfMonth(1);page=b.getInt("page",0);settingsSection=b.getString("settingsSection","");calendarExpanded=b.getBoolean("calendarExpanded",false);month=LocalDate.parse(b.getString("month",month.toString()));}PlannerRuntime runtime=PlannerRuntime.get(this);database=runtime.database;worker=runtime.worker;

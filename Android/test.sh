@@ -105,6 +105,9 @@ mkdir -p Android/build/controller-tests
 "$JDK/bin/javac" -d Android/build/tests Android/src/local/studyplanner/DeferredRefresh.java Android/tests/DeferredRefreshTests.java
 "$JDK/bin/java" -cp Android/build/tests local.studyplanner.DeferredRefreshTests
 
+"$JDK/bin/javac" -d Android/build/tests Android/src/local/studyplanner/DailyRollover.java Android/tests/DailyRolloverTests.java
+"$JDK/bin/java" -cp Android/build/tests local.studyplanner.DailyRolloverTests
+
 "$JDK/bin/javac" -cp Android/tools/json.jar:Android/build/tests -d Android/build/tests Android/tests/ConfirmationDraftTests.java
 "$JDK/bin/java" -cp Android/tools/json.jar:Android/build/tests local.studyplanner.ConfirmationDraftTests
 
