@@ -203,8 +203,8 @@ final class PlannerStore {
         do {
             let previous = state
             let previousResult = result
-            var next = state
-            try next.swapDailyTasks(source, target)
+            let draft = try DailyTaskSwapDraft(state: state, sourceID: source, targetID: target)
+            let next = draft.preview
             let updated = Dictionary(uniqueKeysWithValues: next.tasks.map { ($0.id, $0) })
             var planned = result
             planned.tasks = planned.tasks.map { updated[$0.id] ?? $0 }.sorted { $0.start < $1.start }
@@ -214,13 +214,14 @@ final class PlannerStore {
             result = planned
             localEditRevision += 1
             orderSaveBusy = true
+            errorMessage = nil
             saveStatus = "正在后台保存课程顺序…"
             orderSaveTask = Task { @MainActor in
                 defer { finishLocalSave() }
                 do {
                     try await backups.save(PlannerBackup(state: previous, reason: "调整顺序前"))
                     await refreshBackups()
-                    let saved = try await repository.saveChangesForInteraction(next, from: previous)
+                    let saved = try await repository.saveDailyTaskSwapForInteraction(draft, from: previous)
                     state = saved
                     if saved != next {
                         let (assessment, load) = await Task.detached(priority: .userInitiated) {
@@ -231,12 +232,22 @@ final class PlannerStore {
                     didSaveLocalEdit()
                     return true
                 } catch {
+                    var restored = previous, restoredResult = previousResult, restoredLoad = studyLoad
+                    if error is DailyTaskSwapError || error is DailyTaskOrderError || error is ImmediateStudyError,
+                       let latest = try? repository.load() {
+                        let (assessment, load) = await Task.detached(priority: .userInitiated) {
+                            (ScheduleEngine().assessSavedPlan(state: latest, now: Date()), StudyLoadAnalyzer().assess(state: latest, now: Date()))
+                        }.value
+                        restored = latest; restoredResult = assessment; restoredLoad = load
+                        if let local = repository as? LocalRepository, let ledger = try? local.loadLedger() { syncLedger = ledger }
+                    }
                     withAnimation(.easeOut(duration: 0.18)) {
-                        state = previous
-                        result = previousResult
+                        state = restored
+                        result = restoredResult
+                        studyLoad = restoredLoad
                     }
                     localEditRevision += 1
-                    errorMessage = "顺序未保存，已恢复原安排：\(error.localizedDescription)"
+                    errorMessage = "顺序未保存：\(error.localizedDescription)"
                     return false
                 }
             }

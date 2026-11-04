@@ -8,6 +8,7 @@ final class DailyTaskSwapTests: XCTestCase {
         var saved: PlannerState?
         var fails = false
         var holdSave = false
+        var incoming: PlannerState?
         @MainActor var resumeSave: CheckedContinuation<Void, Never>?
         @MainActor private var startedObserver: CheckedContinuation<Void, Never>?
         @MainActor func waitUntilSaving() async {
@@ -28,6 +29,14 @@ final class DailyTaskSwapTests: XCTestCase {
         func save(_ state: PlannerState) throws {
             if fails { throw CocoaError(.fileWriteUnknown) }
             saved = state
+        }
+        @MainActor func saveDailyTaskSwapForInteraction(_ draft: DailyTaskSwapDraft,
+                                                        from baseline: PlannerState) async throws -> PlannerState {
+            var latest = incoming ?? baseline
+            if incoming != nil { saved = latest }
+            try draft.apply(to: &latest)
+            try await saveForInteraction(latest)
+            return latest
         }
     }
 
@@ -69,6 +78,27 @@ final class DailyTaskSwapTests: XCTestCase {
         XCTAssertEqual(store.studyLoad?.requiredMinutes, load?.requiredMinutes)
         XCTAssertEqual(store.studyLoad?.availableMinutes, load?.availableMinutes)
         XCTAssertNil(store.errorMessage)
+    }
+
+    @MainActor func testConcurrentConfirmationRefreshesStoreAndSameSwapIsNotReversed() async throws {
+        let (state, plan, load) = fixture(), (a, b) = pair(in: state)
+        for identical in [false, true] {
+            let repo = Repository()
+            var remote = state
+            if identical { try remote.swapDailyTasks(a, b) }
+            else { try remote.confirm(taskID: a, actualMinutes: 20, now: Date()) }
+            repo.incoming = remote
+            let store = PlannerStore(state: state, repository: repo, result: plan, studyLoad: load)
+            store.swapDailyTasks(a, b)
+            let saved = await store.waitForOrderSave()
+            XCTAssertEqual(saved, identical)
+            XCTAssertEqual(repo.saved, remote)
+            XCTAssertEqual(store.state, remote)
+            XCTAssertEqual(store.result.tasks, remote.tasks)
+            XCTAssertFalse(store.orderSaveBusy)
+            if identical { XCTAssertNil(store.errorMessage) }
+            else { XCTAssertTrue(store.errorMessage?.contains("未覆盖最新安排") == true) }
+        }
     }
 
     @MainActor func testFailedSaveRollsBackAndSyncAllowsSwap() async throws {
