@@ -39,10 +39,21 @@ struct MainView: View {
     @State private var showingCompletedFixedEvents = false
     @State private var fixedQuery = ""
     @State private var fixedWeekday = 0
+    @State private var courseQuery = ""
+    @State private var courseScope = CourseCatalogScope.all
+    @State private var matchingCourses: [Course] = []
+    @State private var displayedCourseInput: CourseCatalogInput?
     @AppStorage("dailyStudyLoadWarningMinutes") private var dailyLoadWarningMinutes = 480
     @Namespace private var navigationSelection
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    private struct CourseCatalogInput: Equatable, Sendable {
+        var query: String
+        var scope: CourseCatalogScope
+        var courses: [Course]
+        var timeZone: TimeZone
+    }
 
     var body: some View {
         HStack(spacing: 0) {
@@ -658,23 +669,45 @@ struct MainView: View {
     }
 
     private var courseList: some View {
-        ScrollView {
+        let input = CourseCatalogInput(query: courseQuery, scope: courseScope, courses: store.state.courses, timeZone: .current)
+        let total = input.courses.filter { !$0.isArchived }.count
+        let ready = displayedCourseInput == input
+        let visible = ready ? matchingCourses : []
+        return ScrollView {
             LazyVStack(alignment: .leading, spacing: 16) {
                 CompressedScheduleCard(controller: store.compressedPlan) {
                     store.compressedPlan.recalculate(state: store.state)
                 }
-                PlannerSectionTitle(title: "可调度课程", detail: "\(store.courses.count) 门")
+                PlannerSectionTitle(title: "可调度课程", detail: ready ? "显示 \(visible.count) / \(total) 门" : "\(total) 门")
                 HStack {
                     Button("合并课程", systemImage: "arrow.triangle.merge") { sheet = .mergeCourses }
-                        .disabled(store.courses.count < 2)
+                        .disabled(total < 2 || store.orderSaveBusy)
                     Button("添加课程", systemImage: "plus") { newCourse() }
                         .buttonStyle(SoftButtonStyle(prominent: true))
+                        .disabled(store.orderSaveBusy)
                 }
+
+                HStack(spacing: 12) {
+                    HStack {
+                        Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
+                        TextField("搜索名称、备注或截止日期（YYYY-MM-DD）", text: $courseQuery)
+                            .textFieldStyle(.plain).accessibilityIdentifier("courseCatalogSearch")
+                    }.padding(10).plannerSurface(radius: 10, shadow: false)
+                    Picker("排程状态", selection: $courseScope) {
+                        ForEach(CourseCatalogScope.allCases) { value in Text(value.rawValue).tag(value) }
+                    }.frame(width: 150)
+                    if !courseQuery.isEmpty || courseScope != .all {
+                        Button("清除筛选") { courseQuery = ""; courseScope = .all }
+                    }
+                }
+                Text("可用空格组合关键词；按截止日期排序，筛选不会修改课程或日程。")
+                    .font(.caption).foregroundStyle(.secondary)
+                if !ready { ProgressView("正在查找课程…") }
 
                 Label("赶进度？直接调整下方「每日加量」，可分别设置多门课。1.5 倍多学 50%，2 倍多学一倍；选择后自动重排。", systemImage: "bolt.fill")
                     .font(.callout).foregroundStyle(.secondary)
 
-                ForEach(store.courses) { course in
+                ForEach(visible) { course in
                     CourseListRow(
                         course: course,
                         completed: store.state.completedMinutes(for: course),
@@ -689,10 +722,10 @@ struct MainView: View {
                         websiteSource: CourseWebsite.identify(course.webCourse) != nil && course.mergedSources == nil
                             ? { sheet = .websiteSource(course.id) } : nil,
                         websiteStatus: store.websiteUpdater.sources[course.id].map { $0.needsAttention ? "网站更新待处理" : ($0.enabled ? "网站自动更新已开启" : "") }
-                    )
+                    ).disabled(store.orderSaveBusy)
                 }
 
-                if store.courses.isEmpty {
+                if total == 0 {
                     ContentUnavailableView(
                         "还没有学习课程",
                         systemImage: "books.vertical",
@@ -700,12 +733,30 @@ struct MainView: View {
                     )
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 80)
+                } else if ready && visible.isEmpty {
+                    ContentUnavailableView("没有匹配的课程", systemImage: "magnifyingglass",
+                                           description: Text("试试其他关键词或排程状态，也可清除筛选查看全部课程。"))
+                        .frame(maxWidth: .infinity).padding(.vertical, 40)
                 }
             }
             .padding(PlannerTheme.pagePadding)
         }
         .scrollIndicators(.hidden)
         .environment(\.plannerScrollingContent, true)
+        .task(id: input) {
+            guard displayedCourseInput != input else { return }
+            displayedCourseInput = nil; matchingCourses = []
+            if !input.query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                do { try await Task.sleep(for: .milliseconds(200)) }
+                catch { return }
+            }
+            let result = await Task.detached(priority: .userInitiated) {
+                CourseCatalogSearch.matches(query: input.query, courses: input.courses,
+                                            scope: input.scope, timeZone: input.timeZone)
+            }.value
+            guard !Task.isCancelled else { return }
+            matchingCourses = result; displayedCourseInput = input
+        }
     }
 
     private var fixedList: some View {
