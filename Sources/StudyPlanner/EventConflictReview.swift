@@ -20,6 +20,9 @@ struct EventConflictReview: View {
     private var canSkipAllLocal: Bool { !conflicts.contains { $0.reason == .activeTask } }
 
     var body: some View {
+        let grouped = Dictionary(grouping: conflicts, by: \.date)
+        let reviewDays = grouped.keys.sorted()
+        let remaining = reviewDays.filter { choices[$0, default: .unresolved] == .unresolved }.count
         VStack(alignment: .leading, spacing: 16) {
             Label("逐日处理时间冲突", systemImage: "calendar.badge.exclamationmark")
                 .font(.title2.bold()).foregroundStyle(.orange)
@@ -29,14 +32,14 @@ struct EventConflictReview: View {
             Text("每个冲突日期可选择：跳过新课程，保留本地安排；或跳过当天冲突的本地固定事项，保留新课程。同一天的多个冲突一起处理。")
                 .font(.callout).foregroundStyle(.secondary)
             HStack {
-                Text("\(conflicts.count) 处冲突 · \(dates.count) 天 · \(remaining) 天未确认").font(.caption)
+                Text("\(conflicts.count) 处冲突 · \(reviewDays.count) 天 · \(remaining) 天未确认").font(.caption)
                 Spacer()
                 Button("清除选择") { choices = [:] }.disabled(choices.isEmpty)
             }
             ScrollView {
                 LazyVStack(spacing: 12) {
-                    ForEach(dates, id: \.self) { day in
-                        ConflictDayCard(day: day, conflicts: conflicts.filter { $0.date == day },
+                    ForEach(reviewDays, id: \.self) { day in
+                        ConflictDayCard(day: day, conflicts: grouped[day, default: []],
                                         choice: Binding(get: { choices[day, default: .unresolved] },
                                                         set: { choices[day] = $0 }))
                     }
@@ -52,11 +55,11 @@ struct EventConflictReview: View {
                 Button("返回修改") { dismiss() }.keyboardShortcut(.cancelAction)
                 if saving { ProgressView().controlSize(.small) }
                 Spacer()
-                Button("全部跳过新课程并保存") { chooseAll(.skipNew) }.disabled(dates.isEmpty)
+                Button("全部跳过新课程并保存") { chooseAll(.skipNew) }.disabled(reviewDays.isEmpty)
                 Button("全部跳过本地并保存") { chooseAll(.skipLocal) }
-                    .disabled(dates.isEmpty || !canSkipAllLocal)
+                    .disabled(reviewDays.isEmpty || !canSkipAllLocal)
                 Button("保存选择") { save() }
-                    .buttonStyle(.borderedProminent).disabled(remaining > 0 || dates.isEmpty)
+                    .buttonStyle(.borderedProminent).disabled(remaining > 0 || reviewDays.isEmpty)
             }
         }.padding(24).frame(width: 780, height: 680).disabled(saving || store.orderSaveBusy)
             .interactiveDismissDisabled(saving)
