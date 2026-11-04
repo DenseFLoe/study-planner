@@ -36,6 +36,9 @@ jobs:
             swift@sha256:95f6ef898992dc840b35517e780f6f6db9661432775ab0b33cc0a531ea749bdb \
             swift test --jobs 2
 
+      - name: Verify Android APK packaging
+        run: bash Android/test-package.sh
+
   tests:
     name: Swift, Java and Android
     # macos-15 now selects arm64; that pool failed to acquire runners before any
