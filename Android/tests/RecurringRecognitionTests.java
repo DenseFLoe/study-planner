@@ -19,6 +19,24 @@ public final class RecurringRecognitionTests {
         Planner.validateEventWindow(value); checks += 3;
     }
     public static void main(String[] args) throws Exception {
+        for(String[] sample:new String[][]{
+            {"每周三09:00到10:00复习\n14:00到15:00讨论","60","60","[4]"},
+            {"明天09:00复习\n14:00讨论","60","60","[]"},
+            {"明天\n09:00复习\n14:00讨论","60","60","[]"},
+            {"每周三09:00复习，持续半小时\n14:00讨论，持续1小时","30","60","[4]"},
+            {"每周三，持续半小时\n09:00复习\n14:00讨论","30","30","[4]"}
+        }){
+            FixedEventTextParser.Result result=FixedEventTextParser.parse(sample[0],Planner.at(TODAY,600));
+            if(result.drafts.size()!=2)throw new AssertionError("Shared header did not produce two events: "+sample[0]+" "+result.messages);checks++;
+            for(int i=0;i<2;i++){JSONObject value=result.drafts.get(i).event;
+                if(!value.getString("title").equals(i==0?"复习":"讨论")||value.getInt("endMinute")-value.getInt("startMinute")!=Integer.parseInt(sample[i+1])||!value.getJSONArray("weekdays").toString().equals(sample[3]))throw new AssertionError("Previous activity leaked into later event: "+sample[0]);checks+=3;
+            }
+            if(result.drafts.get(1).event.getString("notes").contains("复习"))throw new AssertionError("Previous title leaked into source context");checks++;
+        }
+        FixedEventTextParser.Result term=FixedEventTextParser.parse("从下周开始，每周三，截止2026年12月31日\n09:00到10:00复习\n14:00到15:00讨论",Planner.at(TODAY,600));
+        if(term.drafts.size()!=2)throw new AssertionError("Term header rejected");checks++;
+        for(FixedEventTextParser.Draft draft:term.drafts){if(!Planner.day(draft.event.getDouble("startDate")).equals(TODAY.plusDays(5))||!Planner.day(draft.event.getDouble("endDate")).equals(LocalDate.of(2026,12,31)))throw new AssertionError("Header start or cutoff lost");checks+=2;}
+        JSONObject range=event("明天09:00\n到10:00开会");if(range.getInt("startMinute")!=540||range.getInt("endMinute")!=600||!range.getString("title").equals("开会"))throw new AssertionError("Cross-line range split into separate events");checks+=3;
         for(String[] sample:new String[][]{{"半小时","30"},{"半个小时","30"},{"1.5小时","90"},{"０．７５小时","45"},{"0.1小时","6"},{"1.5小时30分钟","120"},{"一个半小时","90"}}){
             String text="明天09:00复习，持续"+sample[0];FixedEventTextParser.Result result=FixedEventTextParser.parse(text,Planner.at(TODAY,600));
             if(result.drafts.size()!=1)throw new AssertionError("Explicit duration rejected: "+text);JSONObject value=result.drafts.get(0).event;

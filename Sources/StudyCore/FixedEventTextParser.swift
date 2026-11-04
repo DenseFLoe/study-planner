@@ -47,7 +47,11 @@ public enum FixedEventTextParser {
             let text = normalize($0)
             return !matches(clockPattern, text).isEmpty && (!matches(datePattern, text).isEmpty || !matches(relativePattern, text).isEmpty || isRecurring(text) || unsupportedRecurrence(text))
         }.count
-        let pieces = matches(clockPattern, normalized).count <= 2 && datedNotices < 2 ? [source] : separated
+        let clocks = matches(clockPattern, normalized)
+        let timedPieces = separated.filter { !matches(clockPattern, normalize($0)).isEmpty }.count
+        let acrossLinesRange = clocks.count == 2 && !matches("^\\s*(?:到|至|[-~—–～])\\s*$",
+            (normalized as NSString).substring(with: NSRange(location: NSMaxRange(clocks[0].range), length: clocks[1].range.location - NSMaxRange(clocks[0].range)))).isEmpty
+        let pieces = clocks.count <= 2 && datedNotices < 2 && (timedPieces < 2 || acrossLinesRange) ? [source] : separated
         var result = FixedEventTextResult()
         var dateContext = ""
         var rejected = 0
@@ -57,13 +61,7 @@ public enum FixedEventTextParser {
             guard !piece.isEmpty else { continue }
             let hasDate = !matches(datePattern, normalizedPiece).isEmpty || !matches(relativePattern, normalizedPiece).isEmpty || isRecurring(normalizedPiece) || unsupportedRecurrence(normalizedPiece)
             if hasDate {
-                // Carry only date expressions, never a previous appointment's clock.
-                dateContext = (matches(datePattern, normalizedPiece) + matches(relativePattern, normalizedPiece))
-                    .sorted { $0.range.location < $1.range.location }
-                    .map { capture($0, 0, normalizedPiece) }.joined(separator: " ")
-                if isRecurring(normalizedPiece) || unsupportedRecurrence(normalizedPiece) {
-                    dateContext = replacing(clockPattern, normalizedPiece, with: "")
-                }
+                dateContext = sharedDateContext(normalizedPiece, includeDuration: matches(clockPattern, normalizedPiece).isEmpty)
             }
             guard !matches(clockPattern, normalizedPiece).isEmpty else { continue }
             let context = hasDate || dateContext.isEmpty ? piece : dateContext + "\n" + piece
@@ -259,6 +257,15 @@ public enum FixedEventTextParser {
 
     private static func isRecurring(_ text: String) -> Bool {
         !matches("每天|每日|每周|每星期|每礼拜|每逢|工作日|周末", text).isEmpty
+    }
+    private static func sharedDateContext(_ text: String, includeDuration: Bool) -> String {
+        // Unsupported restrictions must survive a shared header so later lines cannot bypass review.
+        if unsupportedRecurrence(text) { return replacing(clockPattern, text, with: "") }
+        let dated = "(?:从|自|截止|截至|直到|至|到)?\\s*(?:\(datePattern)|\(relativePattern))\\s*(?:开始|起)?"
+        var pattern = [weekStartPattern, dated, weekdayListPattern, "每天|每日|工作日|周末|每周|每星期|每礼拜|每逢",
+                       "(?:持续|共|为期)\\s*\(number)\\s*周"].joined(separator: "|")
+        if includeDuration { pattern += "|" + durationPattern }
+        return matches(pattern, text).map { capture($0, 0, text) }.joined(separator: " ")
     }
     private static func unsupportedRecurrence(_ text: String) -> Bool {
         !matches("(?:隔|间隔)\\s*(?:[0-9零〇一二两三四五六七八九十]{1,3}\\s*)?(?:天|日|周|星期|礼拜)|单双周|(?:单|双)周(?=[一二三四五六日天0-9）)\\s，,。；;]|$|周|星期|礼拜|重复|轮换|上课)|每\\s*(?:个\\s*)?(?:月|年)|每\\s*隔|每\\s*\(number)\\s*(?:天|日|周|星期|礼拜|个?月|年)|(?:节假日|法定假日|假期|调休)\\s*(?:除外|不(?:上课|安排|进行)|顺延)|(?:除|不含|不包括|跳过|避开)\\s*(?:周[一二三四五六日天1-7]|星期[一二三四五六日天1-7]|礼拜[一二三四五六日天1-7]|节假日|法定假日|假期)", text).isEmpty

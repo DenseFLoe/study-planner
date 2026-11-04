@@ -223,6 +223,28 @@ final class FixedEventTextParserTests: XCTestCase {
         XCTAssertEqual(shared.drafts.count, 2, shared.messages.joined())
         XCTAssertTrue(shared.drafts.allSatisfy { $0.event.startDate == date(2026, 10, 21, 0) })
     }
+    func testSharedHeadersKeepEachActivityTitleAndItsOwnDuration() throws {
+        let today = date(2026, 11, 4)
+        for (text, minutes, weekdays) in [
+            ("每周三09:00到10:00复习\n14:00到15:00讨论", [60, 60], Set([4])),
+            ("明天09:00复习\n14:00讨论", [60, 60], Set<Int>()),
+            ("明天\n09:00复习\n14:00讨论", [60, 60], Set<Int>()),
+            ("每周三09:00复习，持续半小时\n14:00讨论，持续1小时", [30, 60], Set([4])),
+            ("每周三，持续半小时\n09:00复习\n14:00讨论", [30, 30], Set([4]))
+        ] {
+            let result = parse(text, now: today)
+            XCTAssertEqual(result.drafts.map { $0.event.title }, ["复习", "讨论"], text)
+            XCTAssertEqual(result.drafts.map { $0.event.endMinute - $0.event.startMinute }, minutes, text)
+            XCTAssertTrue(result.drafts.allSatisfy { $0.event.weekdays == weekdays }, text)
+            XCTAssertFalse(result.drafts.last?.event.notes.contains("复习") == true, text)
+        }
+        let term = parse("从下周开始，每周三，截止2026年12月31日\n09:00到10:00复习\n14:00到15:00讨论", now: today)
+        XCTAssertEqual(term.drafts.count, 2)
+        XCTAssertTrue(term.drafts.allSatisfy { $0.event.startDate == date(2026, 11, 9, 0) && $0.event.endDate == date(2026, 12, 31, 0) })
+        let range = try draft("明天09:00\n到10:00开会", now: today)
+        XCTAssertEqual(range.event.startMinute, 540); XCTAssertEqual(range.event.endMinute, 600)
+        XCTAssertEqual(range.event.title, "开会")
+    }
     func testFullwidthAndInputLimits() throws {
         XCTAssertEqual(try draft("明天１８：００至１９：００开会").event.startMinute, 1080)
         XCTAssertTrue(parse(String(repeating: "通知", count: 15001)).drafts.isEmpty)
