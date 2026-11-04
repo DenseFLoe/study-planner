@@ -41,7 +41,7 @@ public actor PlannerBackupRepository {
     }
 
     public func entries() throws -> [PlannerBackupEntry] {
-        let values: [PlannerBackup]
+        let values: [PlannerBackupEntry]
         unreadableCount = 0
         if let directory {
             guard FileManager.default.fileExists(atPath: directory.path) else { return [] }
@@ -51,14 +51,18 @@ public actor PlannerBackupRepository {
                 do {
                     let value = try Self.read(url)
                     guard value.id == UUID(uuidString: url.deletingPathExtension().lastPathComponent) else { throw SyncFailure.invalidData }
-                    return value
+                    // Keep only list metadata; retaining every decoded planner at
+                    // once multiplies memory use by the history retention limit.
+                    return Self.entry(for: value)
                 } catch { unreadableCount += 1; return nil }
             }
-        } else { values = Array(memory.values) }
-        return values.sorted { $0.createdAt == $1.createdAt ? $0.id.uuidString > $1.id.uuidString : $0.createdAt > $1.createdAt }.map { backup in
-            .init(id: backup.id, createdAt: backup.createdAt, reason: backup.reason, courseCount: backup.state.courses.count,
-                  deletedCourseID: backup.deletedCourseID, deletedCourseName: backup.state.courses.first { $0.id == backup.deletedCourseID }?.name)
-        }
+        } else { values = memory.values.map(Self.entry(for:)) }
+        return values.sorted { $0.createdAt == $1.createdAt ? $0.id.uuidString > $1.id.uuidString : $0.createdAt > $1.createdAt }
+    }
+
+    private static func entry(for backup: PlannerBackup) -> PlannerBackupEntry {
+        .init(id: backup.id, createdAt: backup.createdAt, reason: backup.reason, courseCount: backup.state.courses.count,
+              deletedCourseID: backup.deletedCourseID, deletedCourseName: backup.state.courses.first { $0.id == backup.deletedCourseID }?.name)
     }
 
     public func load(_ id: UUID) throws -> PlannerBackup {

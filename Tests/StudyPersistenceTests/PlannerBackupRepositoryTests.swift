@@ -3,6 +3,41 @@ import StudyCore
 @testable import StudyPersistence
 
 final class PlannerBackupRepositoryTests: XCTestCase {
+    func testListSummariesKeepEachBackupsDeletionMetadataAndLeaveContentsReadable() async throws {
+        for inMemory in [false, true] {
+            let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+            defer { try? FileManager.default.removeItem(at: directory) }
+            let repo = PlannerBackupRepository(inMemory: inMemory, directory: directory)
+            let date = Date(timeIntervalSince1970: 1_790_000_000)
+            var state = PlannerState()
+            let course = Course(name: "原课程名", totalMinutes: 60, startDate: date, deadline: date)
+            state.courses = [course]
+            let first = PlannerBackup(state: state, reason: "删除前", deletedCourseID: course.id, now: date)
+            try await repo.save(first)
+            state.courses[0].name = "新课程名"
+            state.courses.append(Course(name: "其他课程", totalMinutes: 30, startDate: date, deadline: date))
+            let second = PlannerBackup(state: state, reason: "后续快照", deletedCourseID: course.id, now: date.addingTimeInterval(1))
+            try await repo.save(second)
+            let entries = try await repo.entries()
+            XCTAssertEqual(entries.map(\.id), [second.id, first.id])
+            XCTAssertEqual(entries.map(\.reason), ["后续快照", "删除前"])
+            XCTAssertEqual(entries.map(\.courseCount), [2, 1])
+            XCTAssertEqual(entries.map(\.deletedCourseID), [course.id, course.id])
+            XCTAssertEqual(entries.map(\.deletedCourseName), ["新课程名", "原课程名"])
+            let loaded = try await repo.load(first.id)
+            XCTAssertEqual(loaded.state, first.state)
+            if !inMemory {
+                let mismatched = directory.appendingPathComponent(UUID().uuidString + ".json")
+                try PlannerBackupRepository.encode(first).write(to: mismatched)
+                let intact = try await repo.entries()
+                let unreadable = await repo.unreadableCount
+                XCTAssertEqual(intact.map(\.id), entries.map(\.id))
+                XCTAssertEqual(unreadable, 1)
+                XCTAssertTrue(FileManager.default.fileExists(atPath: mismatched.path), "Listing must not delete unreadable recovery files")
+            }
+        }
+    }
+
     func testRotationReopeningAndCorruptFileIsolation() async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }
