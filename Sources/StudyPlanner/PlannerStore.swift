@@ -39,7 +39,8 @@ final class PlannerStore {
     private var localEditRevision = 0
     @ObservationIgnored private var pendingCompressedPreview: CompressedSchedulePreview?
     private var repository: (any PlannerRepository)?
-    private var lastDay = Calendar.current.startOfDay(for: Date())
+    private var dayRollover = DayRolloverState(savedDay: Calendar.current.startOfDay(for: Date()))
+    @ObservationIgnored private(set) var dayRefreshTask: Task<Bool, Never>?
     private var reviewPrompted = false
     let demo: Bool
     let playbackSupervisor: PlaybackSupervisor
@@ -242,6 +243,7 @@ final class PlannerStore {
         } catch { errorMessage = "操作未保存：\(error.localizedDescription)" }
     }
     func waitForOrderSave() async -> Bool {
+        if let dayRefreshTask, !(await dayRefreshTask.value) { return false }
         while let task = orderSaveTask { if !(await task.value) { return false } }
         return true
     }
@@ -396,11 +398,25 @@ final class PlannerStore {
     var reviewTasks: [ScheduledTask] {
         state.confirmationCandidates(at: Date())
     }
-    func checkDay() {
-        guard isReady, !orderSaveBusy else { return }
-        let today = Calendar.current.startOfDay(for: Date())
-        if today != lastDay { lastDay = today; reviewPrompted = false; Task { await replan() } }
-        if !reviewTasks.isEmpty && !reviewPrompted { showDailyReview = true; reviewPrompted = true }
+    func checkDay(now: Date = Date(), uptime: @escaping @Sendable () -> TimeInterval = { ProcessInfo.processInfo.systemUptime }) {
+        guard isReady, !orderSaveBusy, dayRefreshTask == nil else { return }
+        let today = Calendar.current.startOfDay(for: now)
+        if dayRollover.isDue(day: today, uptime: uptime()) {
+            dayRefreshTask = Task { @MainActor in
+                defer { dayRefreshTask = nil }
+                let saved = await change(now: now, { _ in })
+                if saved {
+                    dayRollover.succeeded(day: today); reviewPrompted = false
+                    promptDailyReview(at: now)
+                } else { dayRollover.failed(day: today, uptime: uptime()) }
+                return saved
+            }
+        } else { promptDailyReview(at: now) }
+    }
+    private func promptDailyReview(at now: Date) {
+        if !state.confirmationCandidates(at: now).isEmpty && !reviewPrompted {
+            showDailyReview = true; reviewPrompted = true
+        }
     }
     func triggerAutomaticSync() {
         guard !demo, isReady, !syncBusy, syncLedger.permitsAutomatic(at: Date()), (try? PairingVault.load()) != nil else { return }

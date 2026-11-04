@@ -4,6 +4,34 @@ import StudyPersistence
 @testable import StudyPlanner
 
 final class BackgroundEditingTests: XCTestCase {
+    @MainActor func testFailedDayRefreshPreservesStateAndCanRetryAfterBackoff() async {
+        let original = fixture(), repository = Repository(), store = store(original, repository)
+        let tomorrow = Calendar.current.date(byAdding: .day, value: 1, to: Date())!
+        repository.fails = true
+        store.checkDay(now: tomorrow, uptime: { 100 })
+        // The same wait used by Quit must include a queued day refresh, even
+        // before that task has entered the ordinary save transaction.
+        let failed = await store.waitForOrderSave()
+        XCTAssertFalse(failed)
+        XCTAssertEqual(store.state, original); XCTAssertNil(repository.saved)
+        XCTAssertNotNil(store.errorMessage)
+        XCTAssertFalse(store.orderSaveBusy)
+
+        repository.fails = false
+        store.checkDay(now: tomorrow, uptime: { 399 })
+        XCTAssertNil(store.dayRefreshTask)
+        XCTAssertNil(repository.saved)
+        store.checkDay(now: tomorrow, uptime: { 400 })
+        let retried = await store.waitForOrderSave()
+        XCTAssertTrue(retried)
+        XCTAssertEqual(repository.saved, store.state)
+        XCTAssertNotNil(repository.saved)
+        XCTAssertNil(store.errorMessage)
+        repository.fails = true
+        store.checkDay(now: tomorrow, uptime: { 1000 })
+        XCTAssertNil(store.dayRefreshTask)
+        XCTAssertNil(store.errorMessage)
+    }
     @MainActor func testDeletionReviewRejectsNewProgressBeforeSavingOrRotatingBackup() async throws {
         let original = fixture(), course = original.courses[0]
         let review = CourseDeletionDraft(reviewed: course, state: original)

@@ -46,7 +46,7 @@ public class MainActivity extends Activity {
         if(ready&&!busy){
             LocalDate today=LocalDate.now(Planner.ZONE);
             if(dayRollover.due(today,SystemClock.elapsedRealtime())){
-                mutate(s->{},true,()->dayRollover.succeeded(today),error->{
+                mutate(s->{},true,()->{dayRollover.succeeded(today);reviewShown=false;},error->{
                     if(dayRollover.failed(today,SystemClock.elapsedRealtime()))
                         alert("日期更新未保存","原日程已保留，稍后会自动重试（至少间隔5分钟）。\n"+error.getMessage());
                 });

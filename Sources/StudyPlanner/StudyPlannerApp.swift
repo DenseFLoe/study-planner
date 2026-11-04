@@ -18,7 +18,7 @@ import UserNotifications
     }
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         store?.websiteUpdater.stop()
-        guard let store, store.orderSaveBusy else { return .terminateNow }
+        guard let store, store.orderSaveBusy || store.dayRefreshTask != nil else { return .terminateNow }
         Task {
             let saved = await store.waitForOrderSave()
             if !saved { store.websiteUpdater.start(store: store) }
