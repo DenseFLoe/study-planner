@@ -127,6 +127,7 @@ final class PlannerStore {
         if clearError { errorMessage = nil }
         let work = Task { @MainActor in
             defer { finishLocalSave() }
+            var attemptedStorage = false
             do {
                 let (plannedState, planned) = try await Task.detached(priority: .userInitiated) {
                     var value = next
@@ -141,6 +142,7 @@ final class PlannerStore {
                     await refreshBackups()
                 }
                 let saved: PlannerState
+                attemptedStorage = true
                 if let fixedEventEdit {
                     saved = try await repository.saveFixedEventForInteraction(fixedEventEdit,
                                                                              from: previous, now: now)
@@ -166,7 +168,10 @@ final class PlannerStore {
                 // A conflicting sync may already be on disk while the editor's
                 // displayed state is still old. Keep its draft and refresh only
                 // the store so explicit Reload can start from that latest data.
-                if lessonOrderDraft != nil, error is LessonOrderEditError,
+                let needsLatestState = (lessonOrderDraft != nil && error is LessonOrderEditError)
+                    || (attemptedStorage && (error is ConfirmationEditError
+                        || error is CourseEditError || error is FixedEventEditError))
+                if needsLatestState,
                    let latest = try? repository.load() {
                     let (assessment, load) = await Task.detached(priority: .userInitiated) {
                         (ScheduleEngine().assessSavedPlan(state: latest, now: now),

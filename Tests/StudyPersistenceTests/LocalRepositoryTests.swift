@@ -104,6 +104,39 @@ final class LocalRepositoryTests: XCTestCase {
         XCTAssertEqual(Set(try ledger.materialize().courses.map(\.name)), ["远端已编辑", "远端新增"])
     }
 
+    @MainActor func testFailedBackgroundSavesDiscardCachedRowsBeforeReload() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let url = directory.appendingPathComponent("conflict-refresh.store")
+        let local = try LocalRepository(url: url), day = Calendar.current.startOfDay(for: Date()).addingTimeInterval(86400)
+        var baseline = PlannerState()
+        baseline.courses = [Course(name: "原课程", totalMinutes: 60, startDate: day, deadline: day)]
+        baseline.fixedEvents = [.init(title: "原事项", startMinute: 540, endMinute: 600, startDate: day, endDate: day)]
+        try local.save(baseline)
+        _ = try local.load()
+        let remote = try LocalRepository(url: url)
+        var incoming = baseline; incoming.courses[0].name = "远端课程"
+        try remote.save(incoming)
+        var edited = baseline; edited.courses[0].name = "本地冲突名称"
+        do {
+            _ = try await local.saveChangesForInteraction(edited, from: baseline)
+            XCTFail("A stale conflicting course edit must be rejected")
+        } catch { XCTAssertTrue(error is CourseEditError) }
+        XCTAssertEqual(try local.load().courses, incoming.courses)
+
+        incoming.fixedEvents[0].title = "远端事项"
+        try remote.save(incoming)
+        var event = baseline.fixedEvents[0]; event.title = "本地冲突事项"
+        do {
+            _ = try await local.saveFixedEventForInteraction(.init(event: event, baseline: baseline.fixedEvents[0]),
+                                                             from: baseline, now: Date())
+            XCTFail("A stale conflicting event edit must be rejected")
+        } catch { XCTAssertTrue(error is FixedEventEditError) }
+        XCTAssertEqual(try local.load().fixedEvents, incoming.fixedEvents)
+        XCTAssertEqual(try LocalRepository(url: url).load().courses, incoming.courses)
+    }
+
     @MainActor func testBackgroundInteractionSaveMergesConfirmationWithRemoteAddition() async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)

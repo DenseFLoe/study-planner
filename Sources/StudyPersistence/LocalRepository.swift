@@ -187,12 +187,11 @@ public final class LocalRepository: PlannerRepository {
 
     @MainActor public func saveChangesForInteraction(_ state: PlannerState, from baseline: PlannerState) async throws -> PlannerState {
         let container = container, backup = migrationBackupURL, outbox = cloudOutboxURL
-        let merged = try await Task.detached(priority: .userInitiated) {
+        defer { discardCachedModels() }
+        return try await Task.detached(priority: .userInitiated) {
             let worker = LocalRepository(container: container, migrationBackupURL: backup, cloudOutboxURL: outbox)
             return try worker.saveChanges(state, from: baseline)
         }.value
-        discardCachedModels()
-        return merged
     }
 
     public func saveFixedEvent(_ edit: FixedEventEdit, now: Date = Date()) throws -> PlannerState {
@@ -244,12 +243,11 @@ public final class LocalRepository: PlannerRepository {
     @MainActor public func saveFixedEventForInteraction(_ edit: FixedEventEdit,
                                                        from baseline: PlannerState, now: Date) async throws -> PlannerState {
         let container = container, backup = migrationBackupURL, outbox = cloudOutboxURL
-        let saved = try await Task.detached(priority: .userInitiated) {
+        defer { discardCachedModels() }
+        return try await Task.detached(priority: .userInitiated) {
             let worker = LocalRepository(container: container, migrationBackupURL: backup, cloudOutboxURL: outbox)
             return try worker.saveFixedEvent(edit, now: now)
         }.value
-        discardCachedModels()
-        return saved
     }
 
     /// Background sync writes through a separate context on the same store.

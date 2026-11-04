@@ -4,6 +4,24 @@ import StudyPersistence
 @testable import StudyPlanner
 
 final class BackgroundEditingTests: XCTestCase {
+    @MainActor func testStorageConflictRefreshesLatestStateWithoutPublishingRejectedDraft() async {
+        let original = fixture()
+        var latest = original
+        latest.courses[0].notes = "另一端刚保存的备注"
+        let errors: [Error] = [ConfirmationEditError.changed, CourseEditError.conflictingChanges,
+                               FixedEventEditError.removalChanged]
+        for error in errors {
+            let repository = Repository()
+            repository.saved = latest; repository.rejection = error
+            let store = store(original, repository)
+            let saved = await store.change(replan: false) { $0.courses[0].name = "未保存的输入" }
+            XCTAssertFalse(saved)
+            XCTAssertEqual(repository.saved, latest)
+            XCTAssertEqual(store.state, latest)
+            XCTAssertFalse(store.orderSaveBusy)
+            XCTAssertTrue(store.errorMessage?.contains(error.localizedDescription) == true)
+        }
+    }
     @MainActor func testOccurrenceRestoreConflictIsVisibleWithoutLosingTheSkip() async {
         let day = Calendar.current.startOfDay(for: Date()).addingTimeInterval(86400)
         var event = FixedEvent(title: "待恢复", startMinute: 540, endMinute: 600, startDate: day, endDate: day)
@@ -50,11 +68,13 @@ final class BackgroundEditingTests: XCTestCase {
     private final class Repository: PlannerRepository {
         var saved: PlannerState?
         var fails = false
+        var rejection: Error?
         var holds = false
         @MainActor var resume: CheckedContinuation<Void, Never>?
         @MainActor var observer: CheckedContinuation<Void, Never>?
         func load() throws -> PlannerState { saved ?? PlannerState() }
         func save(_ state: PlannerState) throws {
+            if let rejection { throw rejection }
             if fails { throw CocoaError(.fileWriteUnknown) }
             saved = state
         }
