@@ -103,18 +103,18 @@ final class BackgroundEditingTests: XCTestCase {
         var replacement = original; replacement.courses[0].name = "备份中的名称"
         let backup = PlannerBackup(state: replacement, reason: "测试")
         repo.fails = true
-        let failed = await store.restoreBackup(backup)
+        let failed = await store.restoreBackup(backup, from: original)
         XCTAssertFalse(failed)
         XCTAssertEqual(store.state, original)
         repo.fails = false
-        let success = await store.restoreBackup(backup)
+        let success = await store.restoreBackup(backup, from: original)
         XCTAssertTrue(success)
         XCTAssertEqual(store.state, replacement)
         let entry = try XCTUnwrap(store.backupEntries.first)
         let before = try await store.backups.load(entry.id)
         XCTAssertEqual(before.state, original)
         var invalid = backup; invalid.format = 99
-        let rejected = await store.restoreBackup(invalid)
+        let rejected = await store.restoreBackup(invalid, from: replacement)
         XCTAssertFalse(rejected)
         XCTAssertEqual(store.state, replacement)
     }
@@ -131,6 +131,55 @@ final class BackgroundEditingTests: XCTestCase {
         XCTAssertNil(repo.saved)
     }
 
+    @MainActor func testStaleBackupReviewPreservesNewEditsAndRecoveryPoint() async throws {
+        let original = fixture(), repo = Repository()
+        let backups = PlannerBackupRepository(inMemory: true, limit: 1)
+        let store = store(original, repo, backups: backups)
+        let reviewed = store.state
+        var replacement = original; replacement.courses[0].name = "旧备份课程"
+        let backup = PlannerBackup(state: replacement, reason: "待恢复")
+        var edited = original.courses[0]; edited.notes = "核对备份期间收到的新备注"
+        let editSaved = await store.saveCourse(edited)
+        XCTAssertTrue(editSaved)
+        let current = store.state, saved = repo.saved
+        let entries = try await backups.entries()
+
+        let restored = await store.restoreBackup(backup, from: reviewed)
+
+        XCTAssertFalse(restored)
+        XCTAssertEqual(store.state, current)
+        XCTAssertEqual(repo.saved, saved)
+        XCTAssertFalse(store.orderSaveBusy)
+        XCTAssertTrue(store.errorMessage?.contains("核对备份期间") == true)
+        let after = try await backups.entries()
+        XCTAssertEqual(after.map(\.id), entries.map(\.id), "Rejected restore must not replace the earlier recovery point")
+        let freshReview = store.state
+        let retried = await store.restoreBackup(backup, from: freshReview)
+        XCTAssertTrue(retried)
+        XCTAssertEqual(store.state, replacement)
+        let recovery = try XCTUnwrap(store.backupEntries.first)
+        let beforeRestore = try await backups.load(recovery.id)
+        XCTAssertEqual(beforeRestore.state, current)
+    }
+
+    @MainActor func testStaleBackupReviewDoesNotEraseNewConfirmation() async throws {
+        let original = fixture(), repo = Repository()
+        let store = store(original, repo)
+        let reviewed = store.state
+        let task = try XCTUnwrap(original.tasks.first)
+        let confirmed = await store.change(replan: false) { state in
+            try state.confirm(taskID: task.id, actualMinutes: 20, now: task.end)
+        }
+        XCTAssertTrue(confirmed)
+        let records = store.state.completions
+
+        let restored = await store.restoreBackup(PlannerBackup(state: original, reason: "旧备份"), from: reviewed)
+
+        XCTAssertFalse(restored)
+        XCTAssertEqual(store.state.completions, records)
+        XCTAssertEqual(repo.saved?.completions, records)
+    }
+
     @MainActor func testInvalidRestorePreservesTheOnlyOlderRecoveryPoint() async throws {
         let original = fixture(), repo = Repository()
         let backups = PlannerBackupRepository(inMemory: true, limit: 1)
@@ -142,7 +191,7 @@ final class BackgroundEditingTests: XCTestCase {
         var invalid = PlannerBackup(state: original, reason: "不支持的备份")
         invalid.format = 99
 
-        let saved = await store.restoreBackup(invalid)
+        let saved = await store.restoreBackup(invalid, from: original)
 
         XCTAssertFalse(saved)
         XCTAssertEqual(store.state, original)

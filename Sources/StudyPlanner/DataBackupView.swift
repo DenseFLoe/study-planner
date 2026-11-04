@@ -7,6 +7,7 @@ import StudyPersistence
 struct DataBackupView: View {
     @Bindable var store: PlannerStore
     @State private var candidate: PlannerBackup?
+    @State private var reviewedState: PlannerState?
     @State private var confirmingRestore = false
     @State private var working = false
     @State private var message: String?
@@ -42,7 +43,11 @@ struct DataBackupView: View {
                     }
                     Button("恢复全部…") {
                         Task {
-                            do { candidate = try await store.backups.load(entry.id); confirmingRestore = true }
+                            do {
+                                candidate = try await store.backups.load(entry.id)
+                                reviewedState = store.state
+                                confirmingRestore = true
+                            }
                             catch { message = "无法读取备份，当前数据未改动。" }
                         }
                     }
@@ -51,16 +56,17 @@ struct DataBackupView: View {
         }
         .confirmationDialog("恢复这份备份？", isPresented: $confirmingRestore, titleVisibility: .visible) {
             Button("备份当前数据并恢复", role: .destructive) {
-                guard let candidate else { return }
+                guard let candidate, let reviewedState else { return }
                 Task {
-                    if await store.restoreBackup(candidate) { message = "已恢复备份。恢复前的数据也已保留在列表中。" }
+                    if await store.restoreBackup(candidate, from: reviewedState) { message = "已恢复备份。恢复前的数据也已保留在列表中。" }
                     self.candidate = nil
+                    self.reviewedState = nil
                 }
             }
-            Button("取消", role: .cancel) { candidate = nil }
+            Button("取消", role: .cancel) { candidate = nil; reviewedState = nil }
         } message: {
             if let candidate {
-                Text("备份时间：\(candidate.createdAt.formatted())\n包含 \(candidate.state.courses.count) 门课程、\(candidate.state.completions.count) 条学习记录。将替换当前日程；开启云同步时也会同步此改动。")
+                Text("备份时间：\(candidate.createdAt.formatted())\n包含 \(candidate.state.courses.count) 门课程、\(candidate.state.completions.count) 条学习记录。\n当前日程：\(reviewedState?.courses.count ?? 0) 门课程、\(reviewedState?.completions.count ?? 0) 条学习记录。\n将替换当前日程；开启云同步时也会同步此改动。")
             }
         }
         .task { await store.refreshBackups() }
@@ -100,6 +106,7 @@ struct DataBackupView: View {
                     defer { if access { url.stopAccessingSecurityScopedResource() } }
                     return try PlannerBackupRepository.read(url)
                 }.value
+                reviewedState = store.state
                 confirmingRestore = true
             } catch { message = "备份无法读取或格式不受支持，当前数据未改动。" }
         }

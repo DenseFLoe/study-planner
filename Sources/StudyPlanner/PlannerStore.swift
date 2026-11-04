@@ -348,8 +348,12 @@ final class PlannerStore {
         orderSaveTask = work
         _ = await work.value
     }
-    func restoreBackup(_ backup: PlannerBackup) async -> Bool {
+    func restoreBackup(_ backup: PlannerBackup, from reviewedState: PlannerState) async -> Bool {
         guard !syncBusy, !orderSaveBusy else { errorMessage = "请等待当前保存或同步完成后再恢复。"; return false }
+        guard state == reviewedState else {
+            errorMessage = "日程在核对备份期间已有更新，未执行恢复。请重新选择备份并核对最新记录。"
+            return false
+        }
         return await commit(backup.state, replan: false, backupReason: "恢复备份前") { state in
             _ = try backup.validated()
             return ScheduleEngine().assessSavedPlan(state: state, now: Date())
