@@ -36,10 +36,20 @@ final class PlannerFeatures {
   JSONArray adjustments=ScheduleHealth.array(app.state,"androidAdjustments");for(int i=0;i<adjustments.length();i++)details.append("\n").append(adjustments.getString(i));
   app.alert("补回安排与每日负担",details.toString());
  }
+ void showStatisticsWeek(LocalDate date){
+  if(app.busy||!app.ready||app.isDestroyed())return;
+  app.selected=date;app.month=date.withDayOfMonth(1);app.render();
+ }
  void weekly(){
   WeeklyStudyStats stats=WeeklyStudyStats.calculate(app.state,app.selected);long max=1;
   for(int day=0;day<7;day++)max=Math.max(max,stats.studied(day));
   LinearLayout box=app.card(app.body);box.addView(app.title("周学习统计"));
+  LocalDate selected=app.selected;PlannerUi.Flow actions=new PlannerUi.Flow(app);box.addView(actions);
+  actions.addView(app.pill("上一周",()->showStatisticsWeek(selected.minusWeeks(1))));
+  actions.addView(app.pill("本周",()->showStatisticsWeek(LocalDate.now(Planner.ZONE))));
+  actions.addView(app.pill("下一周",()->showStatisticsWeek(selected.plusWeeks(1))));
+  String range=stats.monday+" 至 "+stats.monday.plusDays(6);
+  actions.addView(app.pill("复制本周统计",()->app.copyPlainText("学习日程 · 周统计 · "+range,"正在整理周统计…","已复制 "+range+" 的周统计",()->WeeklyStudyText.make(stats))));
   box.addView(app.text(stats.monday+" 至 "+stats.monday.plusDays(6)+"\n实际已学 "+app.hours(stats.studiedMinutes)+" · 课表计划 "+app.hours(stats.plannedMinutes),14,app.ink));
   box.addView(app.text("色条表示实际已学，按确认时填写的学习日期统计；计划按当前课表的原定日期统计。",12,app.muted));
   for(int day=0;day<7;day++){

@@ -287,23 +287,26 @@ public class MainActivity extends Activity {
         picker.setTitle("跳到日期");picker.show();
     }
     void copyDayAgenda(){
-        if(busy||!ready)return;
         JSONObject snapshot=state;LocalDate date=selected;
-        busy=true;ProgressDialog progress=ProgressDialog.show(this,"","正在整理当天安排…",true,false);
+        copyPlainText("学习日程 · "+date,"正在整理当天安排…","已复制 "+date+" 的安排",()->DayAgendaText.make(snapshot,date));
+    }
+    void copyPlainText(String label,String progressMessage,String successMessage,Callable<String> makeText){
+        if(isDestroyed()||busy||!ready)return;
+        busy=true;ProgressDialog progress=ProgressDialog.show(this,"",progressMessage,true,false);
         worker.execute(()->{try{
-            String text=DayAgendaText.make(snapshot,date);
+            String text=makeText.call();
             runOnUiThread(()->{
                 busy=false;progress.dismiss();if(isDestroyed())return;
                 try{
                     android.content.ClipboardManager clipboard=(android.content.ClipboardManager)getSystemService(CLIPBOARD_SERVICE);
-                    clipboard.setPrimaryClip(ClipData.newPlainText("学习日程 · "+date,text));
-                    Toast.makeText(this,"已复制 "+date+" 的安排",Toast.LENGTH_SHORT).show();
+                    clipboard.setPrimaryClip(ClipData.newPlainText(label,text));
+                    Toast.makeText(this,successMessage,Toast.LENGTH_SHORT).show();
                 }catch(Exception error){alert("无法复制",error.getMessage());}
                 resumeSyncRefresh();
             });
         }catch(Exception error){runOnUiThread(()->{
             busy=false;progress.dismiss();if(isDestroyed())return;
-            alert("无法整理安排",error.getMessage());resumeSyncRefresh();
+            alert("无法整理文字",error.getMessage());resumeSyncRefresh();
         });}});
     }
     void calendar()throws Exception{
