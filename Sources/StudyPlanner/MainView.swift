@@ -1371,51 +1371,6 @@ private struct CompletedTaskRow: View {
     }
 }
 
-struct WeeklyBarSegment: Identifiable, Equatable {
-    let dayIndex: Int
-    let dayLabel: String
-    let courseID: UUID
-    let courseName: String
-    let minutes: Int
-    var id: String { "\(dayIndex)-\(courseID.uuidString)" }
-}
-
-/// Swift Charts traps unless the foreground-style scale domain covers every
-/// value present in the data. Truncating the domain to a fixed legend size
-/// crashed the app as soon as a fifth course had work in the same week, so the
-/// domain is always derived from the full data set.
-enum WeeklyChartSeries {
-    static func ids(in segments: [WeeklyBarSegment]) -> [UUID] {
-        var seen = Set<UUID>()
-        return segments.map(\.courseID).filter { seen.insert($0).inserted }
-    }
-
-    static func segments(tasks: [ScheduledTask], courses: [Course], weekStart: Date,
-                         calendar: Calendar) -> [WeeklyBarSegment] {
-        let end = calendar.date(byAdding: .day, value: 7, to: weekStart)!
-        let byID = Dictionary(uniqueKeysWithValues: courses.map { ($0.id, $0) })
-        var grouped: [Int: [UUID: Int]] = [:]
-        for task in tasks where task.start >= weekStart && task.start < end {
-            guard byID[task.courseID] != nil else { continue }
-            let day = calendar.dateComponents([.day], from: weekStart,
-                                              to: calendar.startOfDay(for: task.start)).day ?? 0
-            guard (0..<7).contains(day) else { continue }
-            grouped[day, default: [:]][task.courseID, default: 0] += task.durationMinutes
-        }
-        let dayNames = ["周一", "周二", "周三", "周四", "周五", "周六", "周日"]
-        return grouped.flatMap { day, totals in
-            totals.map { id, minutes in
-                WeeklyBarSegment(dayIndex: day, dayLabel: dayNames[day], courseID: id,
-                                 courseName: byID[id]!.name, minutes: minutes)
-            }
-        }.sorted {
-            if $0.dayIndex != $1.dayIndex { return $0.dayIndex < $1.dayIndex }
-            if $0.courseName != $1.courseName { return $0.courseName < $1.courseName }
-            return $0.courseID.uuidString < $1.courseID.uuidString
-        }
-    }
-}
-
 private struct WeeklyStudyChart: View {
     var selectedDay: Date
     var tasks: [ScheduledTask]
@@ -1431,27 +1386,28 @@ private struct WeeklyStudyChart: View {
         return calendar.date(byAdding: .day, value: -offset, to: day)!
     }
 
-    private var segments: [WeeklyBarSegment] {
-        WeeklyChartSeries.segments(tasks: tasks, courses: courses, weekStart: weekStart, calendar: calendar)
+    private var summary: WeeklyChartSeries.Summary {
+        WeeklyChartSeries.summary(tasks: tasks, courses: courses, weekStart: weekStart, calendar: calendar)
     }
 
     var body: some View {
         // Each aggregation runs once per render, rather than once per chart/legend property.
-        let segments = self.segments
+        let summary = self.summary, segments = summary.segments
         let seriesIDs = WeeklyChartSeries.ids(in: segments)
-        let seriesColors = seriesIDs.map { id in
-            courseColor(courses.first { $0.id == id }?.color ?? "blue")
-        }
-        let legendCourses = seriesIDs.compactMap { id in courses.first { $0.id == id } }
-        let totalMinutes = segments.reduce(0) { $0 + $1.minutes }
+        let coursesByID = Dictionary(courses.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        let seriesColors = seriesIDs.map { id in courseColor(coursesByID[id]?.color ?? "blue") }
+        let legendCourses = seriesIDs.compactMap { coursesByID[$0] }
         VStack(alignment: .leading, spacing: 16) {
-            PlannerSectionTitle(title: "周计划时长", detail: "合计 \(hours(totalMinutes))")
+            PlannerSectionTitle(title: "周计划时长", detail: summary.totalMinutes.map { "合计 \(hours($0))" } ?? "合计超出范围")
             Text("\(weekStart.formatted(.dateTime.month().day()))–\(calendar.date(byAdding: .day, value: 6, to: weekStart)!.formatted(.dateTime.month().day())) · 含已确认任务的原计划")
                 .font(.caption).foregroundStyle(.secondary)
             Text("这里统计计划时长；实际学习按学习日期计入“实际已学”。")
                 .font(.caption2).foregroundStyle(.secondary)
 
-            if segments.isEmpty {
+            if summary.totalMinutes == nil {
+                Label("本周计划时长无法合计，请核对任务时长；原记录已保留。", systemImage: "exclamationmark.triangle")
+                    .font(.callout).foregroundStyle(.secondary)
+            } else if segments.isEmpty {
                 VStack(spacing: 10) {
                     Image(systemName: "chart.bar.xaxis")
                         .font(.system(size: 28, weight: .light))

@@ -1,6 +1,5 @@
 import XCTest
 import StudyCore
-@testable import StudyPlanner
 
 final class WeeklyChartSeriesTests: XCTestCase {
     private var calendar: Calendar {
