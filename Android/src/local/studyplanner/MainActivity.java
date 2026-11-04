@@ -25,6 +25,7 @@ public class MainActivity extends Activity {
     SettingsDraft settingsDraft;
     Checked captureSettingsDraft;
     String restoredSettingsDraft;
+    Intent pendingCourseResult;
     LinearLayout syncProgress;
     DeferredRefresh<SyncRead> syncRefresh;
     static final class SyncRead {
@@ -40,10 +41,10 @@ public class MainActivity extends Activity {
     final Runnable ticker=new Runnable(){public void run(){if(ready&&!busy){LocalDate today=LocalDate.now(Planner.ZONE);if(!today.equals(lastDay)){lastDay=today;mutate(s->{},true,null);}else showReviewNotice();}handler.postDelayed(this,30000);}};
     interface Change{void run(JSONObject s)throws Exception;}
     interface Checked{void run()throws Exception;}
-    @Override public void onCreate(Bundle b){super.onCreate(b);getWindow().setStatusBarColor(bg);getWindow().setNavigationBarColor(Color.WHITE);getWindow().getDecorView().setSystemUiVisibility(View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR|View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR);storage=new AtomicFile(new File(getFilesDir(),"planner-v1.json"));if(b!=null){restoredSettingsDraft=b.getString("studySettingsDraft");selected=LocalDate.parse(b.getString("selected",selected.toString()));month=selected.withDayOfMonth(1);page=b.getInt("page",0);settingsSection=b.getString("settingsSection","");calendarExpanded=b.getBoolean("calendarExpanded",false);month=LocalDate.parse(b.getString("month",month.toString()));}PlannerRuntime runtime=PlannerRuntime.get(this);database=runtime.database;worker=runtime.worker;
+    @Override public void onCreate(Bundle b){super.onCreate(b);getWindow().setStatusBarColor(bg);getWindow().setNavigationBarColor(Color.WHITE);getWindow().getDecorView().setSystemUiVisibility(View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR|View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR);storage=new AtomicFile(new File(getFilesDir(),"planner-v1.json"));if(b!=null){pendingCourseResult=b.getParcelable("pendingCourseResult");restoredSettingsDraft=b.getString("studySettingsDraft");selected=LocalDate.parse(b.getString("selected",selected.toString()));month=selected.withDayOfMonth(1);page=b.getInt("page",0);settingsSection=b.getString("settingsSection","");calendarExpanded=b.getBoolean("calendarExpanded",false);month=LocalDate.parse(b.getString("month",month.toString()));}PlannerRuntime runtime=PlannerRuntime.get(this);database=runtime.database;worker=runtime.worker;
         syncRefresh=new DeferredRefresh<>(worker,this::runOnUiThread,()->ready&&!busy&&!isDestroyed(),
             ()->{JSONObject latest=database.load();Planner.refreshDiagnostics(latest,Planner.now());return new SyncRead(latest,syncSummary(database.metadata()));},
-            latest->{state=latest.state;syncSummary=latest.summary;render();},
+            latest->{state=latest.state;syncSummary=latest.summary;render();resumeCourseResult();},
             error->{syncStatus="读取同步结果失败："+error.getMessage();updateSyncLabel();},this::updateSyncProgress);
 
         consequences=new DailyConsequenceController(this);
@@ -67,6 +68,7 @@ public class MainActivity extends Activity {
 
     @Override public void onSaveInstanceState(Bundle b){
         super.onSaveInstanceState(b);
+        if(pendingCourseResult!=null)b.putParcelable("pendingCourseResult",pendingCourseResult);
         try{
             if(captureSettingsDraft!=null)captureSettingsDraft.run();
             if(settingsDraft!=null&&settingsDraft.isDirty())b.putString("studySettingsDraft",settingsDraft.snapshot().toString());
@@ -116,7 +118,40 @@ public class MainActivity extends Activity {
             }});
         });
     }
-    void receiveCourses(Intent data)throws Exception{String courseID=data.getStringExtra("courseID");if(courseID!=null){JSONObject course=Planner.course(state,courseID);if(course==null)throw new Exception("该课程已删除。");page=1;render();courseEditor(course);return;}String path=data.getStringExtra("captureFile");if(path==null)throw new Exception("导入结果缺失");File file=new File(path).getCanonicalFile();if(!file.getParentFile().equals(getCacheDir().getCanonicalFile())||!file.getName().matches("course-import-[A-Fa-f0-9-]+\\.json")||file.length()>25000000)throw new Exception("导入结果无效");JSONObject captured;try{captured=new JSONObject(read(new FileInputStream(file)));}finally{file.delete();}List<JSONObject> snapshots=Planner.list(captured.getJSONArray("snapshots"));double deadline=captured.getDouble("deadline");mutate(s->WebCourseImport.save(s,snapshots,deadline,Planner.now()),true,null);}
+    void resumeCourseResult(){
+        if(!ready||busy||isDestroyed()||pendingCourseResult==null)return;
+        Intent data=pendingCourseResult;pendingCourseResult=null;run(()->receiveCourses(data));
+    }
+    void receiveCourses(Intent data)throws Exception{
+        if(!ready||busy){pendingCourseResult=new Intent(data);return;}
+        String courseID=data.getStringExtra("courseID");
+        if(courseID!=null){JSONObject course=Planner.course(state,courseID);if(course==null)throw new Exception("该课程已删除。");page=1;render();courseEditor(course);return;}
+        String path=data.getStringExtra("captureFile");if(path==null)throw new Exception("导入结果缺失");
+        CourseImportReceipt receipt=new CourseImportReceipt(getCacheDir(),path);
+        busy=true;ProgressDialog progress=ProgressDialog.show(this,"","正在读取并保存课程…",true,false);
+        worker.execute(()->{try{
+            CourseImportReceipt.Result saved=receipt.commit(database,Planner::now);
+            runOnUiThread(()->{busy=false;progress.dismiss();if(isDestroyed())return;
+                state=saved.state;page=1;render();if(!saved.removed)alert("课程已导入","课程已保存，但临时导入文件未能清理。请勿重复导入同一份旧结果。");resumeSyncRefresh();
+            });
+        }catch(Exception error){boolean retained=receipt.exists();runOnUiThread(()->{busy=false;progress.dismiss();if(isDestroyed())return;
+            AlertDialog.Builder notice=new AlertDialog.Builder(this).setTitle("导入未保存").setMessage(error.getMessage()+(retained?"\n抓取结果仍保留，可重试，也可稍后从课程页继续未完成导入。":"\n没有可重试的临时文件，请重新抓取课程。")).setNegativeButton("关闭",null);
+            if(retained)notice.setPositiveButton("重试导入",(d,w)->run(()->receiveCourses(data)));notice.show();refreshSyncData();
+        });}});
+    }
+    void pendingCourseImports(){
+        if(busy||!ready)return;busy=true;
+        worker.execute(()->{List<File> files=CourseImportReceipt.pending(getCacheDir());runOnUiThread(()->{
+            busy=false;if(isDestroyed())return;
+            if(files.isEmpty())alert("未完成的导入","没有待继续的抓取结果。临时文件可能被系统清理；如有需要，请重新抓取课程。");
+            else{
+                String[] labels=new String[files.size()];java.text.SimpleDateFormat format=new java.text.SimpleDateFormat("yyyy-MM-dd HH:mm",Locale.CHINA);format.setTimeZone(java.util.TimeZone.getTimeZone(Planner.ZONE));
+                for(int i=0;i<labels.length;i++)labels[i]=format.format(new java.util.Date(files.get(i).lastModified()))+" · "+files.get(i).length()/1024+" KB";
+                new AlertDialog.Builder(this).setTitle("选择未完成的导入").setItems(labels,(d,index)->run(()->receiveCourses(new Intent().putExtra("captureFile",files.get(index).getAbsolutePath())))).setNegativeButton("取消",null).show();
+            }
+            resumeSyncRefresh();
+        });});
+    }
     int dp(int n){return (int)(n*getResources().getDisplayMetrics().density+.5f);}
     LinearLayout col(){LinearLayout v=new LinearLayout(this);v.setOrientation(1);return v;}
     LinearLayout row(){LinearLayout v=new LinearLayout(this);v.setOrientation(0);v.setGravity(Gravity.CENTER_VERTICAL);return v;}
@@ -399,7 +434,7 @@ public class MainActivity extends Activity {
     final BroadcastReceiver syncReceiver=new BroadcastReceiver(){public void onReceive(Context c,Intent i){if(CloudSync.ACTION.equals(i.getAction())){if(cloudLabel!=null)cloudLabel.setText(CloudSync.summary(c));refreshSyncData();return;}syncStatus=SyncWindowService.lastStatus;updateSyncLabel();updateSyncProgress();if(i.getBooleanExtra("changed",false))refreshSyncData();}};
     void updateSyncProgress(){if(syncProgress!=null)syncProgress.setVisibility(CloudSync.get(this).isRunning()||(syncRefresh!=null&&syncRefresh.isRunning())||SyncWindowService.transferring()?View.VISIBLE:View.GONE);}
     void refreshSyncData(){if(syncRefresh!=null)syncRefresh.request();updateSyncProgress();}
-    void resumeSyncRefresh(){if(syncRefresh!=null)syncRefresh.resume();}
+    void resumeSyncRefresh(){resumeCourseResult();if(syncRefresh!=null)syncRefresh.resume();}
 
 
     static String syncSummary(JSONObject ledger){double time=ledger.optDouble("lastSuccess",0);return "今日自动同步："+(LocalDate.now(Planner.ZONE).toString().equals(ledger.optString("lastAutoDate"))?"已完成":"尚未完成")+"\n最后同步："+(time>0?Instant.ofEpochSecond((long)time).atZone(Planner.ZONE).format(java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm")):"尚无");}

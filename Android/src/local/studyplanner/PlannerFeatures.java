@@ -88,7 +88,7 @@ final class PlannerFeatures {
   });
   dialog.setOnDismissListener(d->{controller.close();if(pending[0]!=null)app.handler.removeCallbacks(pending[0]);});dialog.show();
  }
- void coursesHeader(PlannerUi.Flow actions){actions.addView(app.button("合并课程",this::merge));actions.addView(app.button("从网站抓取全部课程",()->app.startActivityForResult(new Intent(app,CourseImportActivity.class).putExtra("mode","website"),MainActivity.IMPORT_COURSES)));actions.addView(app.button("从夸克网盘分享导入",()->app.startActivityForResult(new Intent(app,CourseImportActivity.class).putExtra("mode","netdisk"),MainActivity.IMPORT_COURSES)));}
+ void coursesHeader(PlannerUi.Flow actions){actions.addView(app.button("继续未完成导入",app::pendingCourseImports));actions.addView(app.button("合并课程",this::merge));actions.addView(app.button("从网站抓取全部课程",()->app.startActivityForResult(new Intent(app,CourseImportActivity.class).putExtra("mode","website"),MainActivity.IMPORT_COURSES)));actions.addView(app.button("从夸克网盘分享导入",()->app.startActivityForResult(new Intent(app,CourseImportActivity.class).putExtra("mode","netdisk"),MainActivity.IMPORT_COURSES)));}
  static final double[] DAILY_WEIGHTS={1,1.5,2,3};
  static final String[] DAILY_WEIGHT_NAMES={"标准","多学50%（1.5倍）","多学一倍（2倍）","多学两倍（3倍）"};
  static int dailyWeightIndex(double weight){int best=0;for(int i=1;i<DAILY_WEIGHTS.length;i++)if(Math.abs(weight-DAILY_WEIGHTS[i])<Math.abs(weight-DAILY_WEIGHTS[best]))best=i;return best;}
