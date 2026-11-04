@@ -201,6 +201,8 @@ Mac 普通保存的排课、数据库写入和学习负担计算在后台完成�
 
 新增 `bash Scripts/test-ci.sh` 统一运行服务端、Swift、Android 及跨语言往返测试，自动准备并校验 JSON-java 依赖。GitHub Actions 在提交和拉取请求时执行同一入口，不上传构建产物。需要真实手机、SSH 服务器或真实网站的测试仍须单独准备环境，不代表真机验收。
 
+`Android/test.sh` 还在 256 MiB 堆下运行 300 组固定种子的合成排程与同步检查，覆盖固定/浮动事项冲突、排不下、历史记录、跨日及可学习时段边界；失败会输出场景编号和临时复现文件。运行后可执行 `java -Xmx512m -cp Android/tools/json.jar:Android/build/tests local.studyplanner.SyncScheduleStressTests --large`，追加 32 门和 128 门课程、240 天范围的大计划及同步记录往返检查。这两种运行都设有 110 秒总时限，输出实际任务数和耗时，不读取正式日程。
+
 真实网站诊断 `TempSiteForensics` 默认跳过，避免普通测试依赖公网和网站状态。需要手动排查时运行 `STUDYPLANNER_LIVE_SITE_FORENSICS=1 ./Scripts/test.sh --filter TempSiteForensics`；该诊断会访问学丞网站并输出响应摘要。
 
 单元测试覆盖均摊、漏学守恒、提前完成、部分完成、重复确认、历史保护、正在进行的任务、固定冲突、每周重复、跨课程截止压力、开始日容量、碎片修复、30 分钟块、最终余量、无可用日、设置修改、每日确认、课程归档与磁盘重开。还包含 40 组多课程生成场景的时间不重叠和学习量守恒检查，以及 1000 小时不可完成负载的响应时间检查。

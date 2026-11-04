@@ -14,6 +14,26 @@ enum FloatingPlacement {
             let b = $1.endMinute - $1.startMinute - $1.occupiedMinutes
             return a != b ? a < b : $0.id.uuidString < $1.id.uuidString
         }
+        if floating.isEmpty { return [:] }
+        // Every occupied minute must fit in the union of floating windows,
+        // outside exact blocks. This is only a necessary nominal bound; callers
+        // that support elapsed calendar time can still try their actual search.
+        var required = 0, coverage = [Int](repeating: 0, count: 1441)
+        var lower = 1440, upper = 0
+        for event in floating {
+            guard event.occupiedMinutes <= 1440 - required else { return nil }
+            required += event.occupiedMinutes
+            coverage[event.startMinute] += 1
+            coverage[event.endMinute] -= 1
+            lower = min(lower, event.startMinute)
+            upper = max(upper, event.endMinute)
+        }
+        var available = 0, depth = 0
+        for minute in lower..<upper {
+            depth += coverage[minute]
+            if depth > 0 && !busy[minute] { available += 1 }
+        }
+        guard required <= available else { return nil }
         // Prefer complete placements with the least overlap with study availability.
         // Search jointly: choosing a cheap position for one event can block another.
         var prefix = [Int](repeating: 0, count: 1441)

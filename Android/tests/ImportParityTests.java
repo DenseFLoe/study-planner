@@ -34,6 +34,40 @@ public final class ImportParityTests {
  static JSONObject snapshotFor(double date,String... lessonIDs)throws Exception{JSONArray lessons=new JSONArray();for(String id:lessonIDs)lessons.put(lesson(id,3600,0));return snapshot(0,0,date).put("lessons",lessons);}
  static String lessonMinutes(List<Planner.Work> work){StringBuilder text=new StringBuilder();for(Planner.Work w:work){if(text.length()>0)text.append(",");text.append(w.minutes);}return text.toString();}
  static String completionMinutes(JSONObject state)throws Exception{StringBuilder text=new StringBuilder();for(JSONObject record:Planner.list(state.getJSONArray("completions"))){if(text.length()>0)text.append(",");text.append(record.getInt("minutes"));}return text.toString();}
+ static JSONObject identityFixture(int minutes)throws Exception{
+  JSONObject state=PlannerTests.empty();WebCourseImport.save(state,Collections.singletonList(snapshotFor(now,"first","second")),deadline,now);
+  JSONObject task=Planner.task(state.getJSONArray("courses").getJSONObject(0).getString("id"),now,30).put("lessonID","first");
+  state.getJSONArray("tasks").put(task);Planner.confirm(state,task.getString("id"),minutes,now+1);return state;
+ }
+ static void refreshRequiresConfirmedLessonIdentity()throws Exception{
+  for(String change:new String[]{"missing","unpublished","untimed"})for(double offset:new double[]{0,2}){
+   JSONObject state=identityFixture(30),fresh=snapshotFor(now+offset,"first","second");String before=state.toString();
+   if(change.equals("missing"))fresh.getJSONArray("lessons").remove(0);
+   else fresh.getJSONArray("lessons").getJSONObject(0).put(change.equals("unpublished")?"published":"requiresDuration",false);
+   try{WebCourseImport.save(state,Collections.singletonList(fresh),deadline,now+2);throw new AssertionError("Refresh reassigned confirmed lesson progress after "+change);}
+   catch(IllegalArgumentException expected){check(state.toString().equals(before),"Lost lesson rejection mutated state");}
+   check(lessonMinutes(Planner.lessonWorkAll(state,state.getJSONArray("courses").getJSONObject(0))).equals("30,60"),"Rejected refresh changed untouched lesson progress");
+  }
+  JSONObject state=identityFixture(30),other=snapshotFor(now,"first","second").put("packageID","other");
+  WebCourseImport.save(state,Collections.singletonList(other),deadline,now);String before=state.toString();other.getJSONArray("lessons").getJSONObject(0).put("watchedPercent",50);
+  try{WebCourseImport.save(state,Arrays.asList(other,snapshotFor(now+2,"second")),deadline,now+2);throw new AssertionError("Lost lesson batch accepted");}
+  catch(IllegalArgumentException expected){check(state.toString().equals(before),"Lost lesson rejection partially imported another package");}
+ }
+ static void refreshAllowsExplicitDeletionAndLegacyHistory()throws Exception{
+  for(String history:new String[]{"none","missed","legacy"}){
+   JSONObject state=identityFixture(history.equals("missed")?0:30);
+   if(history.equals("none"))state.put("tasks",new JSONArray()).put("completions",new JSONArray());
+   if(history.equals("legacy"))state.getJSONArray("tasks").getJSONObject(0).remove("lessonID");
+   WebCourseImport.save(state,Collections.singletonList(snapshotFor(now+2,"second")),deadline,now+2);
+   check(lessonMinutes(Planner.lessonWorkAll(state,state.getJSONArray("courses").getJSONObject(0))).equals(history.equals("legacy")?"30":"60"),"Refresh changed unconfirmed or legacy compatibility");
+  }
+  JSONObject state=identityFixture(30);CourseTools.removeLessons(state,state.getJSONArray("courses").getJSONObject(0).getString("id"),Collections.singleton("first"));
+  WebCourseImport.save(state,Collections.singletonList(snapshotFor(now+2,"first","second")),deadline,now+2);
+  JSONObject course=state.getJSONArray("courses").getJSONObject(0);
+  check(CourseTools.order(course).equals(Collections.singletonList("second")),"Refresh restored explicitly deleted lesson");
+  check(lessonMinutes(Planner.lessonWorkAll(state,course)).equals("60"),"Explicit deletion transferred progress to remaining lesson");
+  check(state.getJSONArray("tasks").length()==0&&state.getJSONArray("completions").length()==0,"Explicit deletion retained removed history");
+ }
  /** Repeated/offline history must never complete untouched lessons, and the original records stay intact. */
  static void repeatedLessonHistoryNeverCompletesUntouchedLessons()throws Exception{
   JSONObject value=snapshotFor(now,"untouched","repeated","later"),state=PlannerTests.empty();
@@ -66,5 +100,5 @@ public final class ImportParityTests {
   Planner.undoConfirmation(state,state.getJSONArray("tasks").getJSONObject(1).getString("id"),now+2);
   check(Planner.remaining(state,Planner.course(state,id))==60,"Undo did not restore exactly the confirmed lesson");
  }
- public static void main(String[] args)throws Exception{refresh();generic();netdisk();seriesAndExisting();websitePages();repeatedLessonHistoryNeverCompletesUntouchedLessons();confirmingAnotherTaskForFinishedLessonAddsNoProgress();System.out.println("ImportParityTests: "+checks+" checks passed");if(args.length>0){JSONObject state=PlannerTests.empty();state.getJSONObject("settings").put("availability",StudySettingsTests.windows(480,1320)).put("actualStudyStart",now);WebCourseImport.save(state,Collections.singletonList(snapshot(50,0,now)),deadline,now);List<JSONObject> net=NetdiskImport.build(scan(new JSONArray().put(folder("视频课程")).put(video("视频课程","a","第一讲",600.0)).put(video("视频课程","b","第二讲",600.0)).put(video("视频课程","c","第三讲",600.0))));WebCourseImport.save(state,net,deadline,now);for(JSONObject course:Planner.list(state.getJSONArray("courses")))course.put("deadline",Planner.at(day,0));Planner.replan(state,now);List<JSONObject> tasks=new ArrayList<>();for(JSONObject t:Planner.list(state.getJSONArray("tasks")))if(Planner.pending(t)&&Planner.day(t.getDouble("start")).equals(day))tasks.add(t);if(tasks.size()>1)DailyTaskOrdering.swap(state,tasks.get(0).getString("id"),tasks.get(1).getString("id"),now);java.nio.file.Files.write(java.nio.file.Paths.get(args[0]),state.toString(2).getBytes(java.nio.charset.StandardCharsets.UTF_8));}}
+ public static void main(String[] args)throws Exception{refresh();generic();netdisk();seriesAndExisting();websitePages();repeatedLessonHistoryNeverCompletesUntouchedLessons();confirmingAnotherTaskForFinishedLessonAddsNoProgress();refreshRequiresConfirmedLessonIdentity();refreshAllowsExplicitDeletionAndLegacyHistory();System.out.println("ImportParityTests: "+checks+" checks passed");if(args.length>0){JSONObject state=PlannerTests.empty();state.getJSONObject("settings").put("availability",StudySettingsTests.windows(480,1320)).put("actualStudyStart",now);WebCourseImport.save(state,Collections.singletonList(snapshot(50,0,now)),deadline,now);List<JSONObject> net=NetdiskImport.build(scan(new JSONArray().put(folder("视频课程")).put(video("视频课程","a","第一讲",600.0)).put(video("视频课程","b","第二讲",600.0)).put(video("视频课程","c","第三讲",600.0))));WebCourseImport.save(state,net,deadline,now);for(JSONObject course:Planner.list(state.getJSONArray("courses")))course.put("deadline",Planner.at(day,0));Planner.replan(state,now);List<JSONObject> tasks=new ArrayList<>();for(JSONObject t:Planner.list(state.getJSONArray("tasks")))if(Planner.pending(t)&&Planner.day(t.getDouble("start")).equals(day))tasks.add(t);if(tasks.size()>1)DailyTaskOrdering.swap(state,tasks.get(0).getString("id"),tasks.get(1).getString("id"),now);java.nio.file.Files.write(java.nio.file.Paths.get(args[0]),state.toString(2).getBytes(java.nio.charset.StandardCharsets.UTF_8));}}
 }

@@ -525,6 +525,16 @@ struct MainView: View {
         .environment(\.plannerScrollingContent, true)
     }
 
+    private var confirmedSummary: String {
+        var total = 0
+        for record in store.state.completions where Calendar.current.isDate(record.recordedAt, inSameDayAs: selectedDay) {
+            let (next, overflow) = total.addingReportingOverflow(record.minutes)
+            guard !overflow else { return "合计超出范围" }
+            total = next
+        }
+        return hours(total)
+    }
+
     private var summaryBand: some View {
         HStack(spacing: 0) {
             SummaryMetric(
@@ -536,9 +546,7 @@ struct MainView: View {
             metricDivider
             SummaryMetric(
                 title: "已确认",
-                value: hours(store.state.completions.filter {
-                    Calendar.current.isDate($0.recordedAt, inSameDayAs: selectedDay)
-                }.reduce(0) { $0 + $1.minutes }),
+                value: confirmedSummary,
                 icon: "checkmark",
                 color: .teal
             )

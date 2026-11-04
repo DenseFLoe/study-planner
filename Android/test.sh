@@ -12,6 +12,14 @@ mkdir -p Android/build/tests
 "$JDK/bin/java" -cp Android/tools/json.jar:Android/build/tests local.studyplanner.SchedulePreferenceTests
 
 "$JDK/bin/java" -cp Android/tools/json.jar:Android/build/tests local.studyplanner.FloatingEventTests
+"$JDK/bin/javac" -cp Android/tools/json.jar:Android/build/tests -d Android/build/tests Android/tests/FloatingCapacityBoundTests.java
+"$JDK/bin/java" -cp Android/tools/json.jar:Android/build/tests local.studyplanner.FloatingCapacityBoundTests
+"$JDK/bin/javac" -cp Android/tools/json.jar:Android/build/tests -d Android/build/tests Android/tests/FloatingDateCapacityTests.java
+"$JDK/bin/java" -cp Android/tools/json.jar:Android/build/tests local.studyplanner.FloatingDateCapacityTests
+"$JDK/bin/javac" -cp Android/tools/json.jar:Android/build/tests -d Android/build/tests Android/tests/FixedEventDateCapacityTests.java
+"$JDK/bin/java" -cp Android/tools/json.jar:Android/build/tests local.studyplanner.FixedEventDateCapacityTests
+"$JDK/bin/javac" -cp Android/tools/json.jar:Android/build/tests -d Android/build/tests Android/tests/FixedEventActualOverlapTests.java
+"$JDK/bin/java" -cp Android/tools/json.jar:Android/build/tests local.studyplanner.FixedEventActualOverlapTests
 
 "$JDK/bin/java" -cp Android/tools/json.jar:Android/build/tests local.studyplanner.JointFloatingSearchTests
 
@@ -22,14 +30,58 @@ mkdir -p Android/build/tests
 "$JDK/bin/java" -cp Android/tools/json.jar:Android/build/tests local.studyplanner.StudySettingsTests
 "$JDK/bin/java" -cp Android/tools/json.jar:Android/build/tests local.studyplanner.DesktopParityTests
 "$JDK/bin/java" -cp Android/tools/json.jar:Android/build/tests local.studyplanner.DailyTaskOrderingTests
+"$JDK/bin/javac" -cp Android/tools/json.jar:Android/build/tests -d Android/build/tests Android/tests/DailyTaskDateIntervalTests.java
+"$JDK/bin/java" -cp Android/tools/json.jar:Android/build/tests local.studyplanner.DailyTaskDateIntervalTests
+"$JDK/bin/javac" -cp Android/tools/json.jar:Android/build/tests -d Android/build/tests Android/tests/DailyFloatingDateTests.java
+"$JDK/bin/java" -cp Android/tools/json.jar:Android/build/tests local.studyplanner.DailyFloatingDateTests
 "$JDK/bin/java" -cp Android/tools/json.jar:Android/build/tests local.studyplanner.ImportParityTests
 "$JDK/bin/java" -cp Android/tools/json.jar:Android/build/tests local.studyplanner.LessonDeletionTests
 "$JDK/bin/java" -cp Android/tools/json.jar:Android/build/tests local.studyplanner.DailyConsequenceTests
+"$JDK/bin/javac" -cp Android/tools/json.jar:Android/build/tests -d Android/build/tests Android/tests/DailyConsequenceTargetTests.java
+"$JDK/bin/java" -cp Android/tools/json.jar:Android/build/tests local.studyplanner.DailyConsequenceTargetTests
+"$JDK/bin/javac" -cp Android/tools/json.jar:Android/build/tests -d Android/build/tests Android/tests/DailyConsequenceSumTests.java
+"$JDK/bin/java" -Xmx128m -cp Android/tools/json.jar:Android/build/tests local.studyplanner.DailyConsequenceSumTests
+"$JDK/bin/javac" -cp Android/tools/json.jar:Android/build/tests -d Android/build/tests Android/tests/DailyJournalIdentityTests.java
+"$JDK/bin/java" -Xmx128m -cp Android/tools/json.jar:Android/build/tests local.studyplanner.DailyJournalIdentityTests
+"$JDK/bin/javac" -cp Android/tools/json.jar:Android/build/tests -d Android/build/tests Android/tests/DailyJournalProgressTests.java
+"$JDK/bin/java" -Xmx128m -cp Android/tools/json.jar:Android/build/tests local.studyplanner.DailyJournalProgressTests
+# Compile the real controller against test-only UI boundaries; this is not an Android UI test.
+mkdir -p Android/build/controller-tests
+"$JDK/bin/javac" -cp Android/tools/json.jar:Android/build/tests -d Android/build/controller-tests Android/tests/dailycontroller/*.java Android/src/local/studyplanner/DailyConsequenceController.java
+"$JDK/bin/java" -Xmx128m -cp Android/build/controller-tests:Android/tools/json.jar:Android/build/tests local.studyplanner.DailyConsequenceControllerTests
 
 "$JDK/bin/java" -cp Android/tools/json.jar:Android/build/tests local.studyplanner.SyncTransferTests
 
 "$JDK/bin/java" -cp Android/tools/json.jar:Android/build/tests local.studyplanner.SyncJSONTests
 "$JDK/bin/java" -cp Android/tools/json.jar:Android/build/tests local.studyplanner.SyncExchangeTests
+"$JDK/bin/javac" -cp Android/tools/json.jar:Android/build/tests -d Android/build/tests Android/tests/SyncTaskIntervalTests.java
+"$JDK/bin/java" -cp Android/tools/json.jar:Android/build/tests local.studyplanner.SyncTaskIntervalTests
+"$JDK/bin/javac" -cp Android/tools/json.jar:Android/build/tests -d Android/build/tests Android/tests/CompletionNumberIntegrityTests.java
+"$JDK/bin/java" -cp Android/tools/json.jar:Android/build/tests local.studyplanner.CompletionNumberIntegrityTests
+"$JDK/bin/javac" -cp Android/tools/json.jar:Android/build/tests -d Android/build/tests Android/tests/ProgressIntegrityTests.java
+"$JDK/bin/java" -cp Android/tools/json.jar:Android/build/tests local.studyplanner.ProgressIntegrityTests
+"$JDK/bin/javac" -cp Android/tools/json.jar:Android/build/tests -d Android/build/tests Android/tests/CourseMergingIntegrityTests.java
+"$JDK/bin/java" -cp Android/tools/json.jar:Android/build/tests local.studyplanner.CourseMergingIntegrityTests
+"$JDK/bin/javac" -cp Android/tools/json.jar:Android/build/tests -d Android/build/tests Android/tests/CourseNumberIntegrityTests.java
+"$JDK/bin/java" -cp Android/tools/json.jar:Android/build/tests local.studyplanner.CourseNumberIntegrityTests
+"$JDK/bin/javac" -cp Android/tools/json.jar:Android/build/tests -d Android/build/tests Android/tests/TaskNumberIntegrityTests.java
+"$JDK/bin/java" -cp Android/tools/json.jar:Android/build/tests local.studyplanner.TaskNumberIntegrityTests
+"$JDK/bin/javac" -cp Android/tools/json.jar:Android/build/tests -d Android/build/tests Android/tests/LegacyConfirmationIntegrityTests.java
+"$JDK/bin/java" -cp Android/tools/json.jar:Android/build/tests local.studyplanner.LegacyConfirmationIntegrityTests
+"$JDK/bin/javac" -cp Android/tools/json.jar:Android/build/tests -d Android/build/tests Android/tests/ManualLessonArithmeticTests.java
+"$JDK/bin/java" -cp Android/tools/json.jar:Android/build/tests local.studyplanner.ManualLessonArithmeticTests
+"$JDK/bin/javac" -cp Android/tools/json.jar:Android/build/tests -d Android/build/tests Android/tests/ManualLessonIdentityTests.java
+"$JDK/bin/java" -cp Android/tools/json.jar:Android/build/tests local.studyplanner.ManualLessonIdentityTests
+"$JDK/bin/javac" -cp Android/tools/json.jar:Android/build/tests -d Android/build/tests Android/tests/ManualLessonNumberIntegrityTests.java
+"$JDK/bin/java" -cp Android/tools/json.jar:Android/build/tests local.studyplanner.ManualLessonNumberIntegrityTests
+"$JDK/bin/javac" -cp Android/tools/json.jar:Android/build/tests -d Android/build/tests Android/tests/EventWindowIntegrityTests.java
+"$JDK/bin/java" -cp Android/tools/json.jar:Android/build/tests local.studyplanner.EventWindowIntegrityTests
+"$JDK/bin/javac" -cp Android/tools/json.jar:Android/build/tests -d Android/build/tests Android/tests/SyncRecordValidationTests.java
+"$JDK/bin/java" -cp Android/tools/json.jar:Android/build/tests local.studyplanner.SyncRecordValidationTests
+"$JDK/bin/javac" -cp Android/tools/json.jar:Android/build/tests -d Android/build/tests Android/tests/SyncScheduleIntegrityTests.java
+"$JDK/bin/java" -cp Android/tools/json.jar:Android/build/tests local.studyplanner.SyncScheduleIntegrityTests
+"$JDK/bin/javac" -cp Android/tools/json.jar:Android/build/tests -d Android/build/tests Android/tests/SyncScheduleStressTests.java
+"$JDK/bin/java" -Xmx256m -cp Android/tools/json.jar:Android/build/tests local.studyplanner.SyncScheduleStressTests
 "$JDK/bin/java" -Xmx256m -XX:-CompactStrings -cp Android/tools/json.jar:Android/build/tests local.studyplanner.SyncMemoryTests
 
 "$JDK/bin/java" -cp Android/tools/json.jar:Android/build/tests local.studyplanner.MigrationTests

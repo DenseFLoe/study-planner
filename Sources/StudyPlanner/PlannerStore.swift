@@ -124,16 +124,18 @@ final class PlannerStore {
         let work = Task { @MainActor in
             defer { finishLocalSave() }
             do {
-                if let backupReason {
-                    try await backups.save(PlannerBackup(state: previous, reason: backupReason, deletedCourseID: deletedCourseID))
-                    await refreshBackups()
-                }
                 let (plannedState, planned) = try await Task.detached(priority: .userInitiated) {
                     var value = next
                     value.removeArchivedCourses()
                     let plan = try preparation?(&value) ?? (replan ? value.replan(now: now) : ScheduleEngine().assessSavedPlan(state: value, now: now))
                     return (value, plan)
                 }.value
+                // Rejected edits must not rotate away an older recovery point.
+                // The business write still requires a successful pre-edit backup.
+                if let backupReason {
+                    try await backups.save(PlannerBackup(state: previous, reason: backupReason, deletedCourseID: deletedCourseID))
+                    await refreshBackups()
+                }
                 let saved = try await repository.saveChangesForInteraction(plannedState, from: previous)
                 let (assessment, load) = await Task.detached(priority: .userInitiated) {
                     (saved == plannedState ? planned : ScheduleEngine().assessSavedPlan(state: saved, now: now),

@@ -146,8 +146,15 @@ extension PlannerState {
             return ordered(mergedWorkItems(for: course, sources: sources), for: course)
         }
         if course.webCourse == nil, let segments = course.manualLessons, !segments.isEmpty,
-           segments.allSatisfy({ !$0.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && $0.durationMinutes > 0 }),
-           segments.reduce(0, { $0 + $1.durationMinutes }) == course.totalMinutes {
+           segments.allSatisfy({ !$0.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && $0.durationMinutes > 0 }) {
+            guard Set(segments.map(\.id)).count == segments.count else { return [] }
+            var total = 0
+            for segment in segments {
+                let sum = total.addingReportingOverflow(segment.durationMinutes)
+                guard !sum.overflow else { return [] }
+                total = sum.partialValue
+            }
+            guard total == course.totalMinutes else { return [] }
             var items = segments.map {
                 LessonWorkItem(id: $0.id, name: $0.name, subject: "", stage: "", chapter: "",
                                durationMinutes: $0.durationMinutes, remainingMinutes: $0.durationMinutes)
@@ -260,10 +267,17 @@ extension PlannerState {
             }, uniquingKeysWith: { first, _ in first })
             let taskByID = Dictionary(tasks.filter { $0.courseID == course.id }.map { ($0.id, $0) },
                                       uniquingKeysWith: { first, _ in first })
+            let previousLessonIDs = Set(course.webCourse?.timedLessons.map(\.id) ?? [])
             var localCredits: [String: Int] = [:]
             var allLocalCredits: [String: Int] = [:]
             var unidentified = 0
             for record in completions where record.courseID == course.id {
+                // A known lesson's progress must not become legacy, unassigned credit
+                // when a refreshed catalog removes it or stops treating it as timed.
+                if record.minutes > 0, let lessonID = taskByID[record.taskID]?.lessonID,
+                   previousLessonIDs.contains(lessonID), websiteCredits[lessonID] == nil {
+                    throw WebCourseImportError.invalid("部分已学习课节未能对应，请核对课程目录；原课程和完成记录已保留。")
+                }
                 if let lessonID = taskByID[record.taskID]?.lessonID, websiteCredits[lessonID] != nil {
                     allLocalCredits[lessonID, default: 0] += record.minutes
                     if record.recordedAt <= snapshot.fetchedAt { localCredits[lessonID, default: 0] += record.minutes }

@@ -2,6 +2,83 @@ import XCTest
 @testable import StudyCore
 
 final class WebCourseSnapshotTests: XCTestCase {
+    private func identitySnapshot(at now: Date) -> WebCourseSnapshot {
+        var value = snapshot()
+        value.fetchedAt = now
+        value.lessons = ["first", "second"].map {
+            .init(id: $0, name: $0, subject: "", stage: "", chapter: "", kind: "video",
+                  published: true, durationSeconds: 3600, watchedPercent: 0,
+                  markedFinished: false, requiresDuration: true)
+        }
+        return value
+    }
+
+    private func identityFixture(at now: Date, actualMinutes: Int = 30) throws -> PlannerState {
+        var state = PlannerState()
+        try state.importWebCourses([identitySnapshot(at: now)], deadline: now.addingTimeInterval(86400), now: now)
+        let task = ScheduledTask(courseID: state.courses[0].id, start: now, durationMinutes: 30, lessonID: "first")
+        state.tasks = [task]
+        try state.confirm(taskID: task.id, actualMinutes: actualMinutes, now: now.addingTimeInterval(1))
+        return state
+    }
+
+    func testRefreshRejectsLosingConfirmedLessonIdentity() throws {
+        let now = Date(), deadline = now.addingTimeInterval(86400)
+        for change in ["missing", "unpublished", "untimed"] {
+            for offset in [0.0, 2.0] {
+                var state = try identityFixture(at: now)
+                let before = state
+                var fresh = identitySnapshot(at: now.addingTimeInterval(offset))
+                switch change {
+                case "missing": fresh.lessons.removeFirst()
+                case "unpublished": fresh.lessons[0].published = false
+                default: fresh.lessons[0].requiresDuration = false
+                }
+                XCTAssertThrowsError(try state.importWebCourses([fresh], deadline: deadline, now: now.addingTimeInterval(2)), change)
+                XCTAssertEqual(state, before, change)
+                XCTAssertEqual(state.lessonWorkItems(for: state.courses[0]).map(\.remainingMinutes), [30, 60])
+            }
+        }
+    }
+
+    func testLostLessonRejectionKeepsTheWholeImportBatchUnchanged() throws {
+        let now = Date(), deadline = now.addingTimeInterval(86400)
+        var state = try identityFixture(at: now)
+        var other = identitySnapshot(at: now)
+        other.packageID = "other"
+        try state.importWebCourses([other], deadline: deadline, now: now)
+        let before = state
+        other.lessons[0].watchedPercent = 50
+        var fresh = identitySnapshot(at: now.addingTimeInterval(2))
+        fresh.lessons.removeFirst()
+        XCTAssertThrowsError(try state.importWebCourses([other, fresh], deadline: deadline, now: now))
+        XCTAssertEqual(state, before)
+    }
+
+    func testRefreshWithoutPositiveIdentifiedHistoryKeepsLegacyBehavior() throws {
+        let now = Date(), deadline = now.addingTimeInterval(86400)
+        for history in ["none", "missed", "legacy"] {
+            var state = try identityFixture(at: now, actualMinutes: history == "missed" ? 0 : 30)
+            if history == "none" { state.tasks = []; state.completions = [] }
+            if history == "legacy" { state.tasks[0].lessonID = nil }
+            var fresh = identitySnapshot(at: now.addingTimeInterval(2))
+            fresh.lessons.removeFirst()
+            try state.importWebCourses([fresh], deadline: deadline, now: now)
+            XCTAssertEqual(state.lessonWorkItems(for: state.courses[0]).map(\.remainingMinutes), [history == "legacy" ? 30 : 60])
+        }
+    }
+
+    func testExplicitLessonDeletionStillAllowsWebsiteRefresh() throws {
+        let now = Date(), deadline = now.addingTimeInterval(86400)
+        var state = try identityFixture(at: now)
+        try state.removeLessons(courseID: state.courses[0].id, ids: ["first"])
+        try state.importWebCourses([identitySnapshot(at: now.addingTimeInterval(2))], deadline: deadline, now: now)
+        XCTAssertEqual(state.lessonWorkItems(for: state.courses[0]).map(\.id), ["second"])
+        XCTAssertEqual(state.lessonWorkItems(for: state.courses[0]).map(\.remainingMinutes), [60])
+        XCTAssertTrue(state.tasks.isEmpty)
+        XCTAssertTrue(state.completions.isEmpty)
+    }
+
     func testRefreshCombinesWebsiteAndLocalProgressOnDifferentLessons() throws {
         let now = Date(), deadline = now.addingTimeInterval(86400)
         var value = snapshot()

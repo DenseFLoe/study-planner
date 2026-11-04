@@ -107,7 +107,8 @@ public struct ScheduleEngine: Sendable {
             if !valid { diagnostics.append("固定事项「\($0.title)」的时间无效，请修改。") }
             return valid
         }
-        if let immediate { validEvents.append(state.immediateStudyReservation(immediate, calendar: calendar)) }
+        let immediateReservation = immediate.map { state.immediateStudyReservation($0, calendar: calendar) }
+        if let nominal = immediateReservation?.nominalEvent { validEvents.append(nominal) }
         let availability = state.settings.availability.filter {
             let valid = (1...7).contains($0.weekday) && $0.startMinute >= 0 && $0.endMinute <= 1440 && $0.endMinute > $0.startMinute
             if !valid { diagnostics.append("部分可学习时间设置无效，已忽略。") }
@@ -132,8 +133,11 @@ public struct ScheduleEngine: Sendable {
                 Span(start: max(nextMinute, instant(day: day, minute: $0.startMinute)), end: instant(day: day, minute: $0.endMinute))
             }
             let events = validEvents.filter { $0.occurs(on: day, calendar: calendar) }
-            let exact = events.filter { !$0.isFloating }.map {
+            var exact = events.filter { !$0.isFloating }.map {
                 Span(start: instant(day: day, minute: $0.startMinute), end: instant(day: day, minute: $0.endMinute))
+            }
+            if let pin = immediateReservation, calendar.isDate(pin.start, inSameDayAs: day) {
+                exact.append(.init(start: pin.start, end: pin.end))
             }
             let regions = merged(events.filter(\.isFloating).map {
                 Span(start: instant(day: day, minute: $0.startMinute), end: instant(day: day, minute: $0.endMinute))
@@ -147,11 +151,49 @@ public struct ScheduleEngine: Sendable {
             }
             var blocks = exact
             let studyMinutes = Set(availability.filter { $0.weekday == weekday }.flatMap { Array($0.startMinute..<$0.endMinute) })
+            var reservations: [Span]?
             if let placements = FloatingPlacement.reserve(events, studyMinutes: studyMinutes) {
-                for event in events where event.isFloating {
+                let floating = events.filter(\.isFloating)
+                let nominal = floating.map { event -> Span in
                     let start = placements[event.id]!
-                    blocks.append(.init(start: instant(day: day, minute: start), end: instant(day: day, minute: start + event.occupiedMinutes)))
+                    return .init(start: instant(day: day, minute: start), end: instant(day: day, minute: start + event.occupiedMinutes))
                 }
+                let dayEnd = instant(day: day, minute: 1440)
+                // Merge exact blocks first so their preexisting overlaps remain valid.
+                let physicalOrder = (nominal + merged(exact)).sorted { $0.start < $1.start }
+                let valid = zip(floating, nominal).allSatisfy { event, span in
+                    span.end.timeIntervalSince(span.start) >= Double(event.occupiedMinutes) * 60
+                        && span.start >= instant(day: day, minute: event.startMinute)
+                        && span.end <= instant(day: day, minute: event.endMinute)
+                        && span.start >= day && span.end <= dayEnd
+                } && zip(physicalOrder, physicalOrder.dropFirst()).allSatisfy { $0.end <= $1.start }
+                if valid {
+                    reservations = nominal
+                } else if let first = floating.first {
+                    // Missing clock times can shorten or reorder nominal spans.
+                    // Reuse the bounded search for actual spans, without lessons.
+                    let beginning = minute(day), end = minute(dayEnd)
+                    let eventFree = subtract(exact, from: [.init(start: day, end: dayEnd)])
+                    let jobs = floating.map {
+                        ScheduleFeasibilitySearch.Floating(key: day, start: minute(instant(day: day, minute: $0.startMinute)),
+                                                          end: minute(instant(day: day, minute: $0.endMinute)), minutes: $0.occupiedMinutes)
+                    }
+                    if let solution = ScheduleFeasibilitySearch.find(
+                        queues: [.init(courseID: first.id, start: beginning, end: end, work: [])],
+                        study: merged(windows).map { .init(start: minute($0.start), end: Int(floor($0.end.timeIntervalSinceReferenceDate / 60))) },
+                        eventWindows: eventFree.map { .init(start: minute($0.start), end: Int(floor($0.end.timeIntervalSinceReferenceDate / 60))) },
+                        floating: jobs, floor: beginning, initial: beginning),
+                       solution.tasks.isEmpty, solution.floatingStarts.count == jobs.count {
+                        reservations = jobs.enumerated().map { index, job in
+                            let start = solution.floatingStarts[index]!
+                            return .init(start: Date(timeIntervalSinceReferenceDate: Double(start) * 60),
+                                         end: Date(timeIntervalSinceReferenceDate: Double(start + job.minutes) * 60))
+                        }
+                    }
+                }
+            }
+            if let reservations {
+                blocks += reservations
             } else {
                 diagnostics.append("浮动事项的连续时长无法排入，或组合过于复杂；请调整时段。")
                 blocks += regions

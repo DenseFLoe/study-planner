@@ -8,7 +8,7 @@ final class DailyConsequenceTests: XCTestCase {
     private func date(_ day: Int = 14, _ hour: Int = 8) -> Date {
         calendar.date(from: .init(year: 2026, month: 9, day: day, hour: hour))!
     }
-    private func fixture() -> (PlannerState, ScheduleResult, DailyConsequenceDay) {
+    private func fixture() throws -> (PlannerState, ScheduleResult, DailyConsequenceDay) {
         var state = PlannerState()
         var course = Course(name: "模拟课程", totalMinutes: 240, startDate: date(), deadline: date(16))
         course.type = .lessonBasedRecorded
@@ -16,11 +16,11 @@ final class DailyConsequenceTests: XCTestCase {
         state.courses = [course]
         state.settings.availability = (1...7).map { .init(weekday: $0, startMinute: 480, endMinute: 615) }
         let plan = state.replan(now: date(), calendar: calendar)
-        let entry = DailyConsequenceAnalyzer(calendar: calendar).capture(state: state, result: plan, now: date(), warningMinutes: 120)
+        let entry = try DailyConsequenceAnalyzer(calendar: calendar).capture(state: state, result: plan, now: date(), warningMinutes: 120)
         return (state, plan, entry)
     }
-    func testAllFiveOptionsArePresentAndPassingRequiresExceedingLowCompletionBand() {
-        let (_, _, entry) = fixture()
+    func testAllFiveOptionsArePresentAndPassingRequiresExceedingLowCompletionBand() throws {
+        let (_, _, entry) = try fixture()
         XCTAssertEqual(entry.goalMinutes, 120)
         XCTAssertEqual(entry.fractions, [0,250,500,750,1000])
         XCTAssertFalse(entry.achieved(250, confirmed: 30))
@@ -32,7 +32,7 @@ final class DailyConsequenceTests: XCTestCase {
         XCTAssertEqual(tiny.fractions, [0,1000])
     }
     func testForecastDoesNotMutateCoursesOrRealProgress() throws {
-        let (state, _, entry) = fixture()
+        let (state, _, entry) = try fixture()
         let before = state
         let value = try XCTUnwrap(DailyConsequenceAnalyzer(calendar: calendar).forecast(entry, fraction: 0, horizon: 10))
         XCTAssertEqual(state, before)
@@ -42,88 +42,88 @@ final class DailyConsequenceTests: XCTestCase {
         XCTAssertEqual(state.courses[0].deadline, date(16))
     }
     func testFullDailyCompletionDoesNotInventDebtOrHardLimit() throws {
-        let (_, _, entry) = fixture()
+        let (_, _, entry) = try fixture()
         let value = try XCTUnwrap(DailyConsequenceAnalyzer(calendar: calendar).forecast(entry, fraction: 1000, horizon: 10))
         XCTAssertNil(value.provenLimitAfterDays)
         XCTAssertEqual(value.firstDay?.kind, .scheduled)
     }
     func testConfirmedProgressDoesNotMoveTheCapturedDailyGoal() throws {
-        var (state, plan, entry) = fixture()
+        var (state, plan, entry) = try fixture()
         let analyzer = DailyConsequenceAnalyzer(calendar: calendar)
         try state.confirm(taskID: plan.tasks[0].id, actualMinutes: 31, now: date(14,9), calendar: calendar)
         plan = state.replan(now: date(14,9), calendar: calendar)
         XCTAssertEqual(entry.goalMinutes, 120)
-        XCTAssertEqual(analyzer.confirmed(on: entry.date, state: state), 31)
+        XCTAssertEqual(try analyzer.confirmed(on: entry.date, state: state), 31)
         XCTAssertEqual(analyzer.revision(state: state, warningMinutes: 120), entry.revision)
-        XCTAssertTrue(analyzer.capturedEvidenceIsValid(entry, state: state))
+        XCTAssertTrue(try analyzer.capturedEvidenceIsValid(entry, state: state))
         XCTAssertTrue(entry.achieved(250, confirmed: 31))
     }
-    func testExternalProgressRefreshInvalidatesForecastWithoutChangingPhysicalConfiguration() {
-        var (state, _, entry) = fixture()
+    func testExternalProgressRefreshInvalidatesForecastWithoutChangingPhysicalConfiguration() throws {
+        var (state, _, entry) = try fixture()
         let analyzer = DailyConsequenceAnalyzer(calendar: calendar)
         state.courses[0].initialCompletedMinutes = 20
         XCTAssertEqual(analyzer.revision(state: state, warningMinutes: 120), entry.revision)
-        XCTAssertFalse(analyzer.capturedEvidenceIsValid(entry, state: state))
+        XCTAssertFalse(try analyzer.capturedEvidenceIsValid(entry, state: state))
     }
     func testBackfilledPastStudyRefreshesTodayWithoutCountingAsTodaysAchievement() throws {
-        var (state, plan, entry) = fixture()
+        var (state, plan, entry) = try fixture()
         try state.confirm(taskID: plan.tasks[0].id, actualMinutes: 30, now: date(), studyDate: date(13), calendar: calendar)
         let analyzer = DailyConsequenceAnalyzer(calendar: calendar)
-        XCTAssertEqual(analyzer.confirmed(on: date(), state: state), 0)
-        XCTAssertFalse(analyzer.capturedEvidenceIsValid(entry, state: state))
+        XCTAssertEqual(try analyzer.confirmed(on: date(), state: state), 0)
+        XCTAssertFalse(try analyzer.capturedEvidenceIsValid(entry, state: state))
         XCTAssertEqual(analyzer.revision(state: state, warningMinutes: 120), entry.revision)
     }
-    func testDatedOrphanCompletionIsAppliedToRemainingWorkWithoutInventingAConflict() {
-        var (state, _, _) = fixture()
+    func testDatedOrphanCompletionIsAppliedToRemainingWorkWithoutInventingAConflict() throws {
+        var (state, _, _) = try fixture()
         state.courses[0].deadline = date(15)
         let result = state.replan(now: date(), calendar: calendar)
         let analyzer = DailyConsequenceAnalyzer(calendar: calendar)
-        let entry = analyzer.capture(state: state, result: result, now: date(), warningMinutes: 120)
+        let entry = try analyzer.capture(state: state, result: result, now: date(), warningMinutes: 120)
         state.completions.append(.init(courseID: state.courses[0].id, taskID: UUID(), minutes: 120, recordedAt: date(15), studyDate: date()))
-        XCTAssertEqual(analyzer.reality(entry, state: state).outcome?.kind, .scheduled)
+        XCTAssertEqual(try analyzer.reality(entry, state: state).outcome?.kind, .scheduled)
     }
     func testNextDayBackfillIsAssignedToActualStudyDay() throws {
-        var (state, _, entry) = fixture()
+        var (state, _, entry) = try fixture()
         for (index, task) in entry.plannedToday.enumerated() {
             try state.confirm(taskID: task.id, actualMinutes: index == 0 ? 30 : 0, now: date(15), studyDate: date(), calendar: calendar)
         }
         let analyzer = DailyConsequenceAnalyzer(calendar: calendar)
-        let reality = analyzer.reality(entry, state: state)
+        let reality = try analyzer.reality(entry, state: state)
         XCTAssertEqual(reality.confirmedMinutes, 30)
-        XCTAssertEqual(analyzer.confirmed(on: date(15), state: state), 0)
+        XCTAssertEqual(try analyzer.confirmed(on: date(15), state: state), 0)
         XCTAssertTrue(reality.isReviewed)
         XCTAssertNotNil(reality.outcome)
     }
-    func testUnconfirmedDayIsNotDeclaredZeroStudyOrReviewed() {
-        let (state, _, entry) = fixture()
-        let value = DailyConsequenceAnalyzer(calendar: calendar).reality(entry, state: state)
+    func testUnconfirmedDayIsNotDeclaredZeroStudyOrReviewed() throws {
+        let (state, _, entry) = try fixture()
+        let value = try DailyConsequenceAnalyzer(calendar: calendar).reality(entry, state: state)
         XCTAssertEqual(value.confirmedMinutes, 0)
         XCTAssertFalse(value.isReviewed)
         XCTAssertTrue(value.achievedFractions.isEmpty)
     }
     func testAmbiguousLegacyBackfillDoesNotBecomeTodayOrYesterdayActual() throws {
-        var (state, _, entry) = fixture()
+        var (state, _, entry) = try fixture()
         let task = entry.plannedToday[0]
         try state.confirm(taskID: task.id, actualMinutes: 30, now: date(15), calendar: calendar)
         state.completions[0].studyDate = nil
         let analyzer = DailyConsequenceAnalyzer(calendar: calendar)
         XCTAssertNil(analyzer.effectiveDay(state.completions[0], state: state))
-        let reality = analyzer.reality(entry, state: state)
+        let reality = try analyzer.reality(entry, state: state)
         XCTAssertEqual(reality.ambiguousRecords, 1)
         XCTAssertFalse(reality.isReviewed)
     }
     func testUndoingCapturedProgressInvalidatesItsAssumptions() throws {
-        var (state, plan, _) = fixture()
+        var (state, plan, _) = try fixture()
         let task = plan.tasks[0]
         try state.confirm(taskID: task.id, actualMinutes: 30, now: date(), calendar: calendar)
         plan = state.replan(now: date(), calendar: calendar)
         let analyzer = DailyConsequenceAnalyzer(calendar: calendar)
-        let captured = analyzer.capture(state: state, result: plan, now: date(), warningMinutes: 120)
+        let captured = try analyzer.capture(state: state, result: plan, now: date(), warningMinutes: 120)
         try state.undoConfirmation(taskID: task.id, now: date(), calendar: calendar)
-        XCTAssertFalse(analyzer.capturedEvidenceIsValid(captured, state: state))
+        XCTAssertFalse(try analyzer.capturedEvidenceIsValid(captured, state: state))
     }
     func testStudyDateIsOptionalForOldDataAndPreservedForNewData() throws {
-        var (state, plan, _) = fixture()
+        var (state, plan, _) = try fixture()
         try state.confirm(taskID: plan.tasks[0].id, actualMinutes: 30, now: date(15), studyDate: date(), calendar: calendar)
         let data = try JSONEncoder().encode(state.completions[0])
         XCTAssertEqual(try JSONDecoder().decode(CompletionRecord.self, from: data).studyDate, date(14,0))
@@ -136,7 +136,7 @@ final class DailyConsequenceTests: XCTestCase {
         XCTAssertEqual(state, before)
     }
     func testRevisionSurvivesPersistenceAndUnorderedConfigurationCollections() throws {
-        var (state, _, _) = fixture()
+        var (state, _, _) = try fixture()
         var event = FixedEvent(title: "模拟事项", startMinute: 800, endMinute: 830, startDate: date(), endDate: date(20), weekdays: [2,3,5])
         event.excludedDates = [date(16),date(18)]
         state.fixedEvents = [event]

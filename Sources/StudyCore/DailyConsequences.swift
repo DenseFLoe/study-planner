@@ -46,7 +46,11 @@ public struct DailyConsequenceDay: Codable, Equatable, Sendable, Identifiable {
             fraction == 1000 || seen.insert(target(for: fraction)).inserted
         }
     }
-    public func target(for fraction: Int) -> Int { goalMinutes * fraction / 1000 }
+    public func target(for fraction: Int) -> Int {
+        // Divide first so every Int goal fits at fractions 0...1000. Both
+        // contributions retain integer truncation toward zero, without clamping.
+        (goalMinutes / 1000) * fraction + (goalMinutes % 1000) * fraction / 1000
+    }
     public func threshold(for fraction: Int) -> Int { fraction == 1000 ? goalMinutes : target(for: fraction) + 1 }
     public func achieved(_ fraction: Int, confirmed: Int) -> Bool { goalMinutes > 0 && confirmed >= threshold(for: fraction) }
 }
@@ -66,6 +70,34 @@ public struct DailyConsequenceReality: Sendable {
     public var usesLegacyDates: Bool
     public var outcome: DailyConsequenceOutcome?
     public var achievedFractions: [Int]
+}
+
+public enum DailyConsequenceError: Error, Equatable, Sendable, LocalizedError {
+    case unrepresentableMinutes
+
+    public var errorDescription: String? { "学习分钟合计超出可表示范围，暂时无法计算日报。原记录未修改。" }
+}
+
+private enum DailyMinuteArithmetic {
+    static func add(_ lhs: Int, _ rhs: Int) throws -> Int {
+        let (value, overflow) = lhs.addingReportingOverflow(rhs)
+        guard !overflow else { throw DailyConsequenceError.unrepresentableMinutes }
+        return value
+    }
+    static func subtract(_ lhs: Int, _ rhs: Int) throws -> Int {
+        let (value, overflow) = lhs.subtractingReportingOverflow(rhs)
+        guard !overflow else { throw DailyConsequenceError.unrepresentableMinutes }
+        return value
+    }
+    static func sum<S: Sequence>(_ values: S) throws -> Int where S.Element == Int {
+        try values.reduce(0) { try add($0, $1) }
+    }
+    static func scaled(_ minutes: Int, fraction: Int) throws -> Int {
+        let (whole, wholeOverflow) = (minutes / 1000).multipliedReportingOverflow(by: fraction)
+        let (remainder, remainderOverflow) = (minutes % 1000).multipliedReportingOverflow(by: fraction)
+        guard !wholeOverflow, !remainderOverflow else { throw DailyConsequenceError.unrepresentableMinutes }
+        return try add(whole, remainder / 1000)
+    }
 }
 
 public struct DailyConsequenceAnalyzer: Sendable {
@@ -115,13 +147,13 @@ public struct DailyConsequenceAnalyzer: Sendable {
         return nil
     }
 
-    public func confirmed(on day: Date, state: PlannerState) -> Int {
-        state.completions.reduce(0) { sum, record in
-            sum + (effectiveDay(record, state: state).map { calendar.isDate($0.date, inSameDayAs: day) } == true ? record.minutes : 0)
-        }
+    public func confirmed(on day: Date, state: PlannerState) throws -> Int {
+        try DailyMinuteArithmetic.sum(state.completions.lazy.filter {
+            effectiveDay($0, state: state).map { calendar.isDate($0.date, inSameDayAs: day) } == true
+        }.map(\.minutes))
     }
 
-    public func capturedEvidenceIsValid(_ day: DailyConsequenceDay, state: PlannerState) -> Bool {
+    public func capturedEvidenceIsValid(_ day: DailyConsequenceDay, state: PlannerState) throws -> Bool {
         let records = Dictionary(uniqueKeysWithValues: state.completions.map { ($0.id, $0) })
         guard day.capturedRecords.allSatisfy({ records[$0.id] == $0 }) else { return false }
         let captured = Set(day.capturedRecords.map(\.id))
@@ -130,17 +162,20 @@ public struct DailyConsequenceAnalyzer: Sendable {
         }) { return false }
         for baselineCourse in day.baseline.courses {
             guard let current = state.courses.first(where: { $0.id == baselineCourse.id }) else { return false }
-            let extra = state.completions.filter { $0.courseID == current.id && !captured.contains($0.id) }.reduce(0) { $0 + $1.minutes }
-            let expected = max(0, day.baseline.remainingMinutes(for: baselineCourse) - extra)
+            let extra = try DailyMinuteArithmetic.sum(state.completions.lazy.filter {
+                $0.courseID == current.id && !captured.contains($0.id)
+            }.map(\.minutes))
+            let expected = max(0, try DailyMinuteArithmetic.subtract(day.baseline.remainingMinutes(for: baselineCourse), extra))
             if state.remainingMinutes(for: current) != expected { return false }
         }
         return true
     }
 
-    public func capture(state: PlannerState, result: ScheduleResult, now: Date, warningMinutes: Int) -> DailyConsequenceDay {
+    public func capture(state: PlannerState, result: ScheduleResult, now: Date, warningMinutes: Int) throws -> DailyConsequenceDay {
         let today = calendar.startOfDay(for: now)
-        let credited = confirmed(on: today, state: state)
+        let credited = try confirmed(on: today, state: state)
         let tasks = result.tasks.filter { calendar.isDate($0.start, inSameDayAs: today) }
+        let goal = try DailyMinuteArithmetic.add(credited, DailyMinuteArithmetic.sum(tasks.map(\.durationMinutes)))
         var simulation = state
         simulation.completions = []
         for index in simulation.courses.indices {
@@ -159,7 +194,7 @@ public struct DailyConsequenceAnalyzer: Sendable {
         }
         for index in simulation.fixedEvents.indices { simulation.fixedEvents[index].notes = "" }
         var entry = DailyConsequenceDay(date: today, capturedAt: now, revision: revision(state: state, warningMinutes: warningMinutes),
-            warningMinutes: warningMinutes, goalMinutes: credited + tasks.reduce(0) { $0 + $1.durationMinutes },
+            warningMinutes: warningMinutes, goalMinutes: goal,
             confirmedAtCapture: credited, capturedRecords: state.completions, plannedToday: tasks, baseline: simulation)
         entry.celebrated = Set(entry.fractions.filter { entry.achieved($0, confirmed: credited) })
         return entry
@@ -180,37 +215,39 @@ public struct DailyConsequenceAnalyzer: Sendable {
                      continuousMinutes: proof?.minimumContinuousMinutes, courseNames: proof?.courseNames ?? [])
     }
 
-    private func credit(_ minutes: Int, courseID: UUID, lessonID: String?, state: inout PlannerState) {
+    private func credit(_ minutes: Int, courseID: UUID, lessonID: String?, state: inout PlannerState) throws {
         guard minutes > 0, let c = state.courses.firstIndex(where: { $0.id == courseID }) else { return }
         if var lessons = state.courses[c].manualLessons {
             if let index = lessons.firstIndex(where: { $0.id == lessonID }) {
-                lessons[index].durationMinutes = max(0, lessons[index].durationMinutes - minutes)
+                lessons[index].durationMinutes = max(0, try DailyMinuteArithmetic.subtract(lessons[index].durationMinutes, minutes))
             } else {
                 var remaining = minutes
                 for index in lessons.indices where remaining > 0 {
                     let used = min(remaining, lessons[index].durationMinutes)
-                    lessons[index].durationMinutes -= used; remaining -= used
+                    lessons[index].durationMinutes = try DailyMinuteArithmetic.subtract(lessons[index].durationMinutes, used)
+                    remaining = try DailyMinuteArithmetic.subtract(remaining, used)
                 }
             }
             lessons.removeAll { $0.durationMinutes == 0 }
+            let total = try DailyMinuteArithmetic.sum(lessons.map(\.durationMinutes))
             state.courses[c].manualLessons = lessons
-            state.courses[c].totalMinutes = lessons.reduce(0) { $0 + $1.durationMinutes }
-        } else { state.courses[c].totalMinutes = max(0, state.courses[c].totalMinutes - minutes) }
+            state.courses[c].totalMinutes = total
+        } else { state.courses[c].totalMinutes = max(0, try DailyMinuteArithmetic.subtract(state.courses[c].totalMinutes, minutes)) }
     }
 
     /// Repeatedly complete the specified fraction of each day's newly planned work.
     /// One-day effects and continued-pattern effects are separate; search uncertainty
     /// is preserved instead of being turned into an exact hard-limit countdown.
-    public func forecast(_ entry: DailyConsequenceDay, fraction: Int, horizon: Int = 90) -> DailyConsequenceForecast? {
-        let target = entry.target(for: fraction)
+    public func forecast(_ entry: DailyConsequenceDay, fraction: Int, horizon: Int = 90) throws -> DailyConsequenceForecast? {
+        let target = try DailyMinuteArithmetic.scaled(entry.goalMinutes, fraction: fraction)
         if target < entry.confirmedAtCapture { return .init(fraction: fraction, todayMinutes: target, evaluatedDays: 0) }
         var state = entry.baseline
         let engine = ScheduleEngine(calendar: calendar)
         var now = entry.capturedAt, plan = engine.generate(state: state, now: now)
-        let availableToday = plan.tasks.filter { calendar.isDate($0.start, inSameDayAs: entry.date) }.reduce(0) { $0 + $1.durationMinutes }
-        let requested = max(0, target - entry.confirmedAtCapture)
+        let availableToday = try DailyMinuteArithmetic.sum(plan.tasks.lazy.filter { calendar.isDate($0.start, inSameDayAs: entry.date) }.map(\.durationMinutes))
+        let requested = max(0, try DailyMinuteArithmetic.subtract(target, entry.confirmedAtCapture))
         if requested > availableToday {
-            return .init(fraction: fraction, todayMinutes: target, evaluatedDays: 0, unavailableTodayMinutes: requested - availableToday)
+            return .init(fraction: fraction, todayMinutes: target, evaluatedDays: 0, unavailableTodayMinutes: try DailyMinuteArithmetic.subtract(requested, availableToday))
         }
         let initial = outcome(state: state, result: plan, now: now, warning: entry.warningMinutes)
         var forecast = DailyConsequenceForecast(fraction: fraction, todayMinutes: target,
@@ -223,15 +260,16 @@ public struct DailyConsequenceAnalyzer: Sendable {
             if Task.isCancelled { return nil }
             let day = calendar.startOfDay(for: now)
             let tasks = plan.tasks.filter { calendar.isDate($0.start, inSameDayAs: day) }.sorted { $0.start < $1.start }
-            var budget = index == 0 ? max(0, target - entry.confirmedAtCapture) : tasks.reduce(0) { $0 + $1.durationMinutes } * fraction / 1000
+            var budget = index == 0 ? requested : try DailyMinuteArithmetic.scaled(DailyMinuteArithmetic.sum(tasks.map(\.durationMinutes)), fraction: fraction)
             var history = state.tasks.filter { !$0.isUnconfirmed && $0.planningEnd >= day }
             for task in tasks {
-                let actual = min(task.durationMinutes, budget); budget -= actual
-                credit(actual, courseID: task.courseID, lessonID: task.lessonID, state: &state)
+                let actual = min(task.durationMinutes, budget)
+                budget = try DailyMinuteArithmetic.subtract(budget, actual)
+                try credit(actual, courseID: task.courseID, lessonID: task.lessonID, state: &state)
                 if actual > 0 {
                     var retained = task
                     retained.completedMinutes = actual; retained.status = .completed
-                    retained.confirmedAt = task.start.addingTimeInterval(Double(actual * 60))
+                    retained.confirmedAt = task.start.addingTimeInterval(Double(actual) * 60)
                     history.append(retained)
                 }
             }
@@ -251,8 +289,8 @@ public struct DailyConsequenceAnalyzer: Sendable {
         return forecast
     }
 
-    public func reality(_ entry: DailyConsequenceDay, state: PlannerState) -> DailyConsequenceReality {
-        let actual = confirmed(on: entry.date, state: state)
+    public func reality(_ entry: DailyConsequenceDay, state: PlannerState) throws -> DailyConsequenceReality {
+        let actual = try confirmed(on: entry.date, state: state)
         let captured = Set(entry.capturedRecords.map(\.id))
         let newRecords = state.completions.filter { !captured.contains($0.id) }
         let tasks = Dictionary(uniqueKeysWithValues: state.tasks.map { ($0.id, $0) })
@@ -265,22 +303,25 @@ public struct DailyConsequenceAnalyzer: Sendable {
         }
         struct Key: Hashable { var course: UUID; var lesson: String? }
         var targets: [Key: Int] = [:], reviewed: [Key: Int] = [:]
-        for task in entry.plannedToday { targets[.init(course: task.courseID, lesson: task.lessonID), default: 0] += task.durationMinutes }
+        for task in entry.plannedToday {
+            let key = Key(course: task.courseID, lesson: task.lessonID)
+            targets[key] = try DailyMinuteArithmetic.add(targets[key, default: 0], task.durationMinutes)
+        }
         var projection = entry.baseline
         for record in newRecords {
             let task = tasks[record.taskID]
             let key = Key(course: record.courseID, lesson: task?.lessonID)
             if let task, calendar.isDate(task.start, inSameDayAs: entry.date) {
                 if task.lessonID != nil { reviewed[key] = max(reviewed[key, default: 0], task.durationMinutes) }
-                else { reviewed[key, default: 0] += task.durationMinutes }
+                else { reviewed[key] = try DailyMinuteArithmetic.add(reviewed[key, default: 0], task.durationMinutes) }
             }
             if effectiveDay(record, state: state).map({ calendar.isDate($0.date, inSameDayAs: entry.date) }) == true {
-                credit(record.minutes, courseID: record.courseID, lessonID: task?.lessonID, state: &projection)
+                try credit(record.minutes, courseID: record.courseID, lessonID: task?.lessonID, state: &projection)
             }
         }
         let pending = state.tasks.contains { $0.isUnconfirmed && calendar.isDate($0.start, inSameDayAs: entry.date) }
         let covered = targets.allSatisfy { reviewed[$0.key, default: 0] >= $0.value }
-        let valid = capturedEvidenceIsValid(entry, state: state) && revision(state: state, warningMinutes: entry.warningMinutes) == entry.revision
+        let valid = try capturedEvidenceIsValid(entry, state: state) && revision(state: state, warningMinutes: entry.warningMinutes) == entry.revision
         let complete = ambiguous == 0 && !pending && (entry.reviewedAt != nil || covered || actual >= entry.goalMinutes)
         let next = calendar.date(byAdding: .day, value: 1, to: entry.date)!
         // Preserve real known end-of-study buffers; late backfills do not invent

@@ -13,10 +13,15 @@ public final class DailyTaskOrdering {
         return keys;
     }
     static List<JSONObject> place(JSONObject state,List<JSONObject> ordered,double earliest)throws Exception {
+        return place(state,ordered,earliest,null);
+    }
+    private static List<JSONObject> place(JSONObject state,List<JSONObject> ordered,double earliest,Map<String,Integer> floatingPlacements)throws Exception {
+        // Whole tasks must fit the minute-indexed day before any placement arithmetic.
+        for(JSONObject task:ordered){int duration=task.getInt("durationMinutes");if(duration<1||duration>1440)return null;}
         LocalDate day=Planner.day(earliest);boolean[] study=new boolean[1440],available=new boolean[1440];
         for(JSONObject w:Planner.list(state.getJSONObject("settings").getJSONArray("availability")))if(w.optInt("weekday")==Planner.weekday(day)&&w.optInt("startMinute")>=0&&w.optInt("endMinute")<=1440&&w.optInt("startMinute")<w.optInt("endMinute"))for(int m=w.getInt("startMinute");m<w.getInt("endMinute");m++)study[m]=available[m]=true;
         List<JSONObject> events=new ArrayList<>();for(JSONObject e:Planner.list(state.getJSONArray("fixedEvents")))if(Planner.occurs(e,day))events.add(e);
-        Map<String,Integer> reserved=Planner.reserve(events,study);if(reserved==null)return null;
+        Map<String,Integer> reserved=floatingPlacements==null?Planner.reserve(events,study):floatingPlacements;if(reserved==null)return null;
         for(JSONObject e:events){int start=reserved.getOrDefault(e.getString("id"),e.getInt("startMinute"));for(int m=start;m<start+Planner.occupied(e);m++)available[m]=false;}
         Set<String> moving=new HashSet<>();for(JSONObject t:ordered)moving.add(t.getString("id"));
         // Include neighboring days when their buffered interval reaches this day.
@@ -27,19 +32,61 @@ public final class DailyTaskOrdering {
         for(JSONObject source:ordered){boolean found=false;int first=Planner.day(cursor).equals(day)?(int)((cursor-Planner.at(day,0))/60):1440;
             for(int minute=first;minute<1440;minute++){
                 int endMinute=minute+source.getInt("durationMinutes");double start=Planner.at(day,minute),end=Planner.at(day,endMinute);
-                if(start<cursor||endMinute>1440||!available[minute])continue;
+                if(start<cursor||endMinute>1440||end>dayEnd||!available[minute])continue;
                 boolean blocked=false;for(int m=minute;m<endMinute;m++)if(!available[m]){blocked=true;break;}
                 if(blocked)continue;
                 for(JSONObject obstacle:obstacles)if(start<Planner.retainedHistoryEnd(obstacle)+Planner.BREAK_SECONDS&&end>Planner.retainedHistoryStart(obstacle)-Planner.BREAK_SECONDS){blocked=true;break;}
                 if(blocked)continue;
                 JSONObject task=new JSONObject(source.toString());task.put("start",start);task.remove("floatingWindowStart");task.remove("floatingWindowEnd");
                 int regionStart=1440,regionEnd=0;for(JSONObject e:events)if(Planner.floating(e)&&e.getInt("startMinute")<endMinute&&e.getInt("endMinute")>minute){regionStart=Math.min(regionStart,e.getInt("startMinute"));regionEnd=Math.max(regionEnd,e.getInt("endMinute"));}
-                if(regionEnd>0){int lower=minute,upper=endMinute;while(lower>regionStart&&inWindow(lower-1,study,events))lower--;while(upper<regionEnd&&inWindow(upper,study,events))upper++;task.put("floatingWindowStart",Planner.at(day,lower)).put("floatingWindowEnd",Planner.at(day,upper));}
+                if(regionEnd>0){int lower=minute,upper=endMinute;while(lower>regionStart&&inWindow(lower-1,study,events))lower--;while(upper<regionEnd&&inWindow(upper,study,events))upper++;task.put("floatingWindowStart",Planner.at(day,lower)).put("floatingWindowEnd",Math.min(dayEnd,Planner.at(day,upper)));}
                 placed.add(task);cursor=end+Planner.BREAK_SECONDS;found=true;break;
             }
-            if(!found)return null;
+            if(!found){
+                if(floatingPlacements!=null)return null;
+                Map<String,Integer> alternate=jointFloatingPlacements(ordered,earliest,day,study,events,obstacles);
+                return alternate==null?null:place(state,ordered,earliest,alternate);
+            }
         }
         return placed;
+    }
+    /** One queue preserves the user's order; only the event witness is reused. */
+    private static Map<String,Integer> jointFloatingPlacements(List<JSONObject> ordered,double earliest,LocalDate day,
+            boolean[] study,List<JSONObject> events,List<JSONObject> obstacles)throws Exception {
+        List<JSONObject> floating=new ArrayList<>(),exact=new ArrayList<>();
+        for(JSONObject event:events)(Planner.floating(event)?floating:exact).add(event);
+        if(floating.isEmpty()||floating.size()>8||ordered.size()>600)return null;
+        boolean[] eventFree=new boolean[1440],studyFree=new boolean[1440];
+        for(int minute=0;minute<1440;minute++){
+            boolean free=true;double start=Planner.at(day,minute),end=Planner.at(day,minute+1);
+            for(JSONObject event:exact)if(minute>=event.getInt("startMinute")&&minute<event.getInt("endMinute")){free=false;break;}
+            if(free)for(JSONObject obstacle:obstacles)if(start<Planner.retainedHistoryEnd(obstacle)+Planner.BREAK_SECONDS
+                &&end>Planner.retainedHistoryStart(obstacle)-Planner.BREAK_SECONDS){free=false;break;}
+            eventFree[minute]=free;studyFree[minute]=free&&study[minute];
+        }
+        JSONObject queueCourse=new JSONObject().put("id",ordered.get(0).getString("courseID"))
+            .put("startDate",Planner.at(day,0)).put("deadline",Planner.at(day,0));
+        List<Planner.Work> work=new ArrayList<>();for(JSONObject task:ordered)work.add(new Planner.Work(task.getInt("durationMinutes"),null,null));
+        List<ScheduleFeasibilitySearch.Floating> jobs=new ArrayList<>();for(JSONObject event:floating)jobs.add(new ScheduleFeasibilitySearch.Floating(day,event));
+        ScheduleFeasibilitySearch.Solution solution=ScheduleFeasibilitySearch.find(
+            Collections.singletonList(new ScheduleFeasibilitySearch.Queue(queueCourse,work)),searchWindows(studyFree,day),searchWindows(eventFree,day),jobs,
+            ScheduleFeasibilitySearch.minute(earliest),ScheduleFeasibilitySearch.minute(Planner.at(day,0)));
+        if(solution==null||solution.tasks.size()!=ordered.size()||solution.floatingStarts.size()!=floating.size())return null;
+        Map<String,Integer> placements=new HashMap<>();
+        for(int i=0;i<floating.size();i++){
+            Integer start=solution.floatingStarts.get(i);if(start==null)return null;
+            // Invert Planner.at's elapsed minutes, including dates with an offset transition.
+            placements.put(floating.get(i).getString("id"),(int)((start*60.0-Planner.at(day,0))/60));
+        }
+        return placements;
+    }
+    private static List<ScheduleFeasibilitySearch.Window> searchWindows(boolean[] free,LocalDate day){
+        List<ScheduleFeasibilitySearch.Window> result=new ArrayList<>();int start=-1;
+        for(int minute=0;minute<=1440;minute++){
+            boolean available=minute<1440&&free[minute];if(available&&start<0)start=minute;
+            if(!available&&start>=0){result.add(new ScheduleFeasibilitySearch.Window(ScheduleFeasibilitySearch.minute(Planner.at(day,start)),ScheduleFeasibilitySearch.minute(Planner.at(day,minute))));start=-1;}
+        }
+        return result;
     }
     static boolean inWindow(int minute,boolean[] study,List<JSONObject> events){if(minute<0||minute>=1440||!study[minute])return false;for(JSONObject e:events)if(!Planner.floating(e)&&minute>=e.optInt("startMinute")&&minute<e.optInt("endMinute"))return false;return true;}
     public static void swap(JSONObject state,String sourceID,String targetID,double now)throws Exception {

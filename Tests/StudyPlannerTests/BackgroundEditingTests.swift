@@ -131,6 +131,61 @@ final class BackgroundEditingTests: XCTestCase {
         XCTAssertNil(repo.saved)
     }
 
+    @MainActor func testInvalidRestorePreservesTheOnlyOlderRecoveryPoint() async throws {
+        let original = fixture(), repo = Repository()
+        let backups = PlannerBackupRepository(inMemory: true, limit: 1)
+        let recovery = PlannerBackup(state: original, reason: "保留的恢复点", now: Date().addingTimeInterval(-60))
+        try await backups.save(recovery)
+        let store = store(original, repo, backups: backups)
+        await store.refreshBackups()
+        let previousTasks = store.result.tasks
+        var invalid = PlannerBackup(state: original, reason: "不支持的备份")
+        invalid.format = 99
+
+        let saved = await store.restoreBackup(invalid)
+
+        XCTAssertFalse(saved)
+        XCTAssertEqual(store.state, original)
+        XCTAssertEqual(store.result.tasks, previousTasks)
+        XCTAssertNil(repo.saved)
+        XCTAssertFalse(store.orderSaveBusy)
+        XCTAssertNotNil(store.errorMessage)
+        let entries = try await backups.entries()
+        XCTAssertEqual(entries.map(\.id), [recovery.id])
+        XCTAssertEqual(store.backupEntries.map(\.id), [recovery.id])
+        let retained = try await backups.load(recovery.id)
+        XCTAssertEqual(retained.state, original)
+    }
+
+    @MainActor func testConflictingEventPreservesTheOnlyOlderRecoveryPoint() async throws {
+        let now = Date()
+        let day = Calendar.current.date(byAdding: .day, value: 1, to: Calendar.current.startOfDay(for: now))!
+        var original = fixture()
+        original.fixedEvents = [.init(title: "原事项", startMinute: 600, endMinute: 660, startDate: day, endDate: day)]
+        _ = original.replan(now: now)
+        let repo = Repository(), backups = PlannerBackupRepository(inMemory: true, limit: 1)
+        let recovery = PlannerBackup(state: original, reason: "保留的恢复点", now: now.addingTimeInterval(-60))
+        try await backups.save(recovery)
+        let store = store(original, repo, backups: backups)
+        await store.refreshBackups()
+        let previousTasks = store.result.tasks
+        let conflicting = FixedEvent(title: "冲突事项", startMinute: 630, endMinute: 690, startDate: day, endDate: day)
+
+        let saved = await store.saveEvent(conflicting)
+
+        XCTAssertFalse(saved)
+        XCTAssertEqual(store.state, original)
+        XCTAssertEqual(store.result.tasks, previousTasks)
+        XCTAssertNil(repo.saved)
+        XCTAssertFalse(store.orderSaveBusy)
+        XCTAssertFalse(store.pendingEventConflicts?.isEmpty ?? true)
+        let entries = try await backups.entries()
+        XCTAssertEqual(entries.map(\.id), [recovery.id])
+        XCTAssertEqual(store.backupEntries.map(\.id), [recovery.id])
+        let retained = try await backups.load(recovery.id)
+        XCTAssertEqual(retained.state, original)
+    }
+
     @MainActor func testUndoDeletionSurvivesDiskReopeningAndSyncTombstones() async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)

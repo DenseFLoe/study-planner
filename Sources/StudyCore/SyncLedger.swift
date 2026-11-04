@@ -84,7 +84,22 @@ public struct SyncLedger: Codable, Sendable {
     }
     public mutating func capture(_ state: PlannerState, now: Date = Date()) throws {
         var state = state
+        let archived = Set(state.courses.filter(\.isArchived).map(\.id))
+        // Keep task ownership evidence until retained confirmations are checked,
+        // even when archiving will remove the associated task from this snapshot.
+        let taskCourses = Dictionary(state.tasks.map { ($0.id, $0.courseID) },
+                                     uniquingKeysWith: { _, latest in latest })
+        guard state.completions.allSatisfy({ record in
+            archived.contains(record.courseID) || (taskCourses[record.taskID].map { $0 == record.courseID } ?? true)
+        }) else { throw SyncFailure.invalidData }
         state.removeArchivedCourses()
+        guard state.tasks.allSatisfy(\.hasValidPlanningInterval),
+              state.fixedEvents.allSatisfy(\.hasValidTimeWindow) else { throw SyncFailure.invalidData }
+        // Canonical IDs must not silently collapse conflicting progress records.
+        guard Set(state.completions.map(\.taskID)).count == state.completions.count else {
+            throw SyncFailure.invalidData
+        }
+        try state.validateRecordedProgress()
         let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys]
         var desired: [String: SyncRecord] = [:]
         func add<T: Encodable>(_ kind: String, _ id: String, _ value: T) throws {
@@ -143,7 +158,7 @@ public struct SyncLedger: Codable, Sendable {
         for row in records.values.sorted(by: { $0.key < $1.key }) where !row.deleted {
             switch row.kind {
             case "courses": let v = try decoder.decode(Course.self, from: row.payload); guard v.id.uuidString == row.id else { throw SyncFailure.invalidData }; state.courses.append(v)
-            case "fixedEvents": let v = try decoder.decode(FixedEvent.self, from: row.payload); guard v.id.uuidString == row.id else { throw SyncFailure.invalidData }; state.fixedEvents.append(v)
+            case "fixedEvents": let v = try decoder.decode(FixedEvent.self, from: row.payload); guard v.id.uuidString == row.id, v.hasValidTimeWindow else { throw SyncFailure.invalidData }; state.fixedEvents.append(v)
             case "tasks": let v = try decoder.decode(ScheduledTask.self, from: row.payload); guard v.id.uuidString == row.id else { throw SyncFailure.invalidData }; state.tasks.append(v)
             case "completions": let v = try decoder.decode(CompletionRecord.self, from: row.payload); guard v.id.uuidString == row.id else { throw SyncFailure.invalidData }; state.completions.append(v)
             case "settings": state.settings = try decoder.decode(AppSettings.self, from: row.payload)
@@ -158,7 +173,10 @@ public struct SyncLedger: Codable, Sendable {
         let deletedTasks = try records.values.filter {
             $0.kind == "tasks" && $0.deleted && UUID(uuidString: $0.id).map(confirmationTasks.contains) == true
         }.map {
-            try decoder.decode(ScheduledTask.self, from: $0.payload)
+            let task = try decoder.decode(ScheduledTask.self, from: $0.payload)
+            // A recovered draft must have the same identity as its tombstone.
+            guard task.id.uuidString == $0.id else { throw SyncFailure.invalidData }
+            return task
         }
         try state.reconcileMergedCourseProgress(deletedIDs: deletedIDs, deletedTasks: deletedTasks)
         try reconcileConfirmations(in: &state)
@@ -167,8 +185,9 @@ public struct SyncLedger: Codable, Sendable {
         state.removeCourses(ids: deletedIDs)
         let ids = Set(state.courses.map(\.id))
         guard state.settings.minimumScheduleUnit > 0,
-              state.tasks.allSatisfy({ ids.contains($0.courseID) && $0.durationMinutes > 0 }),
+              state.tasks.allSatisfy({ ids.contains($0.courseID) && $0.durationMinutes > 0 && $0.hasValidPlanningInterval }),
               state.completions.allSatisfy({ ids.contains($0.courseID) && $0.minutes >= 0 }) else { throw SyncFailure.invalidData }
+        try state.validateRecordedProgress()
         state.tasks.sort { $0.start == $1.start ? $0.id.uuidString < $1.id.uuidString : $0.start < $1.start }
         return state
     }
@@ -180,18 +199,26 @@ public struct SyncLedger: Codable, Sendable {
         for record in state.completions where tasks[record.taskID] == nil {
             if let row = records["tasks/" + record.taskID.uuidString], row.deleted {
                 let old = try decoder.decode(ScheduledTask.self, from: row.payload)
+                guard record.courseID == old.courseID else { throw SyncFailure.invalidData }
                 // A removed draft can still have been confirmed by the offline peer.
                 if old.confirmedAt == nil { tasks[old.id] = old }
             }
         }
+        // Row IDs can be distinct even when two peers describe the same task.
+        // Reject ambiguous progress before Dictionary's duplicate-key precondition.
+        guard Set(state.completions.map(\.taskID)).count == state.completions.count else {
+            throw SyncFailure.invalidData
+        }
         let completions = Dictionary(uniqueKeysWithValues: state.completions.map { ($0.taskID, $0) })
         for id in tasks.keys.sorted(by: { $0.uuidString < $1.uuidString }) {
             var task = tasks[id]!
+            let record = completions[id]
+            guard record.map({ $0.courseID == task.courseID }) ?? true else { throw SyncFailure.invalidData }
             let key = "completions/" + stablePlannerID("completion|" + id.uuidString).uuidString
             if let row = records[key], row.deleted {
                 if task.confirmedAt != nil { task.status = .planned }
                 task.confirmedAt = nil; task.completedMinutes = 0
-            } else if let record = completions[id], record.courseID == task.courseID {
+            } else if let record {
                 guard record.minutes >= 0, record.minutes <= task.durationMinutes else { throw SyncFailure.invalidData }
                 task.confirmedAt = record.recordedAt; task.completedMinutes = record.minutes
                 task.status = record.minutes == 0 ? .missed : (record.minutes == task.durationMinutes ? .completed : .partial)
@@ -216,7 +243,10 @@ public struct SyncLedger: Codable, Sendable {
             if task.replacesConfirmedBlock == true { slot.generation = task.id }
             else if counts[slot, default: 0] > 1 && task.id.uuid.6 & 0xf0 == 0x50 {
                 // Recognize salted IDs from older schedulers only for colliding slots.
-                let base = "task|\(task.courseID.uuidString)|\(Int64(task.start.timeIntervalSinceReferenceDate))|\(task.durationMinutes)" + (task.lessonID.map { "|" + $0 } ?? "")
+                guard let start = Int64(exactly: task.start.timeIntervalSinceReferenceDate.rounded(.towardZero)) else {
+                    throw SyncFailure.invalidData
+                }
+                let base = "task|\(task.courseID.uuidString)|\(start)|\(task.durationMinutes)" + (task.lessonID.map { "|" + $0 } ?? "")
                 if task.id != stablePlannerID(base) {
                     let confirmed = tasks.values.filter { $0.courseID == task.courseID && $0.confirmedAt != nil && $0.id != task.id }.map { $0.id.uuidString }.sorted()
                     if task.id == stablePlannerID(base + "|confirmed|" + confirmed.joined(separator: ",")) { slot.generation = task.id }
@@ -241,6 +271,9 @@ public struct SyncLedger: Codable, Sendable {
         // Backfill legacy task-only confirmations, but never override an explicit undo.
         for task in state.tasks where completions[task.id] == nil {
             if let confirmed = task.confirmedAt {
+                guard task.completedMinutes >= 0, task.completedMinutes <= task.durationMinutes else {
+                    throw SyncFailure.invalidData
+                }
                 state.completions.append(CompletionRecord(id: stablePlannerID("completion|" + task.id.uuidString),
                     courseID: task.courseID, taskID: task.id, minutes: task.completedMinutes, recordedAt: confirmed))
             }

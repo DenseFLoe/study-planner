@@ -223,7 +223,7 @@ final class ImmediateStudyTests: XCTestCase {
         XCTAssertEqual(immediate.start, date())
         XCTAssertFalse(immediate.isFloating)
         assertSchedule(result, state: state)
-        let reserved = state.immediateStudyReservation(immediate, calendar: cal)
+        let reserved = try XCTUnwrap(state.immediateStudyReservation(immediate, calendar: cal).nominalEvent)
         XCTAssertNotNil(FloatingPlacement.reserve([event, reserved]))
         state.settings.immediateStudy = nil
         event.endMinute = 540
@@ -359,7 +359,7 @@ final class ImmediateStudyTests: XCTestCase {
         XCTAssertEqual(result.tasks.first?.start, date())
         XCTAssertEqual(totals(result.tasks)[state.courses[0].id], 60)
         XCTAssertTrue(result.risks.isEmpty)
-        XCTAssertNotNil(FloatingPlacement.reserve([event, state.immediateStudyReservation(result.tasks[0], calendar: cal)]))
+        XCTAssertNotNil(FloatingPlacement.reserve([event, try XCTUnwrap(state.immediateStudyReservation(result.tasks[0], calendar: cal).nominalEvent)]))
     }
 
     func testContinuationOutranksSavedFutureDragOrderAndCannotBeDragged() throws {

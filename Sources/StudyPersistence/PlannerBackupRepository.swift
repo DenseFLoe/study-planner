@@ -31,7 +31,9 @@ public actor PlannerBackupRepository {
             try data.write(to: file, options: .atomic)
             try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: file.path)
         } else { memory[backup.id] = backup }
-        for entry in try entries().dropFirst(limit) {
+        // A clock correction or tied timestamp must not evict the recovery point
+        // just written before its caller commits a business-data change.
+        for entry in try entries().filter({ $0.id != backup.id }).dropFirst(limit - 1) {
             if let directory { try FileManager.default.removeItem(at: directory.appendingPathComponent(entry.id.uuidString + ".json")) }
             else { memory.removeValue(forKey: entry.id) }
         }

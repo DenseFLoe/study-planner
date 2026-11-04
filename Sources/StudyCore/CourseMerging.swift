@@ -65,7 +65,18 @@ extension PlannerState {
         guard completions.filter({ ids.contains($0.courseID) }).allSatisfy({ taskIDs.contains($0.taskID) }) else {
             throw WebCourseImportError.invalid("部分完成记录缺少关联任务，暂不能安全合并这些课程。")
         }
-        let total = sources.reduce(0) { $0 + $1.totalMinutes }
+        func checkedSum(_ field: KeyPath<Course, Int>) throws -> Int {
+            var total = 0
+            for source in sources {
+                let sum = total.addingReportingOverflow(source[keyPath: field])
+                guard !sum.overflow else {
+                    throw WebCourseImportError.invalid("合并后的课程时长或基础进度超出可保存范围。")
+                }
+                total = sum.partialValue
+            }
+            return total
+        }
+        let total = try checkedSum(\.totalMinutes)
         guard total > 0, total <= 600_000 else {
             throw WebCourseImportError.invalid("合并后的总时长须在 10,000 小时以内。")
         }
@@ -73,7 +84,7 @@ extension PlannerState {
                             startDate: sources.map(\.startDate).min()!, deadline: sources.map(\.deadline).min()!)
         merged.type = .lessonBasedRecorded
         merged.mergedSources = sources
-        merged.initialCompletedMinutes = sources.reduce(0) { $0 + $1.initialCompletedMinutes }
+        merged.initialCompletedMinutes = try checkedSum(\.initialCompletedMinutes)
         merged.priority = sources.map(\.priority).max()!
         merged.color = sources[0].color
         merged.autoScheduleEnabled = sources.contains { $0.autoScheduleEnabled }

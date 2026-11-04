@@ -18,7 +18,14 @@ public actor DailyConsequenceRepository {
             guard data.count <= 8_000_000 else { throw CocoaError(.coderReadCorrupt) }
             let value = try JSONDecoder().decode(DailyConsequenceJournal.self, from: data)
             guard value.version == 1, value.days.count <= 31, Set(value.days.map(\.id)).count == value.days.count,
-                  value.days.allSatisfy({ $0.goalMinutes >= 0 && $0.forecasts.count <= 5 }) else { throw CocoaError(.coderReadCorrupt) }
+                  value.days.allSatisfy({ day in
+                      day.goalMinutes >= 0 && day.forecasts.count <= 5
+                          && Set(day.baseline.courses.map(\.id)).count == day.baseline.courses.count
+                          && Set(day.baseline.tasks.map(\.id)).count == day.baseline.tasks.count
+                  }) else { throw CocoaError(.coderReadCorrupt) }
+            do {
+                for day in value.days { try day.baseline.validateRecordedProgress() }
+            } catch { throw CocoaError(.coderReadCorrupt) }
             memory = value
             return value
         } catch { writeDisabled = true; throw error }

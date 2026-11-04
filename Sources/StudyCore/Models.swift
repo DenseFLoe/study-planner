@@ -91,6 +91,12 @@ public struct FixedEvent: Identifiable, Codable, Equatable, Sendable {
     public var isFloating: Bool { floatingDurationMinutes != nil }
     public var occupiedMinutes: Int { floatingDurationMinutes ?? (endMinute - startMinute) }
     public var validDuration: Bool { occupiedMinutes > 0 && occupiedMinutes <= endMinute - startMinute }
+    var hasValidTimeWindow: Bool {
+        // Check day bounds before subtracting potentially untrusted endpoints.
+        guard startMinute >= 0, endMinute <= 1440, startMinute < endMinute else { return false }
+        guard let duration = floatingDurationMinutes else { return true }
+        return duration > 0 && duration <= endMinute - startMinute
+    }
     public var color = "orange"
     public var notes = ""
     private enum CodingKeys: String, CodingKey {
@@ -134,13 +140,16 @@ public struct FixedEventConflict: Identifiable, Equatable, Sendable {
     public var requestedEndMinute: Int
     public var floatingDurationMinutes: Int?
     public var reason: Reason
+    /// Transient conflict detail when clock-window minutes differ from elapsed overlap.
+    public var actualOverlapMinutes: Double?
     public init(eventID: UUID, title: String, date: Date, startMinute: Int = 0, endMinute: Int = 0,
                 requestedStartMinute: Int = 0, requestedEndMinute: Int = 0,
-                floatingDurationMinutes: Int? = nil, reason: Reason = .overlap) {
+                floatingDurationMinutes: Int? = nil, reason: Reason = .overlap, actualOverlapMinutes: Double? = nil) {
         self.eventID = eventID; self.title = title; self.date = date
         self.startMinute = startMinute; self.endMinute = endMinute
         self.requestedStartMinute = requestedStartMinute; self.requestedEndMinute = requestedEndMinute
         self.floatingDurationMinutes = floatingDurationMinutes; self.reason = reason
+        self.actualOverlapMinutes = actualOverlapMinutes
     }
     private func time(_ minute: Int) -> String { String(format: "%02d:%02d", minute / 60, minute % 60) }
     public var timeDescription: String {
@@ -149,6 +158,9 @@ public struct FixedEventConflict: Identifiable, Equatable, Sendable {
     public var explanation: String {
         switch reason {
         case .overlap:
+            if let actualOverlapMinutes {
+                return "按实际时间重叠 \(String(format: "%g", actualOverlapMinutes)) 分钟"
+            }
             let start = max(startMinute, requestedStartMinute), end = min(endMinute, requestedEndMinute)
             return "重叠 " + time(start) + "–" + time(end) + "（\(max(0, end - start)) 分钟）"
         case .floatingCapacity:
@@ -176,13 +188,20 @@ public struct ScheduledTask: Identifiable, Codable, Equatable, Sendable {
     public var isFloating: Bool { floatingWindowStart != nil && floatingWindowEnd != nil }
     public var planningStart: Date { floatingWindowStart ?? start }
     public var planningEnd: Date { floatingWindowEnd ?? end }
+    var hasValidPlanningInterval: Bool {
+        let lower = planningStart.timeIntervalSinceReferenceDate
+        let upper = planningEnd.timeIntervalSinceReferenceDate
+        return lower.isFinite && upper.isFinite && lower <= upper
+    }
     public var end: Date { start.addingTimeInterval(Double(durationMinutes) * 60) }
     public var isUnconfirmed: Bool { confirmedAt == nil && (status == .planned || status == .future) }
     /// Retained history reserves time only up to confirmation. An early confirmation
     /// resolves a floating window without changing its recorded display dates.
-    var retainedHistoryInterval: DateInterval {
-        DateInterval(start: min(planningStart, confirmedAt ?? planningStart),
-                     end: min(planningEnd, confirmedAt ?? planningEnd))
+    var retainedHistoryInterval: (start: Date, end: Date) {
+        // Preserve both endpoints: DateInterval reconstructs its end from a
+        // duration, which loses an ordinary end date after an extreme start date.
+        (start: min(planningStart, confirmedAt ?? planningStart),
+         end: min(planningEnd, confirmedAt ?? planningEnd))
     }
     /// Ended tasks may already have been redistributed into the future schedule.
     /// Floating tasks remain reserved until their entire completion window ends.
@@ -327,26 +346,53 @@ public struct PlannerState: Codable, Equatable, Sendable {
         while candidate <= updated.endDate {
             if updated.occurs(on: candidate, calendar: calendar) {
                 let others = fixedEvents.filter { $0.id != event.id && $0.occurs(on: candidate, calendar: calendar) }
-                let exactConflicts = others.filter { !updated.isFloating && !$0.isFloating && $0.startMinute < updated.endMinute && $0.endMinute > updated.startMinute }
-                // Only inspect the connected window component; unrelated conflicts must not block this edit.
-                var lower = updated.startMinute, upper = updated.endMinute
-                var component: [FixedEvent] = []
-                var changed = true
-                while changed {
-                    component = others.filter { $0.startMinute < upper && $0.endMinute > lower }
-                    let nextLower = min(lower, component.map(\.startMinute).min() ?? lower)
-                    let nextUpper = max(upper, component.map(\.endMinute).max() ?? upper)
-                    changed = nextLower != lower || nextUpper != upper
-                    lower = nextLower; upper = nextUpper
+                let candidates = [updated] + others, engine = ScheduleEngine(calendar: calendar)
+                let spans = candidates.map { value -> (start: Date, end: Date)? in
+                    // Unrelated malformed imports were not previously mapped.
+                    // Keep their nominal connection and existing validation path.
+                    guard value.hasValidTimeWindow else { return nil }
+                    return (engine.instant(day: candidate, minute: value.startMinute), engine.instant(day: candidate, minute: value.endMinute))
                 }
-                let capacityConflict = FloatingPlacement.reserve(component + [updated]) == nil
-                let involved = capacityConflict ? component : exactConflicts
-                for other in involved {
+                func nominalOverlap(_ a: Int, _ b: Int) -> Bool {
+                    candidates[a].startMinute < candidates[b].endMinute && candidates[a].endMinute > candidates[b].startMinute
+                }
+                func actualOverlap(_ a: Int, _ b: Int) -> TimeInterval {
+                    guard let a = spans[a], let b = spans[b] else { return 0 }
+                    return max(0, min(a.end, b.end).timeIntervalSince(max(a.start, b.start)))
+                }
+                let exactConflicts = Set(candidates.indices.dropFirst().filter {
+                    !updated.isFloating && !candidates[$0].isFloating && (nominalOverlap(0, $0) || actualOverlap(0, $0) > 0)
+                })
+                // Preserve nominal connections and add actual ones. A mixed
+                // component may have gaps in either coordinate system, so a
+                // single bounding window would pull in unrelated conflicts.
+                var included: Set<Int> = [0], frontier = [0], cursor = 0
+                while cursor < frontier.count && included.count < candidates.count {
+                    let current = frontier[cursor]
+                    cursor += 1
+                    for index in candidates.indices.dropFirst() where !included.contains(index) {
+                        if nominalOverlap(current, index) || actualOverlap(current, index) > 0 {
+                            included.insert(index)
+                            frontier.append(index)
+                        }
+                    }
+                }
+                let component = candidates.indices.dropFirst().filter { included.contains($0) }
+                let capacityConflict = !fixedEventCapacityAvailable(component.map { candidates[$0] } + [updated], on: candidate, calendar: calendar)
+                let involved = capacityConflict ? component : candidates.indices.dropFirst().filter { exactConflicts.contains($0) }
+                for index in involved {
+                    let other = candidates[index], seconds = actualOverlap(0, index)
+                    var actualMinutes: Double?
+                    if exactConflicts.contains(index), seconds > 0 {
+                        let start = max(other.startMinute, updated.startMinute), end = min(other.endMinute, updated.endMinute)
+                        let nominalMinutes = end > start ? end - start : 0
+                        if seconds != Double(nominalMinutes) * 60 { actualMinutes = seconds / 60 }
+                    }
                     conflicts.append(.init(eventID: other.id, title: other.title, date: candidate,
                         startMinute: other.startMinute, endMinute: other.endMinute,
                         requestedStartMinute: updated.startMinute, requestedEndMinute: updated.endMinute,
                         floatingDurationMinutes: other.floatingDurationMinutes,
-                        reason: exactConflicts.contains(where: { $0.id == other.id }) ? .overlap : .floatingCapacity))
+                        reason: exactConflicts.contains(index) ? .overlap : .floatingCapacity, actualOverlapMinutes: actualMinutes))
                 }
                 if capacityConflict && involved.isEmpty { throw PlannerError.invalidFixedEvent }
             }
@@ -363,6 +409,72 @@ public struct PlannerState: Codable, Equatable, Sendable {
             } else { fixedEvents[index] = updated }
         } else { fixedEvents.append(updated) }
     }
+
+    private func fixedEventCapacityAvailable(_ events: [FixedEvent], on day: Date, calendar: Calendar) -> Bool {
+        guard events.allSatisfy(\.hasValidTimeWindow) else { return false }
+        let nominal = FloatingPlacement.reserve(events)
+        let floating = events.filter(\.isFloating)
+        guard let first = floating.first else { return nominal != nil }
+        let engine = ScheduleEngine(calendar: calendar), dayEnd = engine.instant(day: day, minute: 1440)
+        let windows = floating.map {
+            (start: engine.instant(day: day, minute: $0.startMinute), end: engine.instant(day: day, minute: $0.endMinute))
+        }
+        var exact: [(start: Date, end: Date)] = []
+        for span in events.filter({ !$0.isFloating }).map({
+            (start: engine.instant(day: day, minute: $0.startMinute), end: engine.instant(day: day, minute: $0.endMinute))
+        }).filter({ $0.start < $0.end }).sorted(by: { $0.start < $1.start }) {
+            if let last = exact.last, span.start <= last.end {
+                exact[exact.count - 1].end = max(last.end, span.end)
+            } else { exact.append(span) }
+        }
+        func valid(_ spans: [(start: Date, end: Date)]) -> Bool {
+            guard spans.count == floating.count else { return false }
+            let order = (spans + exact).sorted { $0.start < $1.start }
+            return floating.indices.allSatisfy { index in
+                let span = spans[index], window = windows[index]
+                return span.end.timeIntervalSince(span.start) >= Double(floating[index].occupiedMinutes) * 60
+                    && span.start >= window.start && span.end <= window.end
+                    && span.start >= day && span.end <= dayEnd
+            } && zip(order, order.dropFirst()).allSatisfy { $0.end <= $1.start }
+        }
+        if let nominal {
+            let spans = floating.compactMap { event -> (start: Date, end: Date)? in
+                guard let start = nominal[event.id] else { return nil }
+                return (engine.instant(day: day, minute: start), engine.instant(day: day, minute: start + event.occupiedMinutes))
+            }
+            if valid(spans) { return true }
+        }
+        // Clock changes can shorten a nominal witness or expose extra capacity.
+        // Reuse the bounded search with no lessons; failure keeps the existing
+        // conflict path and never publishes a partial edit.
+        func minute(_ date: Date) -> Int { Int(ceil(date.timeIntervalSinceReferenceDate / 60)) }
+        let beginning = minute(day), end = minute(dayEnd)
+        var eventFree: [ScheduleFeasibilitySearch.Window] = []
+        var cursor = day
+        for span in exact where span.end > day && span.start < dayEnd {
+            let lower = max(day, span.start), upper = min(dayEnd, span.end)
+            if cursor < lower {
+                eventFree.append(.init(start: minute(cursor), end: Int(floor(lower.timeIntervalSinceReferenceDate / 60))))
+            }
+            cursor = max(cursor, upper)
+        }
+        if cursor < dayEnd { eventFree.append(.init(start: minute(cursor), end: end)) }
+        let jobs = floating.indices.map { index in
+            ScheduleFeasibilitySearch.Floating(key: day, start: minute(windows[index].start),
+                                              end: minute(windows[index].end), minutes: floating[index].occupiedMinutes)
+        }
+        guard let solution = ScheduleFeasibilitySearch.find(
+            queues: [.init(courseID: first.id, start: beginning, end: end, work: [])], study: [],
+            eventWindows: eventFree, floating: jobs, floor: beginning, initial: beginning),
+              solution.tasks.isEmpty, solution.floatingStarts.count == jobs.count else { return false }
+        let spans = jobs.indices.compactMap { index -> (start: Date, end: Date)? in
+            guard let start = solution.floatingStarts[index] else { return nil }
+            return (Date(timeIntervalSinceReferenceDate: Double(start) * 60),
+                    Date(timeIntervalSinceReferenceDate: Double(start + jobs[index].minutes) * 60))
+        }
+        return valid(spans)
+    }
+
     /// Explicit deletion removes the entire selected rule, including its history.
     public mutating func removeFixedEvent(id: UUID) {
         fixedEvents.removeAll { $0.id == id }

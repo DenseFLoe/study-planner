@@ -41,7 +41,7 @@ public struct PlannerBackup: Codable, Sendable {
               state.settings.availability.allSatisfy({ (1...7).contains($0.weekday) && $0.startMinute >= 0 && $0.endMinute <= 1440 && $0.startMinute < $0.endMinute }),
               state.courses.allSatisfy({ validCourse($0) }),
               state.fixedEvents.allSatisfy({ $0.startMinute >= 0 && $0.endMinute <= 1440 && $0.startMinute < $0.endMinute && $0.validDuration && $0.weekdays.allSatisfy { (1...7).contains($0) } }),
-              state.tasks.allSatisfy({ (1...1440).contains($0.durationMinutes) && (0...$0.durationMinutes).contains($0.completedMinutes) }),
+              state.tasks.allSatisfy({ (1...1440).contains($0.durationMinutes) && (0...$0.durationMinutes).contains($0.completedMinutes) && $0.hasValidPlanningInterval }),
               state.completions.allSatisfy({ (0...1440).contains($0.minutes) }) else { throw SyncFailure.invalidData }
         var ledger = SyncLedger()
         try ledger.capture(state)

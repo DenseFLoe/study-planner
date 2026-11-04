@@ -4,6 +4,7 @@ import org.json.*;
 import java.io.*;
 import java.nio.charset.StandardCharsets;
 import java.security.*;
+import java.time.LocalDate;
 import java.util.*;
 
 /** Pure exchange logic; callers commit only after parsing, validation and response staging succeed. */
@@ -79,10 +80,90 @@ final class SyncExchange {
         return invalidPending(state,now);
     }
     static boolean invalidPending(JSONObject state,double now)throws Exception {
-        java.util.List<JSONObject> pending=new java.util.ArrayList<>();java.util.Map<String,Integer> totals=new java.util.HashMap<>();
-        for(JSONObject t:Planner.list(state.getJSONArray("tasks")))if(Planner.pending(t)&&Planner.end(t)>now){pending.add(t);String id=t.getString("courseID");totals.put(id,totals.getOrDefault(id,0)+t.getInt("durationMinutes"));}
-        pending.sort(java.util.Comparator.comparingDouble(t->t.optDouble("start")));for(int i=1;i<pending.size();i++)if(Planner.end(pending.get(i-1))>pending.get(i).getDouble("start"))return true;
-        for(JSONObject c:Planner.list(state.getJSONArray("courses")))if(totals.getOrDefault(c.getString("id"),0)>Planner.remaining(state,c))return true;
+        List<JSONObject> pending=new ArrayList<>();Map<String,Integer> totals=new HashMap<>();
+        Map<String,JSONObject> courses=new HashMap<>();
+        for(JSONObject course:Planner.list(state.getJSONArray("courses")))courses.put(course.getString("id"),course);
+        List<Planner.Span> history=new ArrayList<>();Double actualStart=Planner.actualStudyStart(state,now);
+        for(JSONObject task:Planner.list(state.getJSONArray("tasks"))){
+            if(Planner.pending(task)&&Planner.end(task)>now){
+                String id=task.getString("courseID");JSONObject course=courses.get(id);
+                // A peer can generate new task IDs from old inputs after our newer
+                // course row has already won. Input signatures alone miss those drafts.
+                if(course==null||!course.optBoolean("autoScheduleEnabled",true)
+                    ||!Planner.eligible(course,Planner.day(task.getDouble("start"))))return true;
+                pending.add(task);totals.put(id,totals.getOrDefault(id,0)+task.getInt("durationMinutes"));
+            }
+            // Use the same retained-history and early-confirmation boundaries as replan.
+            boolean retained=!Planner.pending(task)||(Planner.planningEnd(task)<=now&&!(actualStart!=null&&Planner.day(task.getDouble("start")).equals(Planner.day(now))));
+            if(retained&&Planner.planningStart(task)<now&&(Planner.pending(task)||task.optInt("completedMinutes")>0))
+                history.add(Planner.buffered(Planner.retainedHistoryStart(task),Planner.retainedHistoryEnd(task)));
+        }
+        pending.sort(Comparator.comparingDouble(t->t.optDouble("start")));
+        for(int i=1;i<pending.size();i++)if(Planner.end(pending.get(i-1))+Planner.BREAK_SECONDS>pending.get(i).getDouble("start"))return true;
+        // Sweep merged history intervals instead of comparing every task with every record.
+        List<Planner.Span> blocked=Planner.merge(history);int index=0;
+        for(JSONObject task:pending){
+            double start=task.getDouble("start");
+            while(index<blocked.size()&&blocked.get(index).b<=start)index++;
+            if(index<blocked.size()&&blocked.get(index).a<Planner.end(task))return true;
+        }
+        for(JSONObject course:courses.values())if(totals.getOrDefault(course.getString("id"),0)>Planner.remaining(state,course))return true;
+        return invalidWindows(state,pending);
+    }
+    private static boolean invalidWindows(JSONObject state,List<JSONObject> pending)throws Exception {
+        Map<LocalDate,List<JSONObject>> days=new TreeMap<>();
+        for(JSONObject task:pending)days.computeIfAbsent(Planner.day(task.getDouble("start")),day->new ArrayList<>()).add(task);
+        List<JSONObject> windows=Planner.list(state.getJSONObject("settings").getJSONArray("availability"));
+        List<JSONObject> events=Planner.list(state.getJSONArray("fixedEvents"));
+        for(Map.Entry<LocalDate,List<JSONObject>> entry:days.entrySet()){
+            LocalDate day=entry.getKey();List<Planner.Span> available=new ArrayList<>(),exact=new ArrayList<>();
+            List<JSONObject> floating=new ArrayList<>();
+            for(JSONObject window:windows)if(window.getInt("weekday")==Planner.weekday(day))
+                available.add(new Planner.Span(Planner.at(day,window.getInt("startMinute")),Planner.at(day,window.getInt("endMinute"))));
+            for(JSONObject event:events)if(Planner.occurs(event,day)){
+                if(Planner.floating(event))floating.add(event);
+                else exact.add(new Planner.Span(Planner.at(day,event.getInt("startMinute")),Planner.at(day,event.getInt("endMinute"))));
+            }
+            available=Planner.subtract(available,exact);
+            List<Planner.Span> occupied=new ArrayList<>(exact),moving=new ArrayList<>();
+            for(JSONObject task:entry.getValue()){
+                double start=task.getDouble("start"),end=Planner.end(task);boolean fits=false;
+                for(Planner.Span window:available)if(start>=window.a&&end<=window.b){fits=true;break;}
+                if(!fits)return true;
+                Planner.Span span=new Planner.Span(start,end);occupied.add(span);moving.add(span);
+            }
+            // An optimistic per-event check proves only that a continuous slot is
+            // impossible. Do not invalidate a saved plan on a search-budget limit
+            // or pin a feasible floating event to one arbitrary witness position.
+            for(JSONObject event:floating){
+                Planner.Span window=new Planner.Span(Planner.at(day,event.getInt("startMinute")),Planner.at(day,event.getInt("endMinute")));
+                if(!overlapsAny(window,moving))continue;
+                boolean fits=false;for(Planner.Span free:Planner.subtract(Collections.singletonList(window),occupied))
+                    if(free.minutes()>=Planner.occupied(event)){fits=true;break;}
+                if(!fits)return true;
+            }
+            // Overlapping floating windows also share capacity: each event fitting
+            // individually cannot justify booking the same free minutes twice.
+            floating.sort(Comparator.comparingInt(event->event.optInt("startMinute")));
+            Planner.Span component=null;int required=0;
+            for(JSONObject event:floating){
+                double start=Planner.at(day,event.getInt("startMinute")),end=Planner.at(day,event.getInt("endMinute"));
+                if(component==null||start>component.b){
+                    if(component!=null&&overlapsAny(component,moving)&&freeMinutes(component,occupied)<required)return true;
+                    component=new Planner.Span(start,end);required=Planner.occupied(event);
+                }else{component.b=Math.max(component.b,end);required+=Planner.occupied(event);}
+            }
+            if(component!=null&&overlapsAny(component,moving)&&freeMinutes(component,occupied)<required)return true;
+        }
+        return false;
+    }
+    private static int freeMinutes(Planner.Span window,List<Planner.Span> occupied){
+        int total=0;for(Planner.Span free:Planner.subtract(Collections.singletonList(window),occupied))total+=free.minutes();
+        return total;
+    }
+    private static boolean overlapsAny(Planner.Span window,List<Planner.Span> tasks){
+        // Existing event conflicts must not repeatedly replan unrelated study slots.
+        for(Planner.Span task:tasks)if(window.a<task.b&&window.b>task.a)return true;
         return false;
     }
 }
