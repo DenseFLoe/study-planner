@@ -51,8 +51,31 @@ public final class SchedulePreviewTests {
             catch (IllegalArgumentException expected) { check(before.equals(SyncLedger.canonical(state)), "Failed preview changed state"); }
         }
     }
+    static void multipleImportedCourses() throws Exception {
+        JSONObject state = fixture(); String first = id(state);
+        JSONObject other = PlannerTests.course("英语", 3, DAY, DAY.plusDays(7), 1); state.getJSONArray("courses").put(other);
+        for (int i = 0; i < 205; i++) state.getJSONArray("tasks").put(Planner.task(first, NOW + i * 60, 1).put("lessonName", "第一门" + i));
+        for (int i = 0; i < 3; i++) state.getJSONArray("tasks").put(Planner.task(other.getString("id"), NOW + i * 60, 1).put("lessonName", "第二门" + i));
+        state.getJSONArray("tasks").put(Planner.task(first, NOW - 86400, 1).put("lessonName", "往日待确认"));
+        Set<String> selected = new HashSet<>(Arrays.asList(first, other.getString("id")));
+        String before = SyncLedger.canonical(state);
+        SchedulePreview result = SchedulePreview.fromPlan(state, selected, "导入预览", NOW);
+        check(result.count() == 208 && result.pageCount() == 3 && result.plannedMinutes == 208 && result.remainingMinutes == 208, "Imported plan was truncated or counted old tasks");
+        List<String> lines = new ArrayList<>(); for (int i = 0; i < result.pageCount(); i++) lines.addAll(result.page(i));
+        check(lines.stream().anyMatch(line -> line.contains("分页预览 / 第一门")) && lines.stream().anyMatch(line -> line.contains("英语 / 第二门")), "Multi-course preview omitted course identity");
+        check(before.equals(SyncLedger.canonical(state)), "Import summary recalculated or persisted source plan");
+        SchedulePreview one = SchedulePreview.fromPlan(state, Collections.singleton(other.getString("id")), "只看英语", NOW);
+        check(one.count() == 3 && one.remainingMinutes == 3, "Preview included unselected courses");
+        Planner.confirm(state, state.getJSONArray("tasks").getJSONObject(0).getString("id"), 1, NOW);
+        result = SchedulePreview.fromPlan(state, selected, "导入预览", NOW);
+        check(result.count() == 207 && result.remainingMinutes == 207, "Confirmed task remained in imported preview");
+        state = PlannerTests.empty(); selected.clear();
+        for (int i = 0; i < 300; i++) { JSONObject course = PlannerTests.course("大课程" + i, 10000000, DAY, DAY.plusDays(7), 60); state.getJSONArray("courses").put(course); selected.add(course.getString("id")); }
+        result = SchedulePreview.fromPlan(state, selected, "大计划", NOW);
+        check(result.remainingMinutes == 3000000000L && result.count() == 0, "Multi-course remaining minutes overflowed");
+    }
     public static void main(String[] args) throws Exception {
-        futureOnlyAndPages(); capacityAndConfirmations(); rejectedCourses();
+        futureOnlyAndPages(); capacityAndConfirmations(); rejectedCourses(); multipleImportedCourses();
         System.out.println("SchedulePreviewTests: " + checks + " checks passed");
     }
 }
