@@ -79,19 +79,29 @@ final class SyncExchange {
         for(String kind:new String[]{"courses","fixedEvents","settings"})if(!SyncLedger.equivalent(previous.get(kind),state.get(kind)))return true;
         return invalidPending(state,now);
     }
+    /** Cloud downloads use the same draft validation as hotspot exchange. */
+    static JSONObject repairMergedSchedule(SyncLedger ledger,double now)throws Exception {
+        JSONObject state=ledger.materialize();
+        if(invalidPending(state,now))Planner.replan(state,now);
+        ledger.capture(state);
+        return state;
+    }
     static boolean invalidPending(JSONObject state,double now)throws Exception {
         List<JSONObject> pending=new ArrayList<>();Map<String,Integer> totals=new HashMap<>();
+        Map<String,Map<String,Integer>> lessons=new HashMap<>();
         Map<String,JSONObject> courses=new HashMap<>();
         for(JSONObject course:Planner.list(state.getJSONArray("courses")))courses.put(course.getString("id"),course);
         List<Planner.Span> history=new ArrayList<>();Double actualStart=Planner.actualStudyStart(state,now);
         for(JSONObject task:Planner.list(state.getJSONArray("tasks"))){
-            if(Planner.pending(task)&&Planner.end(task)>now){
+            if(Planner.pending(task)&&Planner.planningEnd(task)>now){
                 String id=task.getString("courseID");JSONObject course=courses.get(id);
                 // A peer can generate new task IDs from old inputs after our newer
                 // course row has already won. Input signatures alone miss those drafts.
                 if(course==null||!course.optBoolean("autoScheduleEnabled",true)
                     ||!Planner.eligible(course,Planner.day(task.getDouble("start"))))return true;
                 pending.add(task);totals.put(id,totals.getOrDefault(id,0)+task.getInt("durationMinutes"));
+                if(actualStart!=null&&Planner.day(task.getDouble("start")).equals(Planner.day(now))&&task.getDouble("start")<actualStart)return true;
+                if(task.has("lessonID"))lessons.computeIfAbsent(id,key->new HashMap<>()).merge(task.getString("lessonID"),task.getInt("durationMinutes"),Integer::sum);
             }
             // Use the same retained-history and early-confirmation boundaries as replan.
             boolean retained=!Planner.pending(task)||(Planner.planningEnd(task)<=now&&!(actualStart!=null&&Planner.day(task.getDouble("start")).equals(Planner.day(now))));
@@ -107,7 +117,12 @@ final class SyncExchange {
             while(index<blocked.size()&&blocked.get(index).b<=start)index++;
             if(index<blocked.size()&&blocked.get(index).a<Planner.end(task))return true;
         }
-        for(JSONObject course:courses.values())if(totals.getOrDefault(course.getString("id"),0)>Planner.remaining(state,course))return true;
+        for(JSONObject course:courses.values()){
+            String id=course.getString("id");
+            if(totals.getOrDefault(id,0)>Planner.remaining(state,course))return true;
+            Map<String,Integer> remaining=new HashMap<>();for(Planner.Work work:Planner.lessonWorkAll(state,course))remaining.put(work.lessonID,work.minutes);
+            for(Map.Entry<String,Integer> entry:lessons.getOrDefault(id,Collections.emptyMap()).entrySet())if(entry.getValue()>remaining.getOrDefault(entry.getKey(),0))return true;
+        }
         return invalidWindows(state,pending);
     }
     private static boolean invalidWindows(JSONObject state,List<JSONObject> pending)throws Exception {

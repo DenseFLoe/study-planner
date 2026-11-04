@@ -5,6 +5,9 @@ extension ScheduleEngine {
     /// Full early confirmations preserve other slots, as do sync-only refreshes.
     public func assessSavedPlan(state: PlannerState, now: Date) -> ScheduleResult {
         var result = generate(state: state, now: now)
+        if hasInvalidSavedTasks(state: state, now: now) {
+            result.diagnostics.append("当前课表含重复学习量或不符合最新约束的时段，请重新排程。")
+        }
         let courses = state.courses.filter { !$0.isArchived && $0.autoScheduleEnabled && state.remainingMinutes(for: $0) > 0 }
         let ids = Set(courses.map(\.id))
         result.tasks = state.tasks.filter {

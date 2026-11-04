@@ -97,16 +97,19 @@ public final class LocalRepository: PlannerRepository {
     }
 
     public func saveChanges(_ state: PlannerState, from baseline: PlannerState) throws -> PlannerState {
-        try Self.withExclusiveAccess {
-            // Sync may already have committed rows absent from the displayed UI.
-            context = ModelContext(container)
-            context.autosaveEnabled = false
-            try backupBeforeMigrationIfNeeded()
-            let latest = try load()
-            var ledger = try loadLedger()
-            try ledger.capture(latest)
+        try update { latest, ledger in
             try ledger.captureChanges(from: baseline, to: state)
             var merged = try ledger.materialize()
+            // Fetch order is not a revision. Only unseen business-row changes
+            // require repairing the combination of local and remote drafts.
+            func sameRows<T: Identifiable & Equatable>(_ a: [T], _ b: [T]) -> Bool {
+                Dictionary(uniqueKeysWithValues: a.map { ($0.id, $0) }) == Dictionary(uniqueKeysWithValues: b.map { ($0.id, $0) })
+            }
+            if latest.settings != baseline.settings || !sameRows(latest.courses, baseline.courses)
+                || !sameRows(latest.fixedEvents, baseline.fixedEvents) || !sameRows(latest.tasks, baseline.tasks)
+                || !sameRows(latest.completions, baseline.completions) {
+                merged.reconcileSavedSchedule(now: Date())
+            }
             // Materialization sorts by sync keys. Preserve displayed ordering so
             // an ordinary save does not appear to be a different plan and trigger
             // another expensive assessment on the main actor.
@@ -119,8 +122,39 @@ public final class LocalRepository: PlannerRepository {
             merged.fixedEvents = ordered(merged.fixedEvents, like: state.fixedEvents)
             merged.tasks = ordered(merged.tasks, like: state.tasks)
             merged.completions = ordered(merged.completions, like: state.completions)
-            try save(merged, ledger: ledger)
+            latest = merged
             return merged
+        }
+    }
+
+    /// Optimistic read/compute/commit. The closure must have no external side
+    /// effects: a concurrent local/sync write causes it to run again. Scheduling
+    /// stays outside the transaction lock, and state plus ledger commit together.
+    public func update<T>(enqueueCloud: Bool = true,
+                          _ operation: (inout PlannerState, inout SyncLedger) throws -> T) throws -> T {
+        while true {
+            let (snapshot, original) = try Self.withExclusiveAccess {
+                context = ModelContext(container); context.autosaveEnabled = false
+                try backupBeforeMigrationIfNeeded()
+                let state = try load()
+                var ledger = try loadLedger()
+                if ledger.records.isEmpty {
+                    try save(state, ledger: ledger)
+                    ledger = try loadLedger()
+                }
+                return (state, ledger)
+            }
+            let token = try encoder.encode(original)
+            var state = snapshot, ledger = original
+            try ledger.capture(state)
+            let result = try operation(&state, &ledger)
+            let committed = try Self.withExclusiveAccess {
+                context = ModelContext(container); context.autosaveEnabled = false
+                guard try encoder.encode(loadLedger()) == token else { return false }
+                try save(state, ledger: ledger, enqueueCloud: enqueueCloud)
+                return true
+            }
+            if committed { return result }
         }
     }
 

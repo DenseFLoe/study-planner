@@ -99,3 +99,40 @@ final class CloudSyncClientTests: XCTestCase, @unchecked Sendable {
         let retained = try await SyncDatabase.snapshot(url: database); XCTAssertNil(retained.1.cloudProgress)
     }
 }
+
+extension CloudSyncClientTests {
+    func testCloudDownloadRepairsCompetingPlansAndUploadsRepairOnce() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let database = root.appendingPathComponent("plans.store"), outbox = root.appendingPathComponent("outbox")
+        let calendar = Calendar.current, now = Date()
+        let day = calendar.date(byAdding: .day, value: 1, to: calendar.startOfDay(for: now))!
+        var base = PlannerState()
+        base.courses = [Course(name: "Concurrent", totalMinutes: 120, startDate: day, deadline: day, minimumBlockMinutes: 0)]
+        base.settings.availability = (1...7).map { .init(weekday: $0, startMinute: 480, endMinute: 660) }
+        _ = base.replan(now: now)
+        var ledger = SyncLedger(); try ledger.capture(base, now: now.addingTimeInterval(-3))
+        var local = base, remote = base, a = ledger, b = ledger
+        a.device = "mac"; b.device = "phone"
+        local.settings.minimumScheduleUnit = 30
+        _ = local.replan(now: now)
+        remote.settings.availability = (1...7).map { .init(weekday: $0, startMinute: 780, endMinute: 960) }
+        _ = remote.replan(now: now)
+        try a.capture(local, now: now.addingTimeInterval(-2))
+        try b.capture(remote, now: now.addingTimeInterval(-1))
+        try LocalRepository(url: database).save(local, ledger: a)
+        let server = ArchiveServer(b)
+        let outcome = try await CloudSyncClient.run(endpoint: "https://fixture.test", databaseURL: database, outbox: outbox, transport: server)
+        XCTAssertEqual(outcome.state.tasks.reduce(0) { $0 + $1.durationMinutes }, 120)
+        XCTAssertTrue(outcome.state.tasks.allSatisfy { calendar.component(.hour, from: $0.start) >= 13 })
+        XCTAssertEqual(outcome.ledger.cloudProgress?.uploadedSequence, -1, "Repairs must be sent back to peers")
+        let persisted = try await SyncDatabase.snapshot(url: database)
+        XCTAssertEqual(persisted.0.tasks, outcome.state.tasks)
+        XCTAssertEqual(try persisted.1.materialize().tasks, outcome.state.tasks)
+        _ = try await CloudSyncClient.run(endpoint: "https://fixture.test", databaseURL: database, outbox: outbox, transport: server)
+        _ = try await CloudSyncClient.run(endpoint: "https://fixture.test", databaseURL: database, outbox: outbox, transport: server)
+        let count = await server.uploadCount()
+        XCTAssertEqual(count, 2)
+    }
+}

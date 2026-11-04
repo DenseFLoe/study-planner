@@ -18,6 +18,7 @@ final class SavedScheduleAssessment {
             daily.merge(Planner.day(t.getDouble("start")),t.getInt("durationMinutes"),Integer::sum);
         }
         JSONObject missing=new JSONObject();Set<String> missingNames=new HashSet<>();JSONArray warnings=new JSONArray();
+        if(SyncExchange.invalidPending(state,now))warnings.put("当前课表含重复学习量或不符合最新约束的时段，请重新排程。");
         for(JSONObject c:courses){int n=Math.max(0,Planner.remaining(state,c)-booked.getOrDefault(c.getString("id"),0));missing.put(c.getString("id"),n);
             if(n>0){missingNames.add(c.getString("name"));warnings.put(c.getString("name")+"：仍有 "+n+" 分钟未排入当前课表，请重新排程或调整可学习时间。");}}
         JSONArray plans=ScheduleHealth.array(preview,"androidDayPlans"),risks=new JSONArray(),conflicts=new JSONArray();

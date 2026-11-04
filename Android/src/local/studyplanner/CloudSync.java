@@ -91,14 +91,22 @@ final class CloudSync {
             remote.put("revision",archive.header.getLong("revision"));
         }
         boolean dirty;
-        synchronized(database){
-            SyncLedger current=database.ledger();dirty=current.sequence()!=sequence;
+        while(true){
+            SyncLedger current=database.ledger();JSONObject checkpoint=current.metadata();dirty=current.sequence()!=sequence;
             if(archive!=null)current.merge(archive.ledger.changes(0));
-            JSONObject state=current.materialize();current.capture(state);
+            long beforeRepair=current.sequence();
+            JSONObject state=SyncExchange.repairMergedSchedule(current,Planner.now());
+            dirty|=current.sequence()!=beforeRepair;
             current.value.put("cloudProgress",new JSONObject().put("endpoint",identityEndpoint).put("serverID",identity).put("revision",remote.getLong("revision"))
                 .put("uploadedSequence",dirty?-1:current.sequence()).put("lastSuccess",System.currentTimeMillis()/1000.0));
-            database.commit(current,false);
-            CompressedPreviewStore.receive(context,state);
+            synchronized(database){
+                // Planning may be expensive. Retry if a foreground save or a
+                // hotspot exchange committed while this cloud plan was computed.
+                if(!SyncLedger.equivalent(checkpoint,database.metadata()))continue;
+                database.commit(current,false);
+                CompressedPreviewStore.receive(context,state);
+            }
+            break;
         }
         for(File file:queued)if(!file.delete()&&file.exists())throw new IOException("无法清理已上传文件");
         status("已同步 · 云端版本 "+remote.getLong("revision")+" · "+java.time.LocalTime.now(Planner.ZONE).withSecond(0).withNano(0));

@@ -160,9 +160,13 @@ public enum CloudSyncClient {
         let initialSequence = initial.sequence
         let outcome = try await SyncDatabase.update(url: databaseURL, enqueueCloud: false) { state, ledger in
             let locallyChangedDuringUpload = ledger.sequence != initialSequence
-            try ledger.merge(records); state = try ledger.materialize(); try ledger.capture(state)
+            try ledger.merge(records); state = try ledger.materialize()
+            let beforeRepair = ledger.sequence
+            state.reconcileSavedSchedule(now: Date())
+            try ledger.capture(state)
+            let repaired = ledger.sequence != beforeRepair
             ledger.cloudProgress = CloudProgress(endpoint: endpoint, serverID: identity, revision: revision,
-                uploadedSequence: locallyChangedDuringUpload ? -1 : ledger.sequence, lastSuccess: Date().timeIntervalSince1970)
+                uploadedSequence: locallyChangedDuringUpload || repaired ? -1 : ledger.sequence, lastSuccess: Date().timeIntervalSince1970)
             return SyncOutcome(state: state, ledger: ledger, sent: pending.count, received: records.count)
         }
         for file in pending { try? FileManager.default.removeItem(at: file) }

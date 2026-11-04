@@ -156,10 +156,7 @@ public enum SyncDatabase {
     }
     static func update<T: Sendable>(url: URL? = nil, enqueueCloud: Bool = true, _ block: @escaping @Sendable (inout PlannerState, inout SyncLedger) throws -> T) async throws -> T {
         try await Task.detached {
-            try LocalRepository.withExclusiveAccess {
-                let db = try LocalRepository(url: url); var state = try db.load(); var ledger = try db.loadLedger()
-                let result = try block(&state, &ledger); try db.save(state, ledger: ledger, enqueueCloud: enqueueCloud); return result
-            }
+            try LocalRepository(url: url).update(enqueueCloud: enqueueCloud, block)
         }.value
     }
 }
@@ -273,6 +270,7 @@ public enum SyncClient {
                     if row.deleted { removed += 1 } else if current.records[row.key] == nil || current.records[row.key]!.deleted { added += 1 } else { modified += 1 }
                 }
                 try current.merge(reply.changes); state = try current.materialize()
+                state.reconcileSavedSchedule(now: Date())
                 current.peerCursor = reply.cursor; current.sentCursor = sentThrough
                 return "新增 \(added)，修改 \(modified)，删除 \(removed)"
             }

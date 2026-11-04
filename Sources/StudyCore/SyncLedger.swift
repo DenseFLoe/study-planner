@@ -58,14 +58,28 @@ public struct SyncLedger: Codable, Sendable {
                 throw CourseEditError.removed
             }
         }
-        clock += 1
-        for var row in changes {
+        // Validate every row before mutating the ledger; a conflict rejects the
+        // whole edit, including tasks computed from that edit.
+        let resolved = try changes.map { change -> SyncRecord in
+            var row = change
             if !row.deleted, let before = original[row.key], let current = records[row.key], !current.deleted {
                 // Editors submit whole models. Keep fields the editor did not
                 // change, such as a remote rename during a local weight edit.
-                row.payload = try Self.overlayEditedFields(before: before.payload, edited: row.payload, current: current.payload,
-                                                          rejectSettingsConflicts: row.kind == "settings")
+                if row.kind == "courses" {
+                    let decoder = JSONDecoder(), encoder = JSONEncoder()
+                    encoder.outputFormatting = [.sortedKeys]
+                    row.payload = try encoder.encode(decoder.decode(Course.self, from: row.payload).mergingDraft(
+                        from: decoder.decode(Course.self, from: before.payload),
+                        into: decoder.decode(Course.self, from: current.payload)))
+                } else {
+                    row.payload = try Self.overlayEditedFields(before: before.payload, edited: row.payload, current: current.payload,
+                                                              rejectSettingsConflicts: row.kind == "settings")
+                }
             }
+            return row
+        }
+        clock += 1
+        for var row in resolved {
             sequence += 1
             row.sequence = sequence; row.version = clock; row.device = device
             row.modifiedAt = max(Int64(now.timeIntervalSince1970 * 1000), (records[row.key]?.modifiedAt ?? 0) + 1)
