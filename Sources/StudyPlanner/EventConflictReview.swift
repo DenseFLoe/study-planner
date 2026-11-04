@@ -8,6 +8,7 @@ private enum ConflictChoice: Int {
 struct EventConflictReview: View {
     @Bindable var store: PlannerStore
     var event: FixedEvent
+    var baseline: FixedEvent?
     var onSaved: () -> Void
     @Environment(\.dismiss) private var dismiss
     @State private var choices: [Date: ConflictChoice] = [:]
@@ -55,7 +56,7 @@ struct EventConflictReview: View {
                 Button("保存选择") { save() }
                     .buttonStyle(.borderedProminent).disabled(remaining > 0 || dates.isEmpty)
             }
-        }.padding(24).frame(width: 780, height: 680)
+        }.padding(24).frame(width: 780, height: 680).disabled(store.orderSaveBusy)
     }
     private func chooseAll(_ choice: ConflictChoice) {
         for day in dates { choices[day] = choice }
@@ -65,11 +66,12 @@ struct EventConflictReview: View {
         Task {
             let skipped = Set(choices.filter { $0.value == .skipNew }.map(\.key))
             let skippedLocal = Set(choices.filter { $0.value == .skipLocal }.map(\.key))
-            if await store.saveEvent(event, skippingDates: skipped, skippingExistingDates: skippedLocal) {
+            if await store.saveEvent(event, from: baseline, skippingDates: skipped,
+                                     skippingExistingDates: skippedLocal, reviewedConflicts: conflicts) {
                 dismiss()
                 onSaved()
             } else {
-                if let updated = store.pendingEventConflicts { conflicts = updated }
+                if let updated = store.pendingEventConflicts { conflicts = updated; choices = [:] }
                 message = store.pendingEventConflicts == nil ? (store.errorMessage ?? "保存失败，请重试。") : "仍有未处理的冲突，列表已更新，请确认后再保存。"
             }
         }

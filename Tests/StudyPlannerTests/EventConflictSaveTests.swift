@@ -51,16 +51,17 @@ final class EventConflictSaveTests: XCTestCase {
         let conflicting = await store.saveEvent(incoming)
         XCTAssertFalse(conflicting)
         XCTAssertEqual(store.pendingEventConflicts?.map(\.eventID), [local.id])
+        let reviewed = store.pendingEventConflicts
         XCTAssertNil(repo.saved)
         repo.fails = true
-        let failedSave = await store.saveEvent(incoming, skippingDates: [], skippingExistingDates: [day])
+        let failedSave = await store.saveEvent(incoming, skippingDates: [], skippingExistingDates: [day], reviewedConflicts: reviewed)
         XCTAssertFalse(failedSave)
         XCTAssertEqual(store.state, original)
         XCTAssertEqual(store.result.tasks, plan.tasks)
         XCTAssertNotNil(store.errorMessage)
         XCTAssertNil(repo.saved)
         repo.fails = false
-        let skippedSave = await store.saveEvent(incoming, skippingDates: [], skippingExistingDates: [day])
+        let skippedSave = await store.saveEvent(incoming, skippingDates: [], skippingExistingDates: [day], reviewedConflicts: reviewed)
         XCTAssertTrue(skippedSave)
         XCTAssertEqual(repo.saved, store.state)
         XCTAssertFalse(store.state.fixedEvents.first { $0.id == local.id }!.occurs(on: day, calendar: cal))

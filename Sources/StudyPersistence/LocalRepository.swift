@@ -19,6 +19,8 @@ public protocol PlannerRepository {
     @MainActor func saveForInteraction(_ state: PlannerState) async throws
     func saveChanges(_ state: PlannerState, from baseline: PlannerState) throws -> PlannerState
     @MainActor func saveChangesForInteraction(_ state: PlannerState, from baseline: PlannerState) async throws -> PlannerState
+    @MainActor func saveFixedEventForInteraction(_ edit: FixedEventEdit,
+                                               from baseline: PlannerState, now: Date) async throws -> PlannerState
 }
 
 extension PlannerRepository {
@@ -30,6 +32,13 @@ extension PlannerRepository {
     @MainActor public func saveChangesForInteraction(_ state: PlannerState, from baseline: PlannerState) async throws -> PlannerState {
         try await saveForInteraction(state)
         return state
+    }
+    @MainActor public func saveFixedEventForInteraction(_ edit: FixedEventEdit,
+                                                       from baseline: PlannerState, now: Date) async throws -> PlannerState {
+        var next = baseline
+        try edit.apply(to: &next, now: now)
+        _ = next.replan(now: now)
+        return try await saveChangesForInteraction(next, from: baseline)
     }
 }
 
@@ -166,6 +175,25 @@ public final class LocalRepository: PlannerRepository {
         }.value
         discardCachedModels()
         return merged
+    }
+
+    public func saveFixedEvent(_ edit: FixedEventEdit, now: Date = Date()) throws -> PlannerState {
+        try update { latest, _ in
+            try edit.apply(to: &latest, now: now)
+            _ = latest.replan(now: now)
+            return latest
+        }
+    }
+
+    @MainActor public func saveFixedEventForInteraction(_ edit: FixedEventEdit,
+                                                       from baseline: PlannerState, now: Date) async throws -> PlannerState {
+        let container = container, backup = migrationBackupURL, outbox = cloudOutboxURL
+        let saved = try await Task.detached(priority: .userInitiated) {
+            let worker = LocalRepository(container: container, migrationBackupURL: backup, cloudOutboxURL: outbox)
+            return try worker.saveFixedEvent(edit, now: now)
+        }.value
+        discardCachedModels()
+        return saved
     }
 
     /// Background sync writes through a separate context on the same store.

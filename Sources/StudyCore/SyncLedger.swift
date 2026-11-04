@@ -58,6 +58,11 @@ public struct SyncLedger: Codable, Sendable {
                 throw CourseEditError.removed
             }
         }
+        for row in changes where row.kind == "fixedEvents" && !row.deleted {
+            if original[row.key] != nil, records[row.key]?.deleted != false {
+                throw FixedEventEditError.removed
+            }
+        }
         // Validate every row before mutating the ledger; a conflict rejects the
         // whole edit, including tasks computed from that edit.
         let resolved = try changes.map { change -> SyncRecord in
@@ -71,6 +76,20 @@ public struct SyncLedger: Codable, Sendable {
                     row.payload = try encoder.encode(decoder.decode(Course.self, from: row.payload).mergingDraft(
                         from: decoder.decode(Course.self, from: before.payload),
                         into: decoder.decode(Course.self, from: current.payload)))
+                } else if row.kind == "fixedEvents" {
+                    let decoder = JSONDecoder(), encoder = JSONEncoder()
+                    encoder.outputFormatting = [.sortedKeys]
+                    let edited = try decoder.decode(FixedEvent.self, from: row.payload)
+                    let baseline = try decoder.decode(FixedEvent.self, from: before.payload)
+                    let latest = try decoder.decode(FixedEvent.self, from: current.payload)
+                    // A history split also creates a new rule ID. A generic row
+                    // overlay cannot safely rebase that dependent row; the event
+                    // edit transaction reapplies the intent instead.
+                    if edited.endDate < baseline.endDate, latest != baseline,
+                       changes.contains(where: { $0.kind == "fixedEvents" && !$0.deleted && original[$0.key] == nil }) {
+                        throw FixedEventEditError.conflictingChanges
+                    }
+                    row.payload = try encoder.encode(edited.mergingDraft(from: baseline, into: latest))
                 } else {
                     row.payload = try Self.overlayEditedFields(before: before.payload, edited: row.payload, current: current.payload,
                                                               rejectSettingsConflicts: row.kind == "settings")

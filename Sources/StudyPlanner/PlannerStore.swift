@@ -115,6 +115,7 @@ final class PlannerStore {
     private func commit(_ next: PlannerState, replan: Bool, now: Date = Date(),
                         backupReason: String? = "修改前自动备份", deletedCourseID: UUID? = nil,
                         clearError: Bool = true,
+                        fixedEventEdit: FixedEventEdit? = nil,
                         preparation: (@Sendable (inout PlannerState) throws -> ScheduleResult)? = nil) async -> Bool {
         guard !orderSaveBusy, let repository, isReady else { return false }
         let previous = state
@@ -137,7 +138,13 @@ final class PlannerStore {
                     try await backups.save(PlannerBackup(state: previous, reason: backupReason, deletedCourseID: deletedCourseID))
                     await refreshBackups()
                 }
-                let saved = try await repository.saveChangesForInteraction(plannedState, from: previous)
+                let saved: PlannerState
+                if let fixedEventEdit {
+                    saved = try await repository.saveFixedEventForInteraction(fixedEventEdit,
+                                                                             from: previous, now: now)
+                } else {
+                    saved = try await repository.saveChangesForInteraction(plannedState, from: previous)
+                }
                 let (assessment, load) = await Task.detached(priority: .userInitiated) {
                     (saved == plannedState ? planned : ScheduleEngine().assessSavedPlan(state: saved, now: now),
                      StudyLoadAnalyzer().assess(state: saved, now: now))
@@ -258,15 +265,21 @@ final class PlannerStore {
         next.removeCourse(id: course.id)
         return await commit(next, replan: true, backupReason: "删除课程前", deletedCourseID: course.id)
     }
-    func saveEvent(_ event: FixedEvent) async -> Bool {
-        await saveEvent(event, skippingDates: [])
-    }
     @discardableResult
-    func saveEvent(_ event: FixedEvent, skippingDates: Set<Date>, skippingExistingDates: Set<Date> = []) async -> Bool {
+    func saveEvent(_ event: FixedEvent, from baseline: FixedEvent? = nil, skippingDates: Set<Date> = [],
+                   skippingExistingDates: Set<Date> = [], reviewedConflicts: [FixedEventConflict]? = nil) async -> Bool {
+        let edit = FixedEventEdit(event: event, baseline: baseline, skippingDates: skippingDates,
+                                  skippingExistingDates: skippingExistingDates, reviewedConflicts: reviewedConflicts)
         pendingEventConflicts = nil
         let now = Date()
-        return await commit(state, replan: true, now: now) {
-            try $0.updateFixedEvent(event, now: now, skippingDates: skippingDates, skippingExistingDates: skippingExistingDates)
+        if reviewedConflicts != nil {
+            // A previous transaction may have refreshed the review while the
+            // displayed state still lags behind sync. Validate choices against
+            // the repository's latest state, not that older UI snapshot.
+            return await commit(state, replan: false, now: now, fixedEventEdit: edit)
+        }
+        return await commit(state, replan: true, now: now, fixedEventEdit: edit) {
+            try edit.apply(to: &$0, now: now)
             return $0.replan(now: now)
         }
     }

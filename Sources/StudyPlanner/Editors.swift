@@ -5,12 +5,18 @@ import StudySync
 struct FixedEventEditor: View {
     @Bindable var store: PlannerStore
     @State var event: FixedEvent
+    @State private var baseline: FixedEvent?
     @Environment(\.dismiss) private var dismiss
     @State private var deletePrompt = false
     @State private var conflictPrompt = false
     @State private var semesterWeeks = 16
     @State private var message = ""
-    private var existing: Bool { store.state.fixedEvents.contains { $0.id == event.id } }
+    init(store: PlannerStore, event: FixedEvent) {
+        self.store = store
+        _event = State(initialValue: event)
+        _baseline = State(initialValue: store.state.fixedEvents.contains { $0.id == event.id } ? event : nil)
+    }
+    private var existing: Bool { baseline != nil }
     private var conflicts: [FixedEventConflict] { store.pendingEventConflicts ?? [] }
     private var validation: String? {
         if event.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { return "请填写事项名称。" }
@@ -70,11 +76,11 @@ struct FixedEventEditor: View {
                 Button("保存并重新排程") {
                     Task {
                         if event.weekdays.isEmpty { event.endDate = event.startDate }
-                        if await store.saveEvent(event) { dismiss() }
+                        if await store.saveEvent(event, from: baseline) { dismiss() }
                         else if !conflicts.isEmpty { message = ""; conflictPrompt = true }
                         else { message = store.errorMessage ?? "保存失败" }
                     }
-                }.buttonStyle(.borderedProminent).keyboardShortcut(.defaultAction).disabled(validation != nil)
+                }.buttonStyle(.borderedProminent).keyboardShortcut(.defaultAction).disabled(validation != nil || store.orderSaveBusy)
             }.padding(20)
         }.frame(width: 600, height: 740)
         .confirmationDialog("删除「\(event.title)」？", isPresented: $deletePrompt, titleVisibility: .visible) {
@@ -85,7 +91,7 @@ struct FixedEventEditor: View {
             Text("将移除这条事项的全部过去和未来课表，并重新排程。")
         }
         .sheet(isPresented: $conflictPrompt) {
-            EventConflictReview(store: store, event: event, onSaved: { dismiss() }, conflicts: conflicts)
+            EventConflictReview(store: store, event: event, baseline: baseline, onSaved: { dismiss() }, conflicts: conflicts)
         }
         .onDisappear { store.pendingEventConflicts = nil }
     }
