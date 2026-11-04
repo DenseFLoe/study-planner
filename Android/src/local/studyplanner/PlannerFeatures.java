@@ -45,8 +45,41 @@ final class PlannerFeatures {
   for(int day=0;day<7;day++){LinearLayout row=app.row();TextView label=app.text("周"+"一二三四五六日".charAt(day),12,app.muted);row.addView(label,new LinearLayout.LayoutParams(app.dp(32),-2));LinearLayout bar=app.row();int used=0;for(JSONObject c:courses){int[] values=totals.get(c.optString("id"));int n=values==null?0:values[day];used+=n;if(n>0){View segment=new View(app);segment.setBackgroundColor(app.color(c.optString("color")));bar.addView(segment,new LinearLayout.LayoutParams(0,app.dp(8),n));}}View spacer=new View(app);bar.addView(spacer,new LinearLayout.LayoutParams(0,app.dp(8),Math.max(1,max-used)));row.addView(bar,new LinearLayout.LayoutParams(0,-2,1));TextView time=app.text(app.hours(used),11,app.muted);row.addView(time,new LinearLayout.LayoutParams(app.dp(76),-2));box.addView(row);}
   StringBuilder legend=new StringBuilder();for(JSONObject c:courses)if(totals.containsKey(c.optString("id"))){if(legend.length()>0)legend.append(" · ");legend.append(c.optString("name"));}box.addView(app.text(legend.toString(),12,app.muted));
  }
- void search(){LinearLayout form=app.col();form.setPadding(app.dp(16),0,app.dp(16),0);EditText query=app.field(form,"课程或课时关键词","",false);TextView count=app.text("搜索全部历史和未来安排，点结果跳转到当天。",12,app.muted);form.addView(count);LinearLayout rows=app.col();ScrollView scroll=new ScrollView(app);scroll.addView(rows);form.addView(scroll,new LinearLayout.LayoutParams(-1,app.dp(380)));AlertDialog dialog=new AlertDialog.Builder(app).setTitle("搜索课程日期").setView(form).setNegativeButton("关闭",null).create();
-  query.addTextChangedListener(new TextWatcher(){public void beforeTextChanged(CharSequence s,int start,int n,int after){}public void onTextChanged(CharSequence s,int start,int before,int n){rows.removeAllViews();String raw=s.toString().trim().toLowerCase(Locale.ROOT);if(raw.isEmpty()){count.setText("搜索全部历史和未来安排，点结果跳转到当天。");return;}List<JSONObject> matches=new ArrayList<>();for(JSONObject t:Planner.list(app.state.optJSONArray("tasks"))){JSONObject c=Planner.course(app.state,t.optString("courseID"));String haystack=((c==null?"":c.optString("name"))+" "+t.optString("lessonName")).toLowerCase(Locale.ROOT);boolean found=true;for(String term:raw.split("\\s+"))if(!haystack.contains(term))found=false;if(found)matches.add(t);}matches.sort(Comparator.comparingDouble(t->t.optDouble("start")));count.setText("找到 "+matches.size()+" 项安排 · 按日期排序");for(JSONObject t:matches){JSONObject c=Planner.course(app.state,t.optString("courseID"));String name=t.optString("lessonName",c==null?"已删除课程":c.optString("name"));rows.addView(app.button(Planner.date(t.optDouble("start"))+" "+Planner.clock(Planner.planningStart(t))+" · "+name+(" · "+Planner.completionDescription(t)),()->{app.selected=Planner.day(t.optDouble("start"));app.month=app.selected.withDayOfMonth(1);app.page=0;dialog.dismiss();app.render();}));}}public void afterTextChanged(Editable s){}});dialog.show();
+ void search(){
+  LinearLayout form=app.col();form.setPadding(app.dp(16),0,app.dp(16),0);
+  EditText query=app.field(form,"课程、课节或日期（YYYY-MM-DD）","",false);
+  String hint="搜索全部历史和未来安排，可组合多个关键词，点结果跳转到当天。";
+  TextView count=app.text(hint,12,app.muted);form.addView(count);
+  LinearLayout rows=app.col();ScrollView scroll=new ScrollView(app);scroll.addView(rows);form.addView(scroll,new LinearLayout.LayoutParams(-1,app.dp(380)));
+  PlannerUi.Flow navigation=new PlannerUi.Flow(app);form.addView(navigation);
+  AlertDialog dialog=new AlertDialog.Builder(app).setTitle("搜索课程日期").setView(form).setNegativeButton("关闭",null).create();
+  TaskSearch.Result[] result={null};int[] page={0};Button[] pages=new Button[2];
+  Runnable render=()->{
+   rows.removeAllViews();int total=result[0]==null?0:result[0].count(),number=result[0]==null?0:result[0].pageCount();
+   pages[0].setEnabled(page[0]>0);pages[1].setEnabled(page[0]+1<number);
+   if(result[0]==null)return;
+   count.setText(total==0?"没有找到匹配的安排":"找到 "+total+" 项安排 · 第 "+(page[0]+1)+" / "+number+" 页 · 按日期排序");
+   for(TaskSearch.Hit hit:result[0].page(page[0]))rows.addView(app.button(hit.label(),()->{
+    app.selected=Planner.day(hit.start);app.month=app.selected.withDayOfMonth(1);app.page=0;dialog.dismiss();app.render();
+   }));scroll.scrollTo(0,0);
+  };
+  pages[0]=app.button("上一页",()->{page[0]--;render.run();});pages[1]=app.button("下一页",()->{page[0]++;render.run();});
+  navigation.addView(pages[0]);navigation.addView(pages[1]);render.run();
+  TaskSearchController controller=new TaskSearchController(app.worker,app::runOnUiThread,value->{
+   if(app.isDestroyed()||!dialog.isShowing())return;result[0]=value;page[0]=0;render.run();
+  },error->{if(!app.isDestroyed()&&dialog.isShowing())count.setText("搜索失败："+error.getMessage());});
+  Runnable[] pending={null};
+  query.addTextChangedListener(new TextWatcher(){
+   public void beforeTextChanged(CharSequence s,int start,int n,int after){}
+   public void onTextChanged(CharSequence s,int start,int before,int n){
+    if(pending[0]!=null)app.handler.removeCallbacks(pending[0]);controller.clear();result[0]=null;page[0]=0;render.run();
+    String text=s.toString();if(TaskSearch.normalize(text).isEmpty()){count.setText(hint);return;}
+    count.setText("正在搜索…");JSONObject snapshot=app.state;
+    pending[0]=()->controller.search(snapshot,text);app.handler.postDelayed(pending[0],200);
+   }
+   public void afterTextChanged(Editable s){}
+  });
+  dialog.setOnDismissListener(d->{controller.close();if(pending[0]!=null)app.handler.removeCallbacks(pending[0]);});dialog.show();
  }
  void coursesHeader(PlannerUi.Flow actions){actions.addView(app.button("合并课程",this::merge));actions.addView(app.button("从网站抓取全部课程",()->app.startActivityForResult(new Intent(app,CourseImportActivity.class).putExtra("mode","website"),MainActivity.IMPORT_COURSES)));actions.addView(app.button("从夸克网盘分享导入",()->app.startActivityForResult(new Intent(app,CourseImportActivity.class).putExtra("mode","netdisk"),MainActivity.IMPORT_COURSES)));}
  static final double[] DAILY_WEIGHTS={1,1.5,2,3};
