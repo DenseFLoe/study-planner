@@ -168,10 +168,11 @@ extension PlannerState {
                 items[index].remainingMinutes -= credit; baseline -= credit
             }
             let taskByID = Dictionary(uniqueKeysWithValues: tasks.filter { $0.courseID == course.id }.map { ($0.id, $0) })
+            let indexByID = Dictionary(items.enumerated().map { ($0.element.id, $0.offset) }, uniquingKeysWith: { first, _ in first })
             var unassigned = 0
             for record in completions where record.courseID == course.id {
                 if let lessonID = taskByID[record.taskID]?.lessonID,
-                   let index = items.firstIndex(where: { $0.id == lessonID }) {
+                   let index = indexByID[lessonID] {
                     let credit = min(record.minutes, items[index].remainingMinutes)
                     items[index].remainingMinutes -= credit
                 } else { unassigned += record.minutes }
@@ -200,9 +201,10 @@ extension PlannerState {
         var extra = max(0, recordedCompletedMinutes(for: course) - snapshot.completedMinutes)
         let websiteCredits = items.map { max(0, $0.durationMinutes - $0.remainingMinutes) }
         let taskByID = Dictionary(uniqueKeysWithValues: tasks.filter { $0.courseID == course.id }.map { ($0.id, $0) })
+        let indexByID = Dictionary(items.enumerated().map { ($0.element.id, $0.offset) }, uniquingKeysWith: { first, _ in first })
         for record in completions.filter({ $0.courseID == course.id && $0.recordedAt > snapshot.fetchedAt }) {
             guard extra > 0, let lessonID = taskByID[record.taskID]?.lessonID,
-                  let index = items.firstIndex(where: { $0.id == lessonID }) else { continue }
+                  let index = indexByID[lessonID] else { continue }
             let credit = min(extra, record.minutes, items[index].remainingMinutes)
             items[index].remainingMinutes -= credit
             // Consume the entire identified record, including repeated study. Its
