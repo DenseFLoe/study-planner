@@ -3,6 +3,7 @@ import StudyCore
 
 /// Local forecast history is deliberately separate from the synced business state.
 public actor DailyConsequenceRepository {
+    static let maximumBytes = 8_000_000
     private let url: URL?
     private var memory = DailyConsequenceJournal()
     private var sequence = -1
@@ -14,8 +15,7 @@ public actor DailyConsequenceRepository {
     public func load() throws -> DailyConsequenceJournal {
         guard let url, FileManager.default.fileExists(atPath: url.path) else { return memory }
         do {
-            let data = try Data(contentsOf: url)
-            guard data.count <= 8_000_000 else { throw CocoaError(.coderReadCorrupt) }
+            let data = try BoundedFileData.read(url, limit: Self.maximumBytes)
             let value = try JSONDecoder().decode(DailyConsequenceJournal.self, from: data)
             guard value.version == 1, value.days.count <= 31, Set(value.days.map(\.id)).count == value.days.count,
                   value.days.allSatisfy({ day in
@@ -36,10 +36,10 @@ public actor DailyConsequenceRepository {
         var retained = value
         retained.days = Array(retained.days.sorted { $0.date < $1.date }.suffix(14))
         var data = try JSONEncoder().encode(retained)
-        while data.count > 8_000_000 && retained.days.count > 1 {
+        while data.count > Self.maximumBytes && retained.days.count > 1 {
             retained.days.removeFirst(); data = try JSONEncoder().encode(retained)
         }
-        guard data.count <= 8_000_000 else { throw CocoaError(.fileWriteOutOfSpace) }
+        guard data.count <= Self.maximumBytes else { throw CocoaError(.fileWriteOutOfSpace) }
         if let url {
             try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
             try data.write(to: url, options: [.atomic])

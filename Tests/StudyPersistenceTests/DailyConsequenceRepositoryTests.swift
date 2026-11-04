@@ -43,6 +43,24 @@ final class DailyConsequenceRepositoryTests: XCTestCase {
         do { try await repository.save(DailyConsequenceJournal(), sequence: 1); XCTFail("Must preserve corrupt file") } catch { }
         XCTAssertEqual(try Data(contentsOf: url), bad)
     }
+    func testOversizedHistoryIsRejectedAndNeverOverwritten() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let url = directory.appendingPathComponent("oversized.json")
+        try Data([0x7b]).write(to: url)
+        let size = UInt64(DailyConsequenceRepository.maximumBytes + 1)
+        let writer = try FileHandle(forWritingTo: url)
+        try writer.truncate(atOffset: size); try writer.close()
+        let repository = DailyConsequenceRepository(url: url)
+        do { _ = try await repository.load(); XCTFail("Oversized history was accepted") } catch { }
+        do { try await repository.save(DailyConsequenceJournal(), sequence: 1); XCTFail("Oversized history was overwritten") } catch { }
+        let attributes = try FileManager.default.attributesOfItem(atPath: url.path)
+        XCTAssertEqual((attributes[.size] as? NSNumber)?.uint64Value, size)
+        let reader = try FileHandle(forReadingFrom: url)
+        defer { try? reader.close() }
+        XCTAssertEqual(try reader.read(upToCount: 1), Data([0x7b]))
+    }
     private func capturedEntry(now: Date, courses: [Course]) throws -> DailyConsequenceDay {
         var state = PlannerState()
         state.courses = courses

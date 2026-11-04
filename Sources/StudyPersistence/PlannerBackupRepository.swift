@@ -94,12 +94,6 @@ public actor PlannerBackupRepository {
 
     /// Enforce the cap while reading, including when the file grows after stat.
     nonisolated static func readBoundedData(from file: FileHandle, limit: Int) throws -> Data {
-        guard limit >= 0 else { throw SyncFailure.invalidData }
-        var data = Data()
-        while let part = try file.read(upToCount: min(64 * 1024, limit - data.count + 1)), !part.isEmpty {
-            guard part.count <= limit - data.count else { throw SyncFailure.invalidData }
-            data.append(part)
-        }
-        return data
+        try BoundedFileData.read(from: file, limit: limit)
     }
 }

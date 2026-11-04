@@ -29,8 +29,7 @@ public final class CompressedScheduleRepository {
            size.intValue > Self.maximumBytes {
             throw CocoaError(.coderReadCorrupt)
         }
-        let data = try Data(contentsOf: url)
-        guard data.count <= Self.maximumBytes else { throw CocoaError(.coderReadCorrupt) }
+        let data = try BoundedFileData.read(url, limit: Self.maximumBytes)
         let value = try JSONDecoder().decode(CompressedScheduleSnapshot.self, from: data)
         guard value.version == 1 else { throw CocoaError(.coderReadCorrupt) }
         return value
