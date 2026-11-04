@@ -645,7 +645,9 @@ struct MainView: View {
                 )
 
                 WeeklyStudyChart(
-                    selectedDay: selectedDay,
+                    selectedDay: $selectedDay,
+                    month: $month,
+                    state: store.state,
                     tasks: store.state.tasks,
                     courses: store.courses
                 )
@@ -1372,7 +1374,9 @@ private struct CompletedTaskRow: View {
 }
 
 private struct WeeklyStudyChart: View {
-    var selectedDay: Date
+    @Binding var selectedDay: Date
+    @Binding var month: Date
+    var state: PlannerState
     var tasks: [ScheduledTask]
     var courses: [Course]
     @State private var appeared = false
@@ -1384,6 +1388,13 @@ private struct WeeklyStudyChart: View {
         let day = calendar.startOfDay(for: selectedDay)
         let offset = (calendar.component(.weekday, from: day) + 5) % 7
         return calendar.date(byAdding: .day, value: -offset, to: day)!
+    }
+
+    private func select(_ day: Date) {
+        selectedDay = calendar.startOfDay(for: day); month = selectedDay
+    }
+    private func moveWeek(_ offset: Int) {
+        if let date = calendar.date(byAdding: .day, value: offset * 7, to: selectedDay) { select(date) }
     }
 
     private var summary: WeeklyChartSeries.Summary {
@@ -1399,6 +1410,13 @@ private struct WeeklyStudyChart: View {
         let legendCourses = seriesIDs.compactMap { coursesByID[$0] }
         VStack(alignment: .leading, spacing: 16) {
             PlannerSectionTitle(title: "周计划时长", detail: summary.totalMinutes.map { "合计 \(hours($0))" } ?? "合计超出范围")
+            HStack {
+                Button("上一周") { moveWeek(-1) }
+                Button("本周") { select(Date()) }
+                Button("下一周") { moveWeek(1) }
+                Spacer(minLength: 8)
+                WeeklyStudyCopyButton(day: selectedDay, state: state)
+            }.buttonStyle(SoftButtonStyle())
             Text("\(weekStart.formatted(.dateTime.month().day()))–\(calendar.date(byAdding: .day, value: 6, to: weekStart)!.formatted(.dateTime.month().day())) · 含已确认任务的原计划")
                 .font(.caption).foregroundStyle(.secondary)
             Text("这里统计计划时长；实际学习按学习日期计入“实际已学”。")
