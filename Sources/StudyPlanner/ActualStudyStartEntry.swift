@@ -17,8 +17,8 @@ struct ActualStudyStartEntry: View {
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
             ViewThatFits(in: .horizontal) {
-                HStack(spacing: 14) { timePicker; saveButton }
-                VStack(alignment: .leading, spacing: 10) { timePicker; saveButton }
+                HStack(spacing: 14) { timePicker; actionButtons }
+                VStack(alignment: .leading, spacing: 10) { timePicker; actionButtons }
             }
             if let savedTime {
                 Label("已按 \(savedTime.formatted(date: .omitted, time: .shortened)) 更新今天及后续课表", systemImage: "checkmark.circle.fill")
@@ -52,5 +52,17 @@ struct ActualStudyStartEntry: View {
         .buttonStyle(SoftButtonStyle(prominent: true))
         .disabled(!store.isReady)
         .accessibilityIdentifier("apply-actual-study-start")
+    }
+
+    private var actionButtons: some View {
+        HStack(spacing: 10) {
+            saveButton
+            Button("同步当前时间", systemImage: "clock.arrow.circlepath") {
+                time = Date()
+            }
+            .buttonStyle(SoftButtonStyle())
+            .help("将开始时间设为电脑当前时间")
+            .accessibilityIdentifier("sync-actual-study-start-time")
+        }
     }
 }
