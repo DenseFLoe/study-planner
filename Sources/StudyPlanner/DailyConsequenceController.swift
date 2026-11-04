@@ -81,8 +81,9 @@ final class DailyConsequenceController {
             candidate.days[index] = entry
             if candidate != journal { journal = candidate; persist() }
             confirmedToday = confirmed
+            let tasks = Dictionary(state.tasks.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
             todayUsesLegacyDates = state.completions.contains { record in
-                analyzer.effectiveDay(record, state: state).map { $0.legacy && calendar.isDate($0.date, inSameDayAs: day) } == true
+                analyzer.effectiveDay(record, task: tasks[record.taskID]).map { $0.legacy && calendar.isDate($0.date, inSameDayAs: day) } == true
             }
             celebrationEvents = events; today = entry; todayError = nil
             if let runningEntry, runningEntry != entry.id { cancelForecast() }

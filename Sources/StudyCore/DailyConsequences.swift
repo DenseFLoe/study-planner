@@ -140,16 +140,23 @@ public struct DailyConsequenceAnalyzer: Sendable {
     }
 
     public func effectiveDay(_ record: CompletionRecord, state: PlannerState) -> (date: Date, legacy: Bool)? {
+        if record.studyDate != nil { return effectiveDay(record, task: nil) }
+        return effectiveDay(record, task: state.tasks.first { $0.id == record.taskID })
+    }
+
+    /// Batch callers can reuse one task index instead of scanning all history per record.
+    public func effectiveDay(_ record: CompletionRecord, task: ScheduledTask?) -> (date: Date, legacy: Bool)? {
         if let date = record.studyDate { return (calendar.startOfDay(for: date), false) }
-        if let task = state.tasks.first(where: { $0.id == record.taskID }), calendar.isDate(task.start, inSameDayAs: record.recordedAt) {
+        if let task, task.id == record.taskID, calendar.isDate(task.start, inSameDayAs: record.recordedAt) {
             return (calendar.startOfDay(for: record.recordedAt), true)
         }
         return nil
     }
 
     public func confirmed(on day: Date, state: PlannerState) throws -> Int {
-        try DailyMinuteArithmetic.sum(state.completions.lazy.filter {
-            effectiveDay($0, state: state).map { calendar.isDate($0.date, inSameDayAs: day) } == true
+        let tasks = Dictionary(state.tasks.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        return try DailyMinuteArithmetic.sum(state.completions.lazy.filter {
+            effectiveDay($0, task: tasks[$0.taskID]).map { calendar.isDate($0.date, inSameDayAs: day) } == true
         }.map(\.minutes))
     }
 
@@ -157,8 +164,9 @@ public struct DailyConsequenceAnalyzer: Sendable {
         let records = Dictionary(uniqueKeysWithValues: state.completions.map { ($0.id, $0) })
         guard day.capturedRecords.allSatisfy({ records[$0.id] == $0 }) else { return false }
         let captured = Set(day.capturedRecords.map(\.id))
+        let tasks = Dictionary(state.tasks.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
         if state.completions.contains(where: { record in
-            !captured.contains(record.id) && effectiveDay(record, state: state).map { $0.date < day.date } == true
+            !captured.contains(record.id) && effectiveDay(record, task: tasks[record.taskID]).map { $0.date < day.date } == true
         }) { return false }
         for baselineCourse in day.baseline.courses {
             guard let current = state.courses.first(where: { $0.id == baselineCourse.id }) else { return false }
@@ -297,9 +305,9 @@ public struct DailyConsequenceAnalyzer: Sendable {
         let relevant = state.completions.filter { record in
             calendar.isDate(record.recordedAt, inSameDayAs: entry.date) || tasks[record.taskID].map { calendar.isDate($0.start, inSameDayAs: entry.date) } == true
         }
-        let ambiguous = relevant.filter { effectiveDay($0, state: state) == nil }.count
+        let ambiguous = relevant.filter { effectiveDay($0, task: tasks[$0.taskID]) == nil }.count
         let legacy = state.completions.contains { record in
-            effectiveDay(record, state: state).map { $0.legacy && calendar.isDate($0.date, inSameDayAs: entry.date) } == true
+            effectiveDay(record, task: tasks[record.taskID]).map { $0.legacy && calendar.isDate($0.date, inSameDayAs: entry.date) } == true
         }
         struct Key: Hashable { var course: UUID; var lesson: String? }
         var targets: [Key: Int] = [:], reviewed: [Key: Int] = [:]
@@ -315,7 +323,7 @@ public struct DailyConsequenceAnalyzer: Sendable {
                 if task.lessonID != nil { reviewed[key] = max(reviewed[key, default: 0], task.durationMinutes) }
                 else { reviewed[key] = try DailyMinuteArithmetic.add(reviewed[key, default: 0], task.durationMinutes) }
             }
-            if effectiveDay(record, state: state).map({ calendar.isDate($0.date, inSameDayAs: entry.date) }) == true {
+            if effectiveDay(record, task: task).map({ calendar.isDate($0.date, inSameDayAs: entry.date) }) == true {
                 try credit(record.minutes, courseID: record.courseID, lessonID: task?.lessonID, state: &projection)
             }
         }

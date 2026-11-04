@@ -15,7 +15,7 @@ struct ConfirmedStudySummary {
         var ambiguous = 0
         let tasks = Dictionary(state.tasks.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
         for record in state.completions {
-            if let effective = analyzer.effectiveDay(record, state: state) {
+            if let effective = analyzer.effectiveDay(record, task: tasks[record.taskID]) {
                 if effective.legacy && calendar.isDate(effective.date, inSameDayAs: day) { legacy += 1 }
             } else if calendar.isDate(record.recordedAt, inSameDayAs: day) ||
                         tasks[record.taskID].map({ calendar.isDate($0.start, inSameDayAs: day) }) == true {
