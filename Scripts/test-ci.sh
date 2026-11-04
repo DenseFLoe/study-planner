@@ -9,17 +9,7 @@ python3 Scripts/test-build-metadata.py
 node Android/tests/crawlers.test.js
 bash Android/check-api.sh
 
-json_jar="Android/tools/json.jar"
-json_url='https://repo.maven.apache.org/maven2/org/json/json/20240303/json-20240303.jar'
-json_sha256='3cf6cd6892e32e2b4c1c39e0f52f5248a2f5b37646fdfbb79a66b46b618414ed'
-
-# Android/tools 不入库，缺失时从官方 Maven 下载，再用固定 SHA256 校验。
-if [[ ! -f "$json_jar" ]]; then
-  mkdir -p "$(dirname "$json_jar")"
-  curl --fail --location --proto '=https' --tlsv1.2 --output "$json_jar" "$json_url"
-fi
-if command -v sha256sum >/dev/null; then digest="$(sha256sum "$json_jar")"; else digest="$(shasum -a 256 "$json_jar")"; fi
-[[ "${digest%% *}" == "$json_sha256" ]] || { echo 'JSON-java dependency checksum mismatch' >&2; exit 1; }
+bash Scripts/prepare-json-java.sh
 
 # 跨语言 fixture 共用同一个临时目录，退出时清理。
 fixture="$(mktemp -d "${TMPDIR:-/tmp}/study-cloud-wire.XXXXXX")"
