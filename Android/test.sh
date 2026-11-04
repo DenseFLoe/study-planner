@@ -143,3 +143,6 @@ mkdir -p Android/build/controller-tests
 
 "$JDK/bin/javac" -cp Android/tools/json.jar:Android/build/tests -d Android/build/tests Android/tests/CourseImportReceiptTests.java
 "$JDK/bin/java" -cp Android/tools/json.jar:Android/build/tests local.studyplanner.CourseImportReceiptTests
+
+"$JDK/bin/javac" --release 8 -encoding UTF-8 -d Android/build/tests Android/src/local/studyplanner/CloudSSHConfig.java Android/tests/SSHKeyImportTests.java
+"$JDK/bin/java" -cp Android/build/tests local.studyplanner.SSHKeyImportTests

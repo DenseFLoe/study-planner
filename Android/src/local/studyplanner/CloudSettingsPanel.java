@@ -1,12 +1,12 @@
 package local.studyplanner;
 
 import android.content.Intent;
+import android.app.ProgressDialog;
 import android.net.Uri;
 import android.text.*;
 import android.view.View;
 import android.widget.*;
 import java.io.*;
-import java.nio.charset.StandardCharsets;
 
 final class CloudSettingsPanel {
     final MainActivity app;
@@ -85,13 +85,19 @@ final class CloudSettingsPanel {
         }
         httpsCard.setContentDescription("HTTPS 直连"+(!ssh?"，已选中":"，点击切换"));sshCard.setContentDescription("SSH 密钥"+(ssh?"，已选中":"，点击切换"));
     }
-    void importKey(Uri uri)throws Exception{
-        String key;
-        try(InputStream raw=app.getContentResolver().openInputStream(uri);InputStream in=new CloudSnapshot.LimitedInput(raw,65536);ByteArrayOutputStream out=new ByteArrayOutputStream()){
-            byte[] buffer=new byte[4096];for(int n;(n=in.read(buffer))!=-1;)out.write(buffer,0,n);key=new String(out.toByteArray(),StandardCharsets.UTF_8);
-        }
-        if(!key.contains("PRIVATE KEY-----")||!key.contains("-----END "))throw new Exception("请选择 SSH 私钥文件，而非公钥");
-        importedKey=key;passphrase.setText("");keyLabel.setText("已选择新私钥，保存后生效");
+    void importKey(Uri uri){
+        if(app.busy||reading){app.alert("导入私钥","请等待当前操作完成后，再导入私钥。");return;}
+        app.busy=true;reading=true;ProgressDialog progress=ProgressDialog.show(app,"","正在读取私钥文件…",true,false);
+        app.worker.execute(()->{
+            try{String key=CloudSSHConfig.readPrivateKey(app.getContentResolver().openInputStream(uri));app.runOnUiThread(()->{
+                app.busy=false;reading=false;progress.dismiss();if(app.isDestroyed())return;
+                if(app.cloudPanel==this){importedKey=key;passphrase.setText("");keyLabel.setText("已选择新私钥，保存后生效");}
+                app.resumeSyncRefresh();
+            });}catch(Exception error){app.runOnUiThread(()->{
+                app.busy=false;reading=false;progress.dismiss();if(app.isDestroyed())return;
+                app.alert("导入私钥失败","请重新选择可读取的 UTF-8 SSH 私钥文件（最大64 KiB），而非公钥。原已选密钥及已保存配置保持不变。");app.resumeSyncRefresh();
+            });}
+        });
     }
     void readFingerprint(){
         if(reading)return;final String target=app.value(host),targetPort=app.value(port);final int number;
