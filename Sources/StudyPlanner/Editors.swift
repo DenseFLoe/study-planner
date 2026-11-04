@@ -92,8 +92,12 @@ struct FixedEventEditor: View {
 }
 struct SettingsView: View {
     @Bindable var store: PlannerStore
-    @State private var settings = AppSettings()
-    @State private var saved = false
+    @Bindable private var draft: SettingsDraft
+
+    init(store: PlannerStore) {
+        self.store = store
+        self.draft = store.settingsDraft
+    }
     @State private var selectedCategory: SettingsCategory?
     @State private var syncHost = ""
     @State private var pairingRequest: PairingRequest?
@@ -106,7 +110,7 @@ struct SettingsView: View {
         return min(max(timelineTimeFontSize, 14), 24)
     }
     private var valid: Bool {
-        (1...1440).contains(settings.minimumScheduleUnit) && settings.availability.allSatisfy { $0.startMinute >= 0 && $0.endMinute <= 1440 && $0.startMinute < $0.endMinute }
+        draft.settings.hasValidEditableSettings
     }
     var body: some View {
         VStack(spacing: 0) {
@@ -133,23 +137,24 @@ struct SettingsView: View {
                         .formStyle(.grouped)
                         .opacity(selectedCategory == category ? 1 : 0)
                         .allowsHitTesting(selectedCategory == category)
-                        .disabled(selectedCategory != category)
+                        .disabled(selectedCategory != category || store.orderSaveBusy)
                         .accessibilityHidden(selectedCategory != category)
                 }
             }.frame(maxWidth: .infinity, maxHeight: .infinity)
-            if selectedCategory?.editsSchedule == true || settings != store.state.settings || saved {
+            if selectedCategory?.editsSchedule == true || draft.hasChanges || draft.saved {
                 HStack {
+                    if draft.hasChanges { Text("有未保存的修改；切换页面会保留，退出前请保存。").font(.caption).foregroundStyle(.secondary) }
                     if !valid { Text("请检查各时段的起止时间和最小时间块。").foregroundStyle(.orange) }
-                    if saved { Label("已保存，未来计划已更新", systemImage: "checkmark.circle.fill").foregroundStyle(.teal) }
+                    if draft.saved { Label("已保存，未来计划已更新", systemImage: "checkmark.circle.fill").foregroundStyle(.teal) }
                     Spacer()
-                    Button("恢复已保存设置") { settings = store.state.settings; saved = false }
-                    Button("保存并重新排程") { Task { saved = await store.change { $0.updateStudySettings(settings, now: Date()) } } }.buttonStyle(.borderedProminent).disabled(!valid || store.orderSaveBusy)
+                    Button("恢复已保存设置") { draft.restore(from: store.state.settings) }.disabled(store.orderSaveBusy)
+                    Button("保存并重新排程") { Task { await draft.save(using: store) } }.buttonStyle(.borderedProminent).disabled(!valid || !draft.hasChanges || store.orderSaveBusy)
                 }.padding(20)
             }
         }.onAppear {
-            settings = store.state.settings; syncHost = (try? PairingVault.load())?.host ?? ""
+            draft.refresh(from: store.state.settings); syncHost = (try? PairingVault.load())?.host ?? ""
         }
-        .onChange(of: settings) { _, _ in saved = false }
+        .onChange(of: store.state.settings) { _, current in draft.refresh(from: current) }
         .onChange(of: store.syncLedger.lastSuccess) { _, _ in pairingRequest = nil }
     }
     private var categoryGrid: some View {
@@ -212,15 +217,15 @@ struct SettingsView: View {
                         HStack {
                             Text(weekdayNames[day]!).fontWeight(.semibold)
                             Spacer()
-                            if !settings.availability.contains(where: { $0.weekday == day }) { Text("休息日").foregroundStyle(.secondary) }
-                            Button("添加时段", systemImage: "plus") { settings.availability.append(.init(weekday: day, startMinute: 480, endMinute: 1380)); saved = false }
+                            if !draft.settings.availability.contains(where: { $0.weekday == day }) { Text("休息日").foregroundStyle(.secondary) }
+                            Button("添加时段", systemImage: "plus") { draft.settings.availability.append(.init(weekday: day, startMinute: 480, endMinute: 1380)) }
                         }
-                        ForEach($settings.availability) { $window in
+                        ForEach($draft.settings.availability) { $window in
                             if window.weekday == day {
                                 HStack {
                                     TimeField(title: "从", minute: $window.startMinute)
                                     TimeField(title: "至", minute: $window.endMinute)
-                                    Button(role: .destructive) { settings.availability.removeAll { $0.id == window.id }; saved = false } label: { Image(systemName: "minus.circle") }.help("移除此时段")
+                                    Button(role: .destructive) { draft.settings.availability.removeAll { $0.id == window.id } } label: { Image(systemName: "minus.circle") }.help("移除此时段")
                                 }
                             }
                         }
@@ -235,14 +240,14 @@ struct SettingsView: View {
         case .supervision:
             PlaybackSupervisionSettings(store: store)
         case .priorities:
-            SchedulePrioritiesPanel(settings: $settings)
+            SchedulePrioritiesPanel(settings: $draft.settings)
         case .explanation:
             ScheduleExplanationPanel(state: store.state, result: store.result,
-                                     hasUnsavedChanges: settings != store.state.settings)
+                                     hasUnsavedChanges: draft.hasChanges)
         case .defaults:
             Section("默认规则") {
-                TextField("默认最小时间块（分钟）", value: $settings.minimumScheduleUnit, format: .number)
-                TimeField(title: "每日完成确认时间", minute: $settings.notificationMinute)
+                TextField("默认最小时间块（分钟）", value: $draft.settings.minimumScheduleUnit, format: .number)
+                TimeField(title: "每日完成确认时间", minute: $draft.settings.notificationMinute)
                 Text("软件打开时，在此时间之后提示确认当天已结束的任务；下次启动也会补查未确认的历史任务。").font(.caption).foregroundStyle(.secondary)
             }
         case .localSync:

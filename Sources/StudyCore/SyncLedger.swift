@@ -63,7 +63,8 @@ public struct SyncLedger: Codable, Sendable {
             if !row.deleted, let before = original[row.key], let current = records[row.key], !current.deleted {
                 // Editors submit whole models. Keep fields the editor did not
                 // change, such as a remote rename during a local weight edit.
-                row.payload = try Self.overlayEditedFields(before: before.payload, edited: row.payload, current: current.payload)
+                row.payload = try Self.overlayEditedFields(before: before.payload, edited: row.payload, current: current.payload,
+                                                          rejectSettingsConflicts: row.kind == "settings")
             }
             sequence += 1
             row.sequence = sequence; row.version = clock; row.device = device
@@ -71,13 +72,19 @@ public struct SyncLedger: Codable, Sendable {
             records[row.key] = row
         }
     }
-    private static func overlayEditedFields(before: Data, edited: Data, current: Data) throws -> Data {
+    private static func overlayEditedFields(before: Data, edited: Data, current: Data, rejectSettingsConflicts: Bool) throws -> Data {
         guard let baseline = try JSONSerialization.jsonObject(with: before) as? [String: Any],
               let changes = try JSONSerialization.jsonObject(with: edited) as? [String: Any],
               var merged = try JSONSerialization.jsonObject(with: current) as? [String: Any] else { throw SyncFailure.invalidData }
         for key in Set(baseline.keys).union(changes.keys) {
             let old = baseline[key] as? NSObject, new = changes[key] as? NSObject
             if let old, let new, old.isEqual(new) { continue }
+            // A sync write can land after the UI's draft check but before the
+            // repository transaction. Reject competing edits at this final gate.
+            if rejectSettingsConflicts && ["minimumScheduleUnit", "notificationMinute", "availability", "schedulingRuleLevels"].contains(key) {
+                let latest = merged[key] as? NSObject
+                guard latest == old || latest == new else { throw SettingsEditError.conflictingChanges }
+            }
             merged[key] = changes[key]
         }
         return try JSONSerialization.data(withJSONObject: merged, options: [.sortedKeys])

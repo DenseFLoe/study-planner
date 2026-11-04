@@ -6,6 +6,7 @@ import Network
 
 @MainActor @Observable
 final class PlannerStore {
+    let settingsDraft = SettingsDraft()
     private(set) var state = PlannerState() {
         didSet { compressedPlan.update(state: state) }
     }
@@ -210,6 +211,13 @@ final class PlannerStore {
         return true
     }
     func replan() async { await change { _ in } }
+    @discardableResult
+    func saveStudySettings(_ edited: AppSettings, from baseline: AppSettings, now: Date = Date()) async -> Bool {
+        await change(now: now) { state in
+            let merged = try edited.mergingSettingsDraft(from: baseline, into: state.settings)
+            state.updateStudySettings(merged, now: now)
+        }
+    }
     @discardableResult
     func studyImmediately(courseID: UUID, lessonID: String? = nil, now: Date = Date()) async -> Bool {
         await commit(state, replan: true, now: now) {
