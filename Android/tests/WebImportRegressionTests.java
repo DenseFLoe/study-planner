@@ -69,5 +69,25 @@ public final class WebImportRegressionTests {
   JSONObject foreign=capture("other.example",3600);foreign.getJSONArray("lessons").getJSONObject(0).put("watchedPercent",100);
   JSONObject live=WebsiteCapture.xuecheng(catalog,Collections.singletonList(foreign),source,now);check(live.getJSONArray("lessons").getJSONObject(0).getDouble("watchedPercent")==0,"Xuecheng reused foreign progress");
  }
- public static void main(String[] args)throws Exception{fixtures();identity();privacy();System.out.println("WebImportRegressionTests: "+checks+" checks passed");}
+ static void customCourseNames()throws Exception{
+  JSONObject state=PlannerTests.empty(),snapshot=capture("names.example",3600).put("name","网站原名");
+  WebCourseImport.save(state,Collections.singletonList(snapshot),deadline,now);
+  JSONObject course=state.getJSONArray("courses").getJSONObject(0);String id=course.getString("id");
+  check(course.getString("name").equals("网站原名"),"First import did not use website name");
+  course.put("name","我的复习计划").put("notes","保留备注");
+  JSONObject fresh=CourseTools.copy(snapshot).put("name","网站新名").put("fetchedAt",now+1);
+  fresh.getJSONArray("lessons").getJSONObject(0).put("watchedPercent",50);
+  WebCourseImport.save(state,Collections.singletonList(fresh),deadline,now+1);course=Planner.course(state,id);
+  check(course.getString("name").equals("我的复习计划"),"Website refresh replaced custom name");
+  check(course.getJSONObject("webCourse").getString("name").equals("网站新名")&&Planner.completed(state,course)==30,"Keeping a custom name blocked website progress");
+  check(course.getString("notes").equals("保留备注"),"Refresh changed notes");
+  course.put("name","网站新名");fresh.put("name","网站再次改名").put("fetchedAt",now+2);
+  WebCourseImport.save(state,Collections.singletonList(fresh),deadline,now+2);course=Planner.course(state,id);
+  check(course.getString("name").equals("网站再次改名"),"Uncustomized name stopped following website");
+  course.put("name","归档前自定义名").put("isArchived",true);
+  fresh.put("name","新的来源名").put("fetchedAt",now+3);
+  WebCourseImport.save(state,Collections.singletonList(fresh),deadline,now+3);course=Planner.course(state,id);
+  check(course.getString("name").equals("归档前自定义名")&&!course.optBoolean("isArchived"),"Reimport lost archived course custom name");
+ }
+ public static void main(String[] args)throws Exception{fixtures();identity();privacy();customCourseNames();System.out.println("WebImportRegressionTests: "+checks+" checks passed");}
 }

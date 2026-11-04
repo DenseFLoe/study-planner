@@ -2,6 +2,31 @@ import XCTest
 @testable import StudyCore
 
 final class WebCourseSnapshotTests: XCTestCase {
+    func testWebsiteRefreshPreservesCustomCourseNames() throws {
+        let now = Date(), deadline = now.addingTimeInterval(86400)
+        var source = identitySnapshot(at: now); source.name = "网站原名"
+        var state = PlannerState()
+        try state.importWebCourses([source], deadline: deadline, now: now)
+        XCTAssertEqual(state.courses[0].name, "网站原名")
+        state.courses[0].name = "我的复习计划"; state.courses[0].notes = "保留备注"
+        source.name = "网站新名"; source.fetchedAt = now.addingTimeInterval(1)
+        source.lessons[0].watchedPercent = 50
+        try state.importWebCourses([source], deadline: deadline, now: now.addingTimeInterval(1))
+        XCTAssertEqual(state.courses[0].name, "我的复习计划")
+        XCTAssertEqual(state.courses[0].webCourse?.name, "网站新名")
+        XCTAssertEqual(state.completedMinutes(for: state.courses[0]), 30)
+        XCTAssertEqual(state.courses[0].notes, "保留备注")
+        state.courses[0].name = "网站新名"
+        source.name = "网站再次改名"; source.fetchedAt = now.addingTimeInterval(2)
+        try state.importWebCourses([source], deadline: deadline, now: now.addingTimeInterval(2))
+        XCTAssertEqual(state.courses[0].name, "网站再次改名")
+        state.courses[0].name = "归档前自定义名"; state.courses[0].isArchived = true
+        source.name = "新的来源名"; source.fetchedAt = now.addingTimeInterval(3)
+        try state.importWebCourses([source], deadline: deadline, now: now.addingTimeInterval(3))
+        XCTAssertEqual(state.courses[0].name, "归档前自定义名")
+        XCTAssertFalse(state.courses[0].isArchived)
+    }
+
     private func identitySnapshot(at now: Date) -> WebCourseSnapshot {
         var value = snapshot()
         value.fetchedAt = now

@@ -84,7 +84,10 @@ public struct WebCourseSnapshot: Codable, Equatable, Sendable {
     public func applying(to course: Course, loggedMinutes: Int) -> Course? {
         guard importProblem == nil, loggedMinutes >= 0, loggedMinutes <= totalMinutes else { return nil }
         var result = course
-        result.name = name
+        // Preserve a local label; unchanged website names continue following the source.
+        if course.webCourse == nil || course.name == course.webCourse?.name || course.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            result.name = name
+        }
         result.totalMinutes = totalMinutes
         result.initialCompletedMinutes = max(0, completedMinutes - loggedMinutes)
         result.webCourse = self
