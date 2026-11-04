@@ -37,6 +37,7 @@ public class MainActivity extends Activity {
     String eventRecognitionText="";
     FixedEventCatalog.Scope eventScope=FixedEventCatalog.Scope.CURRENT;
     CourseCatalog.Scope courseScope=CourseCatalog.Scope.ALL;
+    CourseCatalog.Order courseOrder=CourseCatalog.Order.DEADLINE;
     static final int EXPORT_BACKUP=101,IMPORT_BACKUP=102,SCAN_PAIRING_QR=103,IMPORT_COURSES=104,IMPORT_SSH_KEY=105;
     JSONObject state; String syncSummary=""; LinearLayout root,body,nav; int page=0; LocalDate selected=LocalDate.now(Planner.ZONE),month=selected.withDayOfMonth(1);
     final DailyRollover dayRollover=new DailyRollover(selected);
@@ -90,7 +91,7 @@ public class MainActivity extends Activity {
             if(settingsDraft!=null&&settingsDraft.isDirty())b.putString("studySettingsDraft",settingsDraft.snapshot().toString());
             else if(restoredSettingsDraft!=null)b.putString("studySettingsDraft",restoredSettingsDraft);
         }catch(Exception error){android.util.Log.w("StudyPlanner","Unable to retain settings draft",error);}
-        b.putString("courseQuery",courseQuery);b.putString("courseScope",courseScope.name());b.putInt("coursePage",coursePage);
+        b.putString("courseQuery",courseQuery);b.putString("courseScope",courseScope.name());b.putString("courseOrder",courseOrder.name());b.putInt("coursePage",coursePage);
         b.putString("eventQuery",eventQuery);b.putString("eventScope",eventScope.name());b.putInt("eventPage",eventPage);
         b.putString("selected",selected.toString());b.putInt("page",page);b.putString("settingsSection",settingsSection);
         b.putBoolean("calendarExpanded",calendarExpanded);b.putString("month",month.toString());
@@ -101,6 +102,8 @@ public class MainActivity extends Activity {
         // Stable names survive enum reordering; a newer/removed scope falls back.
         try{courseScope=CourseCatalog.Scope.valueOf(saved.getString("courseScope",CourseCatalog.Scope.ALL.name()));}
         catch(IllegalArgumentException ignored){courseScope=CourseCatalog.Scope.ALL;coursePage=0;}
+        try{courseOrder=CourseCatalog.Order.valueOf(saved.getString("courseOrder",CourseCatalog.Order.DEADLINE.name()));}
+        catch(IllegalArgumentException ignored){courseOrder=CourseCatalog.Order.DEADLINE;coursePage=0;}
         try{eventScope=FixedEventCatalog.Scope.valueOf(saved.getString("eventScope",FixedEventCatalog.Scope.CURRENT.name()));}
         catch(IllegalArgumentException ignored){eventScope=FixedEventCatalog.Scope.CURRENT;eventPage=0;}
     }

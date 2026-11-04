@@ -30,6 +30,22 @@ final class CourseCatalogSearchTests: XCTestCase {
         XCTAssertEqual(CourseCatalogSearch.matches(query: "", courses: input), [earlier] + tied)
         XCTAssertEqual(input, [paused, archived, active, earlier])
     }
+    func testPriorityOrderKeepsFilteringStableTiesAndSchedulingData() {
+        var high = course("重点 高"), tied = course("重点 同级"), later = course("重点 较晚"), medium = course("中"), low = course("低"), archived = course("归档")
+        high.id = UUID(uuidString: "00000000-0000-0000-0000-000000000001")!
+        tied.id = UUID(uuidString: "00000000-0000-0000-0000-000000000002")!
+        high.priority = 3; tied.priority = 3; later.priority = 3; low.priority = 1
+        later.deadline.addTimeInterval(86400); medium.deadline.addTimeInterval(-86400); low.deadline.addTimeInterval(-172800)
+        tied.autoScheduleEnabled = false; archived.isArchived = true; archived.priority = 3
+        let input = [low, archived, later, tied, medium, high], before = input
+        XCTAssertEqual(CourseCatalogSearch.matches(query: "", courses: input, order: .priority), [high, tied, later, medium, low])
+        XCTAssertEqual(CourseCatalogSearch.matches(query: "重点", courses: input, scope: .automatic, order: .priority), [high, later])
+        XCTAssertEqual(CourseCatalogSearch.matches(query: "", courses: input, scope: .paused, order: .priority), [tied])
+        XCTAssertEqual(CourseCatalogSearch.matches(query: "", courses: input), [low, medium, high, tied, later])
+        XCTAssertTrue(CourseCatalogSearch.matches(query: "不存在", courses: input, order: .priority).isEmpty)
+        XCTAssertEqual(input, before)
+    }
+
     func testDeadlineSearchUsesTheRequestedLocalDay() {
         var value = course("午夜")
         var calendar = Calendar(identifier: .gregorian); calendar.timeZone = utc

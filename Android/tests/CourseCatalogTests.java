@@ -55,6 +55,20 @@ public final class CourseCatalogTests {
         legacyCourse.remove("autoScheduleEnabled"); legacy.getJSONArray("courses").put(legacyCourse);
         check(new CourseCatalog(legacy).find("", CourseCatalog.Scope.AUTOMATIC, 0).count == 1, "Legacy missing setting must default to automatic");
         check(new CourseCatalog(legacy).find("", CourseCatalog.Scope.PAUSED, 0).count == 0, "Legacy course appeared paused");
+        JSONObject prioritized=fixture();
+        for(JSONObject course:Planner.list(prioritized.getJSONArray("courses")))course.put("priority",course.optInt("initialCompletedMinutes")%3+1);
+        String priorityBefore=SyncLedger.canonical(prioritized);CourseCatalog ordered=new CourseCatalog(prioritized);
+        CourseCatalog.Page high=ordered.find("",CourseCatalog.Scope.ALL,CourseCatalog.Order.PRIORITY,0),second=ordered.find("",CourseCatalog.Scope.ALL,CourseCatalog.Order.PRIORITY,1),third=ordered.find("",CourseCatalog.Scope.ALL,CourseCatalog.Order.PRIORITY,2);
+        check(high.rows.get(0).completedMinutes==2&&high.rows.get(16).completedMinutes==50,"High-priority courses are not ordered by deadline and identity");
+        check(high.rows.get(17).completedMinutes==1&&third.rows.get(10).completedMinutes==48,"Priority groups or last page lost courses");
+        Set<String> sortedIDs=new HashSet<>();for(CourseCatalog.Page part:Arrays.asList(high,second,third))for(CourseCatalog.Row row:part.rows)sortedIDs.add(row.id);
+        check(sortedIDs.size()==51&&third.rows.size()==11,"Priority pagination duplicated or omitted courses");
+        CourseCatalog.Page filtered=ordered.find("重点",CourseCatalog.Scope.AUTOMATIC,CourseCatalog.Order.PRIORITY,0);
+        check(filtered.count==26&&filtered.rows.get(0).completedMinutes==2,"Priority order lost keyword or scope filtering");
+        check(ordered.find("",0).rows.get(0).completedMinutes==0,"Switching back to deadlines reused priority order");
+        check(ordered.find("none",CourseCatalog.Scope.ALL,CourseCatalog.Order.PRIORITY,99).pageCount==0,"Empty sorted catalog has pages");
+        check(ordered.find("",CourseCatalog.Scope.ALL,CourseCatalog.Order.PRIORITY,99).index==2,"Sorted page did not clamp");
+        check(priorityBefore.equals(SyncLedger.canonical(prioritized)),"List sorting changed scheduling data");
         System.out.println("Course catalog: " + checks + " checks passed");
     }
 }

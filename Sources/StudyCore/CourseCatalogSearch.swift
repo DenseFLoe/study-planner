@@ -5,9 +5,14 @@ public enum CourseCatalogScope: String, CaseIterable, Identifiable, Sendable {
     public var id: Self { self }
 }
 
+public enum CourseCatalogOrder: String, CaseIterable, Identifiable, Sendable {
+    case deadline = "截止日期优先", priority = "课程优先级优先"
+    public var id: Self { self }
+}
+
 public enum CourseCatalogSearch {
     public static func matches(query: String, courses: [Course], scope: CourseCatalogScope = .all,
-                               timeZone: TimeZone = .current) -> [Course] {
+                               order: CourseCatalogOrder = .deadline, timeZone: TimeZone = .current) -> [Course] {
         let terms = query.precomposedStringWithCompatibilityMapping.split(whereSeparator: \.isWhitespace).map(String.init)
         let dateLabel = DateFormatter()
         dateLabel.locale = Locale(identifier: "en_US_POSIX")
@@ -22,7 +27,8 @@ public enum CourseCatalogSearch {
                 .joined(separator: " ").precomposedStringWithCompatibilityMapping
             return terms.allSatisfy { text.localizedStandardContains($0) }
         }.sorted {
-            $0.deadline == $1.deadline ? $0.id.uuidString < $1.id.uuidString : $0.deadline < $1.deadline
+            if order == .priority && $0.priority != $1.priority { return $0.priority > $1.priority }
+            return $0.deadline == $1.deadline ? $0.id.uuidString < $1.id.uuidString : $0.deadline < $1.deadline
         }
     }
 }

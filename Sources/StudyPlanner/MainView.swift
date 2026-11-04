@@ -41,6 +41,7 @@ struct MainView: View {
     @State private var fixedWeekday = 0
     @State private var courseQuery = ""
     @State private var courseScope = CourseCatalogScope.all
+    @State private var courseOrder = CourseCatalogOrder.deadline
     @State private var matchingCourses: [Course] = []
     @State private var displayedCourseInput: CourseCatalogInput?
     @AppStorage("dailyStudyLoadWarningMinutes") private var dailyLoadWarningMinutes = 480
@@ -51,6 +52,7 @@ struct MainView: View {
     private struct CourseCatalogInput: Equatable, Sendable {
         var query: String
         var scope: CourseCatalogScope
+        var order: CourseCatalogOrder
         var courses: [Course]
         var timeZone: TimeZone
     }
@@ -669,7 +671,7 @@ struct MainView: View {
     }
 
     private var courseList: some View {
-        let input = CourseCatalogInput(query: courseQuery, scope: courseScope, courses: store.state.courses, timeZone: .current)
+        let input = CourseCatalogInput(query: courseQuery, scope: courseScope, order: courseOrder, courses: store.state.courses, timeZone: .current)
         let total = input.courses.filter { !$0.isArchived }.count
         let ready = displayedCourseInput == input
         let visible = ready ? matchingCourses : []
@@ -696,11 +698,14 @@ struct MainView: View {
                     Picker("排程状态", selection: $courseScope) {
                         ForEach(CourseCatalogScope.allCases) { value in Text(value.rawValue).tag(value) }
                     }.frame(width: 150)
+                    Picker("列表排序", selection: $courseOrder) {
+                        ForEach(CourseCatalogOrder.allCases) { value in Text(value.rawValue).tag(value) }
+                    }.frame(width: 170)
                     if !courseQuery.isEmpty || courseScope != .all {
                         Button("清除筛选") { courseQuery = ""; courseScope = .all }
                     }
                 }
-                Text("可用空格组合关键词；按截止日期排序，筛选不会修改课程或日程。")
+                Text("可用空格组合关键词；优先级按高到低，同级按截止日期。筛选和排序不会修改课程或日程。")
                     .font(.caption).foregroundStyle(.secondary)
                 if !ready { ProgressView("正在查找课程…") }
 
@@ -752,7 +757,7 @@ struct MainView: View {
             }
             let result = await Task.detached(priority: .userInitiated) {
                 CourseCatalogSearch.matches(query: input.query, courses: input.courses,
-                                            scope: input.scope, timeZone: input.timeZone)
+                                            scope: input.scope, order: input.order, timeZone: input.timeZone)
             }.value
             guard !Task.isCancelled else { return }
             matchingCourses = result; displayedCourseInput = input

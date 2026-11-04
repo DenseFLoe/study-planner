@@ -10,6 +10,10 @@ final class CourseCatalog {
         final String title;
         Scope(String title) { this.title = title; }
     }
+    enum Order {
+        DEADLINE("截止日期优先"), PRIORITY("课程优先级优先");
+        final String title; Order(String title) { this.title = title; }
+    }
     static final int PAGE_SIZE = 20;
     private final JSONObject state;
     private final List<JSONObject> courses;
@@ -37,6 +41,9 @@ final class CourseCatalog {
         return find(query, Scope.ALL, requestedPage);
     }
     Page find(String query, Scope scope, int requestedPage) {
+        return find(query, scope, Order.DEADLINE, requestedPage);
+    }
+    Page find(String query, Scope scope, Order order, int requestedPage) {
         String normalized = TaskSearch.normalize(query); String[] terms = normalized.isEmpty() ? new String[0] : normalized.split("\\s+");
         List<JSONObject> matches = new ArrayList<>();
         for (JSONObject course : courses) {
@@ -46,6 +53,8 @@ final class CourseCatalog {
             for (String term : terms) if (!text.contains(term)) { found = false; break; }
             if (found) matches.add(course);
         }
+        if (order == Order.PRIORITY) matches.sort(Comparator.comparingInt((JSONObject course) -> course.optInt("priority", 2)).reversed()
+            .thenComparingDouble(course -> course.optDouble("deadline")).thenComparing(course -> course.optString("id")));
         int page = matches.isEmpty() ? 0 : Math.max(0, Math.min(requestedPage, (matches.size() - 1) / PAGE_SIZE));
         int first = page * PAGE_SIZE; List<Row> rows = new ArrayList<>();
         for (int i = first; i < Math.min(matches.size(), first + PAGE_SIZE); i++) {
