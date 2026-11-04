@@ -36,7 +36,7 @@ final class DailyConsequencesView {
             box.addView(app.title("今天 "+Planner.date(day.optDouble("date"))));
             box.addView(app.text("已确认有效学习 "+duration(controller.confirmed)+" / 今日目标 "+duration(day.optInt("goalMinutes")),16,app.ink));
             box.addView(app.text("确认学习不会降低今日目标；课程或可学时段变更时更新预报。各档同时展示，无需选择。",15,app.muted));
-            boolean legacy=false;for(JSONObject r:Planner.list(app.state.getJSONArray("completions")))if(!r.has("studyDate")&&Planner.day(day.optDouble("date")).equals(DailyConsequences.effectiveDay(r,app.state)))legacy=true;
+            boolean legacy=DailyConsequences.usesLegacyDates(Planner.day(day.optDouble("date")),app.state);
             if(legacy)box.addView(app.text("部分旧记录按确认日期汇总，补录请核对实际日期。",15,app.muted));
             if(day.optInt("goalMinutes")==0)box.addView(app.text("今天没有待执行的学习目标，请同时留意实时排程预警。",15,app.muted));
             else{

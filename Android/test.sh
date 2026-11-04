@@ -43,6 +43,8 @@ mkdir -p Android/build/tests
 "$JDK/bin/java" -cp Android/tools/json.jar:Android/build/tests local.studyplanner.DailyConsequenceTargetTests
 "$JDK/bin/javac" -cp Android/tools/json.jar:Android/build/tests -d Android/build/tests Android/tests/DailyConsequenceSumTests.java
 "$JDK/bin/java" -Xmx128m -cp Android/tools/json.jar:Android/build/tests local.studyplanner.DailyConsequenceSumTests
+"$JDK/bin/javac" -cp Android/tools/json.jar:Android/build/tests -d Android/build/tests Android/tests/DailyCompletionDateTests.java
+"$JDK/bin/java" -Xmx128m -cp Android/tools/json.jar:Android/build/tests local.studyplanner.DailyCompletionDateTests
 "$JDK/bin/javac" -cp Android/tools/json.jar:Android/build/tests -d Android/build/tests Android/tests/DailyJournalIdentityTests.java
 "$JDK/bin/java" -Xmx128m -cp Android/tools/json.jar:Android/build/tests local.studyplanner.DailyJournalIdentityTests
 "$JDK/bin/javac" -cp Android/tools/json.jar:Android/build/tests -d Android/build/tests Android/tests/DailyJournalProgressTests.java

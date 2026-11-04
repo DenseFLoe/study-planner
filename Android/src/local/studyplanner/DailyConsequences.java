@@ -32,17 +32,32 @@ final class DailyConsequences {
         JSONArray availability=new JSONArray();for(JSONObject w:windows)availability.put(fields(w,"weekday","startMinute","endMinute"));
         return Planner.stableID(canonical(new JSONObject().put("courses",configs).put("events",fixed).put("availability",availability).put("unit",state.getJSONObject("settings").getInt("minimumScheduleUnit")).put("warning",warning).put("schedulingRuleLevels",new SchedulePriorities(state.getJSONObject("settings")).json())));
     }
-    static JSONObject task(JSONObject state,String id){for(JSONObject task:Planner.list(state.optJSONArray("tasks")))if(task.optString("id").equals(id))return task;return null;}
-    static LocalDate effectiveDay(JSONObject record,JSONObject state) {
-        if(record.has("studyDate")&&!record.isNull("studyDate"))return Planner.day(record.optDouble("studyDate"));
-        return effectiveDayWithTask(record,task(state,record.optString("taskID")));
+    static boolean hasStudyDate(JSONObject record){return record.has("studyDate")&&!record.isNull("studyDate");}
+    /** One lazy index per read: explicit study dates never need task history. */
+    private static final class CompletionDates {
+        final JSONObject state;private Map<String,JSONObject> tasks;
+        CompletionDates(JSONObject state){this.state=state;}
+        JSONObject task(JSONObject record){
+            if(tasks==null){tasks=new HashMap<>();for(JSONObject task:Planner.list(state.optJSONArray("tasks")))tasks.putIfAbsent(task.optString("id"),task);}
+            return tasks.get(record.optString("taskID"));
+        }
+        LocalDate day(JSONObject record){
+            return hasStudyDate(record)?Planner.day(record.optDouble("studyDate")):effectiveDayWithTask(record,task(record));
+        }
     }
+    static LocalDate effectiveDay(JSONObject record,JSONObject state){return new CompletionDates(state).day(record);}
     static LocalDate effectiveDayWithTask(JSONObject record,JSONObject task) {
-        if(record.has("studyDate")&&!record.isNull("studyDate"))return Planner.day(record.optDouble("studyDate"));
+        if(hasStudyDate(record))return Planner.day(record.optDouble("studyDate"));
         LocalDate recorded=Planner.day(record.optDouble("recordedAt"));
-        return task!=null&&Planner.day(task.optDouble("start")).equals(recorded)?recorded:null;
+        return task!=null&&record.optString("taskID").equals(task.optString("id"))&&Planner.day(task.optDouble("start")).equals(recorded)?recorded:null;
     }
-    static int confirmed(LocalDate day,JSONObject state){int total=0;for(JSONObject r:Planner.list(state.optJSONArray("completions")))if(day.equals(effectiveDay(r,state)))total=addMinutes(total,r.optInt("minutes"));return total;}
+    static int confirmed(LocalDate day,JSONObject state){return confirmed(day,new CompletionDates(state));}
+    private static int confirmed(LocalDate day,CompletionDates dates){int total=0;for(JSONObject r:Planner.list(dates.state.optJSONArray("completions")))if(day.equals(dates.day(r)))total=addMinutes(total,r.optInt("minutes"));return total;}
+    static boolean usesLegacyDates(LocalDate day,JSONObject state){
+        CompletionDates dates=new CompletionDates(state);
+        for(JSONObject record:Planner.list(state.optJSONArray("completions")))if(!hasStudyDate(record)&&day.equals(dates.day(record)))return true;
+        return false;
+    }
     static int target(JSONObject entry,int fraction){return (int)((long)entry.optInt("goalMinutes")*fraction/1000);}
     static int threshold(JSONObject entry,int fraction){return target(entry,fraction)+(fraction==1000?0:1);}
     static boolean achieved(JSONObject entry,int fraction,int confirmed){return entry.optInt("goalMinutes")>0&&confirmed>=threshold(entry,fraction);}
@@ -93,8 +108,8 @@ final class DailyConsequences {
     static boolean valid(JSONObject entry,JSONObject state) throws Exception {
         Map<String,JSONObject> records=new HashMap<>();for(JSONObject r:Planner.list(state.getJSONArray("completions")))records.put(r.optString("id"),r);
         for(JSONObject r:Planner.list(entry.getJSONArray("capturedRecords")))if(!canonical(r).equals(canonical(records.get(r.optString("id")))))return false;
-        Set<String> captured=capturedIDs(entry);LocalDate date=Planner.day(entry.optDouble("date"));
-        for(JSONObject r:records.values())if(!captured.contains(r.optString("id"))){LocalDate day=effectiveDay(r,state);if(day!=null&&day.isBefore(date))return false;}
+        Set<String> captured=capturedIDs(entry);LocalDate date=Planner.day(entry.optDouble("date"));CompletionDates dates=new CompletionDates(state);
+        for(JSONObject r:records.values())if(!captured.contains(r.optString("id"))){LocalDate day=dates.day(r);if(day!=null&&day.isBefore(date))return false;}
         JSONObject baseline=entry.getJSONObject("baseline");for(JSONObject c:Planner.list(baseline.getJSONArray("courses"))){JSONObject current=Planner.course(state,c.optString("id"));if(current==null)return false;int extra=0;
             for(JSONObject r:records.values())if(r.optString("courseID").equals(c.optString("id"))&&!captured.contains(r.optString("id")))extra=addMinutes(extra,r.optInt("minutes"));
             if(Planner.remaining(state,current)!=Math.max(0,Planner.remaining(baseline,c)-extra))return false;
@@ -133,13 +148,14 @@ final class DailyConsequences {
         if(outcome.optString("kind").equals("shortage")&&!forecast.has("provenLimitAfterDays"))forecast.put("provenLimitAfterDays",day);
     }
     static JSONObject reality(JSONObject entry,JSONObject state) throws Exception {
-        LocalDate date=Planner.day(entry.optDouble("date"));int actual=confirmed(date,state),ambiguous=0;boolean legacy=false,pending=false;
+        CompletionDates dates=new CompletionDates(state);
+        LocalDate date=Planner.day(entry.optDouble("date"));int actual=confirmed(date,dates),ambiguous=0;boolean legacy=false,pending=false;
         Set<String> captured=capturedIDs(entry);Map<String,Integer> targets=new HashMap<>(),reviewed=new HashMap<>();
         for(JSONObject t:Planner.list(entry.getJSONArray("plannedToday")))targets.merge(ScheduleHealth.key(t),t.optInt("durationMinutes"),DailyConsequences::addMinutes);
         JSONObject projection=CourseTools.copy(entry.getJSONObject("baseline"));
-        for(JSONObject r:Planner.list(state.getJSONArray("completions"))){JSONObject t=task(state,r.optString("taskID"));LocalDate effective=effectiveDay(r,state);
+        for(JSONObject r:Planner.list(state.getJSONArray("completions"))){JSONObject t=dates.task(r);LocalDate effective=effectiveDayWithTask(r,t);
             if(effective==null&&(date.equals(Planner.day(r.optDouble("recordedAt")))||(t!=null&&date.equals(Planner.day(t.optDouble("start"))))))ambiguous++;
-            if(date.equals(effective)&&(!r.has("studyDate")||r.isNull("studyDate")))legacy=true;if(captured.contains(r.optString("id")))continue;
+            if(date.equals(effective)&&!hasStudyDate(r))legacy=true;if(captured.contains(r.optString("id")))continue;
             if(t!=null&&date.equals(Planner.day(t.optDouble("start")))){String key=ScheduleHealth.key(t);int n=t.optInt("durationMinutes");reviewed.put(key,Planner.hasLessonID(t)?Math.max(reviewed.getOrDefault(key,0),n):addMinutes(reviewed.getOrDefault(key,0),n));}
             if(date.equals(effective))credit(projection,r.optString("courseID"),t==null?"":t.optString("lessonID"),r.optInt("minutes"));
         }
