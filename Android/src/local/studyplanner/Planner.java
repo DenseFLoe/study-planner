@@ -179,7 +179,17 @@ public final class Planner {
     public static int remaining(JSONObject s,JSONObject c){return Math.max(0,c.optInt("totalMinutes")-completed(s,c));}
     public static boolean occurs(JSONObject e,LocalDate d){return occurs(e,d,false);}
     public static boolean occurs(JSONObject e,LocalDate d,boolean includingExcluded){if(d.isBefore(day(e.optDouble("startDate")))||d.isAfter(day(e.optDouble("endDate"))))return false;JSONArray excluded=e.optJSONArray("excludedDates");if(!includingExcluded&&excluded!=null)for(int i=0;i<excluded.length();i++)if(day(excluded.optDouble(i)).equals(d))return false;JSONArray w=e.optJSONArray("weekdays");if(w==null||w.length()==0)return d.equals(day(e.optDouble("startDate")));for(int i=0;i<w.length();i++)if(w.optInt(i)==weekday(d))return true;return false;}
-    public static List<JSONObject> review(JSONObject s,double now){List<JSONObject> out=new ArrayList<>();LocalDate today=day(now);int m=(int)((now-at(today,0))/60);for(JSONObject t:list(s.optJSONArray("tasks"))){JSONObject c=course(s,t.optString("courseID"));if(pending(t)&&c!=null&&!c.optBoolean("isArchived")&&(planningEnd(t)<=at(today,0)||(m>=s.optJSONObject("settings").optInt("notificationMinute")&&planningEnd(t)<=now)))out.add(t);}return out;}
+    public static List<JSONObject> review(JSONObject s,double now){
+        List<JSONObject> out=new ArrayList<>();double today=at(day(now),0);int minute=(int)((now-today)/60);
+        // This also feeds the home-screen count; resolve each course only once.
+        Map<String,Boolean> active=new HashMap<>();
+        for(JSONObject c:list(s.optJSONArray("courses")))active.putIfAbsent(c.optString("id"),!c.optBoolean("isArchived"));
+        for(JSONObject task:list(s.optJSONArray("tasks")))if(pending(task)&&Boolean.TRUE.equals(active.get(task.optString("courseID")))){
+            double end=planningEnd(task);
+            if(end<=today||(minute>=s.optJSONObject("settings").optInt("notificationMinute")&&end<=now))out.add(task);
+        }
+        return out;
+    }
     // Ended work may already be redistributed; floating work stays reserved until its window ends.
     public static boolean confirmationRequiresReplan(JSONObject task,int actual,double now){return actual!=task.optInt("durationMinutes")||planningEnd(task)<=now;}
     public static void confirm(JSONObject s,String taskID,int actual,double now)throws Exception{confirm(s,taskID,actual,now,day(now));}

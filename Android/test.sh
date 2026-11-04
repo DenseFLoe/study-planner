@@ -111,6 +111,9 @@ mkdir -p Android/build/controller-tests
 "$JDK/bin/javac" -cp Android/tools/json.jar:Android/build/tests -d Android/build/tests Android/src/local/studyplanner/ConfirmationReview.java Android/tests/ConfirmationReviewTests.java
 "$JDK/bin/java" -cp Android/tools/json.jar:Android/build/tests local.studyplanner.ConfirmationReviewTests
 
+"$JDK/bin/javac" -cp Android/tools/json.jar:Android/build/tests -d Android/build/tests Android/tests/ReviewCandidateScaleTests.java
+"$JDK/bin/java" -cp Android/tools/json.jar:Android/build/tests local.studyplanner.ReviewCandidateScaleTests
+
 "$JDK/bin/javac" -d Android/build/tests Android/src/local/studyplanner/StateMutation.java Android/tests/StateMutationTests.java
 "$JDK/bin/java" -cp Android/build/tests local.studyplanner.StateMutationTests
 
