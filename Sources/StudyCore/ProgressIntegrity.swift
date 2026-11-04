@@ -1,10 +1,13 @@
 import Foundation
 
 extension PlannerState {
-    /// Validate the uncapped progress that course and lesson reconciliation sum.
-    /// Missing-task legacy records still count at the top level; merged sources
-    /// receive only the records associated with their existing task-ID prefixes.
-    func validateRecordedProgress() throws {
+    /// Check nonnegative completion minutes and representable per-course progress.
+    /// Each total uses max(0, initialCompletedMinutes), without a course-duration
+    /// or global sum cap. Missing-task legacy records still count at the root;
+    /// merged sources receive only records linked by their existing task prefixes.
+    /// Throws invalidData on a numeric violation. This is not full schema or
+    /// identity validation; persistence callers must check those separately.
+    public func validateRecordedProgress() throws {
         guard completions.allSatisfy({ $0.minutes >= 0 }) else { throw SyncFailure.invalidData }
         let tasksByCourse = Dictionary(grouping: tasks, by: \.courseID)
         let recordsByCourse = Dictionary(grouping: completions, by: \.courseID)

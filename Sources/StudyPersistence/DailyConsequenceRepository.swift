@@ -23,6 +23,9 @@ public actor DailyConsequenceRepository {
                           && Set(day.baseline.courses.map(\.id)).count == day.baseline.courses.count
                           && Set(day.baseline.tasks.map(\.id)).count == day.baseline.tasks.count
                   }) else { throw CocoaError(.coderReadCorrupt) }
+            do {
+                for day in value.days { try day.baseline.validateRecordedProgress() }
+            } catch { throw CocoaError(.coderReadCorrupt) }
             memory = value
             return value
         } catch { writeDisabled = true; throw error }

@@ -188,6 +188,143 @@ final class DailyConsequenceRepositoryTests: XCTestCase {
         XCTAssertEqual(try Data(contentsOf: url), bytes)
     }
 
+    private func progressBaseline(_ values: [Int], initial: Int = 0, separateCourses: Bool = false) -> PlannerState {
+        let day = Calendar.current.startOfDay(for: Date())
+        var state = PlannerState()
+        state.settings.availability = []
+        for index in 0..<max(1, separateCourses ? values.count : 1) {
+            var course = Course(name: "Synthetic progress \(index)", totalMinutes: 120, startDate: day, deadline: day)
+            course.initialCompletedMinutes = initial
+            state.courses.append(course)
+        }
+        state.completions = values.enumerated().map { index, minutes in
+            .init(courseID: state.courses[separateCourses ? index : 0].id, taskID: UUID(), minutes: minutes,
+                  recordedAt: day.addingTimeInterval(8 * 3600), studyDate: day)
+        }
+        return state
+    }
+    private func mergedProgressBaseline(initial: Int, matchingPrefix: Bool) -> PlannerState {
+        var state = progressBaseline([])
+        let day = Calendar.current.startOfDay(for: Date())
+        var leaf = Course(name: "Synthetic leaf", totalMinutes: 120, startDate: day, deadline: day)
+        leaf.initialCompletedMinutes = initial
+        var branch = Course(name: "Synthetic branch", totalMinutes: 120, startDate: day, deadline: day)
+        branch.type = .lessonBasedRecorded; branch.mergedSources = [leaf]
+        state.courses[0].type = .lessonBasedRecorded; state.courses[0].mergedSources = [branch]
+        var task = ScheduledTask(courseID: state.courses[0].id, start: day.addingTimeInterval(8 * 3600), durationMinutes: 1)
+        task.lessonID = matchingPrefix ? branch.id.uuidString + "/" + leaf.id.uuidString + "/whole" : "unrelated/whole"
+        state.tasks = [task]
+        state.completions = [.init(courseID: state.courses[0].id, taskID: task.id, minutes: 1, recordedAt: task.start, studyDate: day)]
+        return state
+    }
+    private func assertBaselineProgressLoad(_ baseline: PlannerState, accepted: Bool, file: StaticString = #filePath, line: UInt = #line) async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let url = directory.appendingPathComponent("journal.json")
+        var entry = try capturedEntry(now: Date(), courses: [])
+        entry.baseline = baseline
+        var journal = DailyConsequenceJournal(); journal.days = [entry]
+        let bytes = try JSONEncoder().encode(journal); try bytes.write(to: url)
+        for _ in 0..<2 {
+            let repository = DailyConsequenceRepository(url: url)
+            do {
+                let restored = try await repository.load()
+                XCTAssertTrue(accepted, "Unrepresentable baseline progress was admitted", file: file, line: line)
+                XCTAssertEqual(restored, journal, file: file, line: line)
+            } catch {
+                XCTAssertFalse(accepted, "Representable baseline progress was rejected", file: file, line: line)
+                XCTAssertEqual((error as? CocoaError)?.code, .coderReadCorrupt, file: file, line: line)
+            }
+            if !accepted {
+                do { try await repository.save(DailyConsequenceJournal(), sequence: 1); XCTFail("Rejected progress allowed a write", file: file, line: line) }
+                catch { XCTAssertEqual((error as? CocoaError)?.code, .fileWriteNoPermission, file: file, line: line) }
+            }
+            XCTAssertEqual(try Data(contentsOf: url), bytes, file: file, line: line)
+        }
+    }
+    func testBaselineProgressOverflowRejectsWholeJournalAndPreservesFile() async throws {
+        try await assertBaselineProgressLoad(progressBaseline([Int.max, 1]), accepted: false)
+        try await assertBaselineProgressLoad(progressBaseline([1], initial: Int.max), accepted: false)
+        try await assertBaselineProgressLoad(mergedProgressBaseline(initial: Int.max, matchingPrefix: true), accepted: false)
+        try await assertBaselineProgressLoad(progressBaseline([-1]), accepted: false)
+    }
+    func testRepresentableBaselineProgressPreservesExistingPerCourseAndPrefixRules() async throws {
+        try await assertBaselineProgressLoad(progressBaseline([Int.max]), accepted: true)
+        try await assertBaselineProgressLoad(progressBaseline([Int.max - 1, 1]), accepted: true)
+        try await assertBaselineProgressLoad(progressBaseline([1], initial: Int.max - 1), accepted: true)
+        try await assertBaselineProgressLoad(progressBaseline([Int.max], initial: Int.min), accepted: true)
+        try await assertBaselineProgressLoad(progressBaseline([Int.max, Int.max], separateCourses: true), accepted: true)
+        try await assertBaselineProgressLoad(mergedProgressBaseline(initial: Int.max - 1, matchingPrefix: true), accepted: true)
+        try await assertBaselineProgressLoad(mergedProgressBaseline(initial: Int.max, matchingPrefix: false), accepted: true)
+        var orphan = mergedProgressBaseline(initial: Int.max, matchingPrefix: true); orphan.tasks = []
+        try await assertBaselineProgressLoad(orphan, accepted: true)
+    }
+
+    func testProgressTotalsRemainIndependentAcrossDailyEntries() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let url = directory.appendingPathComponent("journal.json"), now = Date()
+        var first = try capturedEntry(now: now, courses: [])
+        first.baseline = progressBaseline([Int.max])
+        var later = first; later.id = UUID()
+        later.date = Calendar.current.date(byAdding: .day, value: 1, to: first.date)!
+        later.capturedAt = Calendar.current.date(byAdding: .day, value: 1, to: first.capturedAt)!
+        var journal = DailyConsequenceJournal(); journal.days = [first, later]
+        let repository = DailyConsequenceRepository(url: url)
+        try await repository.save(journal, sequence: 1)
+        let bytes = try Data(contentsOf: url)
+        let reopened = try await DailyConsequenceRepository(url: url).load()
+        XCTAssertEqual(reopened, journal)
+        XCTAssertEqual(reopened.days.map { $0.baseline.completions[0].minutes }, [Int.max, Int.max])
+        XCTAssertEqual(try Data(contentsOf: url), bytes)
+    }
+
+    private func progressBoundary(_ value: String) throws -> Int {
+        switch value {
+        case "MAX": return Int.max
+        case "MAX_MINUS_ONE": return Int.max - 1
+        case "MIN": return Int.min
+        default: return try XCTUnwrap(Int(value))
+        }
+    }
+    func testJavaSymbolicProgressBoundariesMatchLocalJournalValidation() async throws {
+        let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+        let fixture = root.appendingPathComponent("Android/build/tests/daily-journal-progress.json")
+        guard FileManager.default.fileExists(atPath: fixture.path) else { throw XCTSkip("Run ./Android/test.sh to generate journal progress controls") }
+        let payload = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: fixture)) as? [String: Any])
+        let cases = try XCTUnwrap(payload["cases"] as? [[String: Any]])
+        XCTAssertEqual(cases.count, 12)
+        for row in cases {
+            let expected = try XCTUnwrap(row["accepted"] as? Bool)
+            let initials = try XCTUnwrap(row["initials"] as? [String])
+            let groups = try XCTUnwrap(row["records"] as? [[String]])
+            XCTAssertEqual(initials.count, groups.count)
+            var baseline: PlannerState
+            if let merged = row["merged"] as? [String: Any] {
+                let initial = try progressBoundary(XCTUnwrap(merged["initial"] as? String))
+                let association = try XCTUnwrap(merged["association"] as? String)
+                XCTAssertTrue(["matching", "unmatched", "orphan"].contains(association))
+                baseline = mergedProgressBaseline(initial: initial, matchingPrefix: association == "matching")
+                if association == "orphan" { baseline.tasks = [] }
+            } else {
+                baseline = progressBaseline(Array(repeating: 0, count: groups.count), separateCourses: true)
+                baseline.completions = []
+                for (index, values) in groups.enumerated() {
+                    baseline.courses[index].initialCompletedMinutes = try progressBoundary(initials[index])
+                    let course = baseline.courses[index]
+                    for value in values {
+                        baseline.completions.append(.init(courseID: course.id, taskID: UUID(), minutes: try progressBoundary(value),
+                                                          recordedAt: course.startDate, studyDate: course.startDate))
+                    }
+                }
+            }
+            // MAX resolves to each platform's own integer boundary; this does
+            // not require Swift to reject representable Int32_MAX + 1 values.
+            try await assertBaselineProgressLoad(baseline, accepted: expected)
+        }
+    }
+
     func testJavaRootCourseAndTaskIdentityTopologiesMatchLocalJournalValidation() async throws {
         let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
         let fixture = root.appendingPathComponent("Android/build/tests/daily-journal-identities.json")

@@ -93,22 +93,37 @@ final class DailyConsequenceControllerTests: XCTestCase {
         XCTAssertTrue(controller.celebrationEvents.isEmpty)
     }
     @MainActor func testDuplicateBaselineJournalUsesTemporaryCurrentForecastAndPreservesOriginalFile() async throws {
-        try await assertDamagedBaselinePreservesFile(duplicateTasks: false)
+        try await assertDamagedBaselinePreservesFile(damage: .courses)
     }
     @MainActor func testDuplicateTaskBaselineUsesTemporaryCurrentForecastAndPreservesOriginalFile() async throws {
-        try await assertDamagedBaselinePreservesFile(duplicateTasks: true)
+        try await assertDamagedBaselinePreservesFile(damage: .tasks)
     }
-    @MainActor private func assertDamagedBaselinePreservesFile(duplicateTasks: Bool) async throws {
+    @MainActor func testOverflowingBaselineProgressUsesTemporaryCurrentForecastAndPreservesOriginalFile() async throws {
+        try await assertDamagedBaselinePreservesFile(damage: .records)
+        try await assertDamagedBaselinePreservesFile(damage: .initialProgress)
+    }
+    private enum BaselineDamage { case courses, tasks, records, initialProgress }
+    @MainActor private func assertDamagedBaselinePreservesFile(damage: BaselineDamage) async throws {
         let (state, result, now) = fixture(), original = state
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
         let url = directory.appendingPathComponent("journal.json")
         var damaged = try DailyConsequenceAnalyzer().capture(state: state, result: result, now: now, warningMinutes: 120)
-        if duplicateTasks {
+        switch damage {
+        case .tasks:
             damaged.baseline.tasks.append(try XCTUnwrap(damaged.baseline.tasks.first))
-        } else {
+        case .courses:
             damaged.baseline.courses.append(damaged.baseline.courses[0])
+        case .records, .initialProgress:
+            // A recorded baseline exercises the same evidence-check reducer as
+            // the standalone crash proof; current valid planner state is intact.
+            damaged.baseline.courses[0].type = .recorded
+            damaged.baseline.courses[0].manualLessons = nil
+            let owner = damaged.baseline.courses[0].id
+            let amounts = damage == .records ? [Int.max, 1] : [1]
+            damaged.baseline.courses[0].initialCompletedMinutes = damage == .initialProgress ? Int.max : 0
+            damaged.baseline.completions = amounts.map { .init(courseID: owner, taskID: UUID(), minutes: $0, recordedAt: now, studyDate: now) }
         }
         var journal = DailyConsequenceJournal(); journal.days = [damaged]
         let bytes = try JSONEncoder().encode(journal); try bytes.write(to: url)
