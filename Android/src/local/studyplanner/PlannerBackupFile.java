@@ -1,0 +1,96 @@
+package local.studyplanner;
+
+import org.json.*;
+import java.io.*;
+import java.nio.charset.*;
+import java.util.*;
+
+/** File backups shared with macOS; the original Android state-only files remain readable. */
+public final class PlannerBackupFile {
+    public static final long MAX_BYTES = 64L * 1024 * 1024;
+    private static final String[] FIELDS = {"schemaVersion", "courses", "fixedEvents", "tasks", "completions", "settings"};
+    private final JSONObject envelope;
+    public final boolean legacy;
+
+    private PlannerBackupFile(JSONObject envelope, boolean legacy) { this.envelope = envelope; this.legacy = legacy; }
+
+    static JSONObject businessState(JSONObject source) throws Exception {
+        JSONObject result = new JSONObject();
+        for (String key : FIELDS) result.put(key, CourseTools.copyValue(source.get(key)));
+        Planner.validate(result);
+        return result;
+    }
+
+    public static PlannerBackupFile create(JSONObject state, double now) throws Exception {
+        if (!Double.isFinite(now)) throw new IllegalArgumentException("备份时间无效");
+        return new PlannerBackupFile(new JSONObject().put("format", 1).put("id", Planner.id()).put("createdAt", now)
+            .put("reason", "Android 导出备份").put("state", businessState(state)), false);
+    }
+
+    public static PlannerBackupFile read(InputStream input) throws Exception { return read(input, MAX_BYTES); }
+    static PlannerBackupFile read(InputStream input, long maximum) throws Exception {
+        if (input == null) throw new IOException("无法打开备份文件");
+        StringBuilder text = new StringBuilder(); int depth = 0; boolean quoted = false, escaped = false;
+        try (Reader reader = new BufferedReader(new InputStreamReader(new CloudSnapshot.LimitedInput(input, maximum),
+                StandardCharsets.UTF_8.newDecoder().onMalformedInput(CodingErrorAction.REPORT).onUnmappableCharacter(CodingErrorAction.REPORT)))) {
+            char[] buffer = new char[8192]; int count;
+            while ((count = reader.read(buffer)) != -1) {
+                for (int i = 0; i < count; i++) {
+                    char c = buffer[i];
+                    if (quoted) { if (escaped) escaped = false; else if (c == '\\') escaped = true; else if (c == '"') quoted = false; }
+                    else if (c == '"') quoted = true;
+                    else if (c == '{' || c == '[') { if (++depth > 64) throw new IOException("备份嵌套层级过深"); }
+                    else if (c == '}' || c == ']') depth--;
+                }
+                text.append(buffer, 0, count);
+            }
+        }
+        JSONTokener tokens = new JSONTokener(text.toString()); JSONObject value = new JSONObject(tokens);
+        if (tokens.nextClean() != 0) throw new IOException("备份文件含有多余内容");
+        if (value.has("format") || value.has("state")) {
+            if (Planner.exactProgressInteger(value.opt("format")) != 1 || !CloudSnapshot.validID(value.getString("id")) ||
+                    !(value.get("createdAt") instanceof Number) || !Double.isFinite(value.getDouble("createdAt")) || !(value.get("reason") instanceof String))
+                throw new IllegalArgumentException("不支持此备份格式或备份信息不完整");
+            value.put("state", businessState(value.getJSONObject("state")));
+            return new PlannerBackupFile(value, false);
+        }
+        return new PlannerBackupFile(new JSONObject().put("state", businessState(value)), true);
+    }
+
+    public void write(OutputStream output) throws Exception {
+        if (output == null) throw new IOException("无法创建备份文件");
+        if (legacy) throw new IllegalStateException("请从当前日程创建新备份后导出");
+        try (Writer writer = new BufferedWriter(new OutputStreamWriter(new CloudSnapshot.LimitedOutput(output, MAX_BYTES), StandardCharsets.UTF_8))) {
+            SyncJSON.write(writer, envelope);
+        }
+    }
+
+    public JSONObject state() throws Exception { return CourseTools.copy(envelope.getJSONObject("state")); }
+    public String summary() throws Exception {
+        JSONObject state = envelope.getJSONObject("state");
+        String time = legacy ? "旧版 Android 备份" : "备份时间：" + Planner.date(envelope.getDouble("createdAt")) + " " + Planner.clock(envelope.getDouble("createdAt"));
+        return time + "\n" + counts(state);
+    }
+    public static String counts(JSONObject state) throws Exception {
+        return state.getJSONArray("courses").length() + " 门课程、" + state.getJSONArray("fixedEvents").length() + " 条固定规则、" +
+            state.getJSONArray("tasks").length() + " 条任务、" + state.getJSONArray("completions").length() + " 条学习记录";
+    }
+
+    public static final class Restore {
+        private final JSONObject candidate;
+        private final String baseline;
+        public final String summary;
+        public Restore(PlannerBackupFile file, JSONObject current) throws Exception {
+            candidate = file.state(); baseline = SyncLedger.canonical(businessState(current));
+            summary = file.summary() + "\n\n手机当前：" + counts(current);
+        }
+        public void apply(JSONObject current) throws Exception {
+            if (!baseline.equals(SyncLedger.canonical(businessState(current))))
+                throw new IllegalArgumentException("日程在核对备份期间已有更新，未执行恢复。请重新选择备份并核对最新记录。");
+            JSONObject replacement = CourseTools.copy(candidate);
+            List<String> keys = new ArrayList<>(); Iterator<String> names = current.keys(); while (names.hasNext()) keys.add(names.next());
+            for (String key : keys) current.remove(key);
+            for (String key : FIELDS) current.put(key, replacement.get(key));
+        }
+    }
+}

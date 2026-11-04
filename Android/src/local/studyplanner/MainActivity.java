@@ -400,5 +400,27 @@ public class MainActivity extends Activity {
         actions.addView(button("查看同步日志",()->run(()->{File file=new File(getFilesDir(),"sync.log");alert("同步日志",file.exists()?read(new FileInputStream(file)):"暂无日志");})));
     }
     static String pairingSecret(String payload)throws Exception{Uri uri=Uri.parse(payload);if(!"studyplanner".equals(uri.getScheme())||!"pair".equals(uri.getHost())||!"2".equals(uri.getQueryParameter("v")))throw new Exception("这不是学习日程配对二维码");String secret=uri.getQueryParameter("secret"),expires=uri.getQueryParameter("expires");if(secret==null||!secret.matches("[0-9a-fA-F]{64}")||expires==null)throw new Exception("配对二维码内容无效");long expiry=Long.parseLong(expires)*1000L,now=System.currentTimeMillis();if(expiry<=now||expiry-now>600000)throw new Exception("配对二维码已过期，请在 Mac 重新生成");return secret.toLowerCase(Locale.ROOT);}
-    @Override protected void onActivityResult(int request,int result,Intent data){super.onActivityResult(request,result,data);if(result!=RESULT_OK||data==null)return;run(()->{if(request==IMPORT_SSH_KEY&&data.getData()!=null){if(cloudPanel==null)throw new Exception("请返回云同步设置重新导入私钥");cloudPanel.importKey(data.getData());}else if(request==IMPORT_COURSES){receiveCourses(data);}else if(request==SCAN_PAIRING_QR){String payload=data.getStringExtra(QrScannerActivity.EXTRA_RESULT);if(payload==null)throw new Exception("没有读取到二维码");syncServer.startPairing(pairingSecret(payload));}else if(request==EXPORT_BACKUP&&data.getData()!=null){try(OutputStream out=getContentResolver().openOutputStream(data.getData())){out.write(state.toString(2).getBytes(StandardCharsets.UTF_8));}Toast.makeText(this,"备份已导出",Toast.LENGTH_LONG).show();}else if(request==IMPORT_BACKUP&&data.getData()!=null){JSONObject imported=new JSONObject(read(getContentResolver().openInputStream(data.getData())));Planner.validate(imported);new AlertDialog.Builder(this).setTitle("恢复此备份？").setMessage("将替换手机当前日程。建议先导出当前备份。\n备份包含 "+imported.getJSONArray("courses").length()+" 门课程、"+imported.getJSONArray("tasks").length()+" 条任务。").setNegativeButton("取消",null).setPositiveButton("恢复",(a,b)->mutate(s->{Iterator<String> keys=s.keys();List<String> names=new ArrayList<>();while(keys.hasNext())names.add(keys.next());for(String k:names)s.remove(k);Iterator<String> incoming=imported.keys();while(incoming.hasNext()){String k=incoming.next();s.put(k,imported.get(k));}},false,null)).show();}});}
+    @Override protected void onActivityResult(int request,int result,Intent data){super.onActivityResult(request,result,data);if(result!=RESULT_OK||data==null)return;run(()->{if(request==IMPORT_SSH_KEY&&data.getData()!=null){if(cloudPanel==null)throw new Exception("请返回云同步设置重新导入私钥");cloudPanel.importKey(data.getData());}else if(request==IMPORT_COURSES){receiveCourses(data);}else if(request==SCAN_PAIRING_QR){String payload=data.getStringExtra(QrScannerActivity.EXTRA_RESULT);if(payload==null)throw new Exception("没有读取到二维码");syncServer.startPairing(pairingSecret(payload));}else if((request==EXPORT_BACKUP||request==IMPORT_BACKUP)&&data.getData()!=null){transferBackup(data.getData(),request==EXPORT_BACKUP);}});}
+    void transferBackup(Uri uri,boolean exporting){
+        if(busy||!ready){alert("请稍后","日程正在处理中，请稍后重试备份操作。");return;}
+        busy=true;ProgressDialog progress=ProgressDialog.show(this,"",exporting?"正在导出最新日程…":"正在读取并检查备份…",true,false);
+        worker.execute(()->{try{
+            PlannerBackupFile.Restore review=null;
+            if(exporting){PlannerBackupFile backup=PlannerBackupFile.create(database.load(),Planner.now());backup.write(getContentResolver().openOutputStream(uri,"wt"));}
+            else{PlannerBackupFile imported=PlannerBackupFile.read(getContentResolver().openInputStream(uri));review=new PlannerBackupFile.Restore(imported,database.load());}
+            final PlannerBackupFile.Restore reviewed=review;
+            runOnUiThread(()->{busy=false;progress.dismiss();if(isDestroyed())return;
+                if(exporting)Toast.makeText(this,"备份已导出",Toast.LENGTH_LONG).show();else showBackupRestore(reviewed);
+                resumeSyncRefresh();
+            });
+        }catch(Exception error){runOnUiThread(()->{busy=false;progress.dismiss();if(isDestroyed())return;
+            alert(exporting?"备份未导出":"备份未读取",error.getMessage()+"\n手机日程未改动。"+(exporting?"导出文件可能不完整，请重新导出。":""));resumeSyncRefresh();
+        });}});
+    }
+    void showBackupRestore(PlannerBackupFile.Restore restore){
+        new AlertDialog.Builder(this).setTitle("恢复此备份？")
+            .setMessage(restore.summary+"\n\n将替换手机当前日程。建议先导出当前备份；启用云同步时，此次恢复也会同步到其他设备。")
+            .setNegativeButton("取消",null).setPositiveButton("恢复",(a,b)->mutate(restore::apply,false,()->{settingsDraft=null;restoredSettingsDraft=null;captureSettingsDraft=null;})).show();
+    }
+
 }

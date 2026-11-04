@@ -207,6 +207,10 @@ final class SyncLedgerTests: XCTestCase {
         var s = fixture(); s.courses[0].id = UUID(uuidString: "AAAAAAAA-AAAA-4AAA-8AAA-AAAAAAAAAAAA")!
         var l = SyncLedger(); l.device = "MAC-FIXTURE"; try l.capture(s, now: Date(timeIntervalSince1970: 1))
         try JSONEncoder().encode(l).write(to: URL(fileURLWithPath: "/tmp/study-sync-swift-fixture.json"))
+        if let directory = ProcessInfo.processInfo.environment["STUDY_CLOUD_FIXTURE_DIR"] {
+            let backup = PlannerBackup(state: s, reason: "Swift backup fixture", now: Date(timeIntervalSinceReferenceDate: 815_184_000))
+            try JSONEncoder().encode(backup).write(to: URL(fileURLWithPath: directory).appendingPathComponent("swift-file-backup.json"))
+        }
         XCTAssertEqual(stablePlannerID("task|AAAAAAAA-AAAA-4AAA-8AAA-AAAAAAAAAAAA|800000000|60").uuidString, "897861BE-3B8A-5F5C-84D2-6194FA9D75CD")
         let path = URL(fileURLWithPath: "/tmp/study-sync-java-fixture.json")
         if FileManager.default.fileExists(atPath: path.path) {
@@ -214,5 +218,18 @@ final class SyncLedgerTests: XCTestCase {
             try l.merge(java.changes(after: 0))
             XCTAssertEqual(try l.materialize().courses.first?.notes, "Java round trip 中文")
         }
+    }
+    func testAndroidFileBackupCompatibility() throws {
+        guard let directory = ProcessInfo.processInfo.environment["STUDY_CLOUD_FIXTURE_DIR"] else {
+            throw XCTSkip("Set fixture directory for cross-language file backup integration")
+        }
+        let path = URL(fileURLWithPath: directory).appendingPathComponent("android-file-backup.json")
+        let backup = try JSONDecoder().decode(PlannerBackup.self, from: Data(contentsOf: path)).validated()
+        XCTAssertEqual(backup.state.courses.count, 1)
+        XCTAssertEqual(backup.state.courses.first?.notes, "备份互读 中文")
+        XCTAssertEqual(backup.state.tasks.count, 1)
+        XCTAssertEqual(backup.state.completions.first?.minutes, 20)
+        XCTAssertEqual(backup.state.completions.first?.studyDate, backup.state.courses.first?.startDate)
+        XCTAssertEqual(backup.reason, "Android 导出备份")
     }
 }
