@@ -84,7 +84,7 @@ public final class ConfirmationDraft {
             JSONObject course = task == null ? null : Planner.course(state, task.optString("courseID"));
             if (!tasks.containsKey(id) || task == null || !Planner.pending(task) || course == null ||
                     course.optBoolean("isArchived") || !tasks.get(id).equals(identity(task)))
-                throw new IllegalArgumentException("待确认任务已被修改、确认或删除。本次填写尚未保存，请关闭窗口并核对最新任务后重试。");
+                throw new IllegalArgumentException("待确认任务已被修改、确认或删除。本次填写尚未保存，可刷新待确认列表或重新打开确认窗口，核对最新任务后重试。");
             if (entry.getValue() == null || entry.getValue() < 0 || entry.getValue() > task.getInt("durationMinutes"))
                 throw new IllegalArgumentException("实际时长必须在 0 与计划时长之间");
             LocalDate date = studyDates.get(id);

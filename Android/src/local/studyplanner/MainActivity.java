@@ -386,28 +386,36 @@ public class MainActivity extends Activity {
     void review(){run(()->{
         double now=Planner.now();List<JSONObject> displayed=Planner.review(state,now);
         if(displayed.isEmpty()){alert("学习完成确认","当前没有待确认的任务。");return;}
-        ConfirmationReview review=new ConfirmationReview(state,displayed,now);int[] page={0};Button[] buttons=new Button[2];
+        ConfirmationReview[] review={new ConfirmationReview(state,displayed,now)};int[] page={0};Button[] buttons=new Button[3];
         LinearLayout form=col(),list=col();form.setPadding(dp(16),0,dp(16),dp(8));
         form.addView(text("留空不处理，翻页保留输入。保存会提交所有页面已填写的项目。",13,muted));TextView position=text("",12,muted);form.addView(position);
+        TextView refreshNotice=text("刷新保留各页输入；变化的任务需要重新核对。",12,muted);form.addView(refreshNotice);
         ScrollView sv=new ScrollView(this);sv.addView(list);form.addView(sv,new LinearLayout.LayoutParams(-1,dp(340)));
         PlannerUi.Flow navigation=new PlannerUi.Flow(this);form.addView(navigation);
         Map<String,EditText> values=new LinkedHashMap<>(),studyDates=new LinkedHashMap<>();
-        Runnable capture=()->{for(ConfirmationReview.Row row:review.page(page[0])){row.minutes=value(values.get(row.id));row.studyDate=value(studyDates.get(row.id));}};
+        Runnable capture=()->{for(ConfirmationReview.Row row:review[0].page(page[0])){row.minutes=value(values.get(row.id));row.studyDate=value(studyDates.get(row.id));}};
         Runnable render=()->{
-            list.removeAllViews();values.clear();studyDates.clear();position.setText("共 "+review.count()+" 项 · 第 "+(page[0]+1)+" / "+review.pageCount()+" 页");
-            for(ConfirmationReview.Row row:review.page(page[0])){
+            list.removeAllViews();values.clear();studyDates.clear();position.setText(review[0].count()==0?"当前没有待确认的任务":"共 "+review[0].count()+" 项 · 第 "+(page[0]+1)+" / "+review[0].pageCount()+" 页");
+            for(ConfirmationReview.Row row:review[0].page(page[0])){
                 EditText minutes=field(list,row.label(),row.minutes,true);minutes.setHint("留空暂不确认，0 表示未完成");values.put(row.id,minutes);
                 studyDates.put(row.id,dateField(list,"实际学习日期（补录请核对）",row.studyDate));
+                if(row.needsReview){CheckBox checked=new CheckBox(this);checked.setText("安排已更新，我已核对本项分钟数与学习日期");checked.setTextColor(ink);checked.setOnCheckedChangeListener((button,value)->row.needsReview=!value);list.addView(checked);}
             }
-            buttons[0].setEnabled(page[0]>0);buttons[1].setEnabled(page[0]+1<review.pageCount());sv.scrollTo(0,0);
+            buttons[0].setEnabled(page[0]>0);buttons[1].setEnabled(page[0]+1<review[0].pageCount());if(buttons[2]!=null)buttons[2].setEnabled(review[0].count()>0);sv.scrollTo(0,0);
         };
         buttons[0]=button("上一页",()->{capture.run();page[0]--;render.run();});buttons[1]=button("下一页",()->{capture.run();page[0]++;render.run();});navigation.addView(buttons[0]);navigation.addView(buttons[1]);render.run();
+        navigation.addView(button("刷新待确认列表",()->run(()->{
+            if(busy||!ready||isDestroyed())return;capture.run();
+            ConfirmationReview.Refresh refreshed=review[0].refresh(state,Planner.now());review[0]=refreshed.review;
+            page[0]=Math.min(page[0],Math.max(0,review[0].pageCount()-1));render.run();
+            refreshNotice.setText("已刷新：新增 "+refreshed.added+" 项、变化 "+refreshed.changed+" 项、退出待确认 "+refreshed.removed+" 项。仍在列表中的输入已保留。");
+        })));
         AlertDialog d=new AlertDialog.Builder(this).setTitle("逐项确认实际学习分钟").setView(form).setNegativeButton("稍后",null).setPositiveButton("保存所有已填写项",null).create();
-        d.setOnShowListener(v->d.getButton(-1).setOnClickListener(x->run(()->{
+        d.setOnShowListener(v->{buttons[2]=d.getButton(-1);buttons[2].setEnabled(review[0].count()>0);buttons[2].setOnClickListener(x->run(()->{
             capture.run();ConfirmationReview.Submission submission;
-            try{submission=review.submission(Planner.now());}catch(ConfirmationReview.InputError error){page[0]=error.index/ConfirmationReview.PAGE_SIZE;render.run();throw error;}
-            confirmTasks(review.draft,submission.minutes,submission.dates,d::dismiss);
-        })));d.show();
+            try{submission=review[0].submission(Planner.now());}catch(ConfirmationReview.InputError error){page[0]=error.index/ConfirmationReview.PAGE_SIZE;render.run();throw error;}
+            confirmTasks(review[0].draft,submission.minutes,submission.dates,d::dismiss);
+        }));});d.show();
     });}
     void showReviewNotice(){if(!reviewShown&&!Planner.review(state,Planner.now()).isEmpty()){reviewShown=true;render();}}
     void courses()throws Exception{body.addView(title("课程管理"));CompressedPreviewPanel.render(this,body);body.addView(text("学习量、截止日期与课程进度",13,muted));PlannerUi.Flow courseActions=new PlannerUi.Flow(this);body.addView(courseActions);courseActions.addView(button("＋ 添加课程",()->courseEditor(null)));new PlannerFeatures(this).coursesHeader(courseActions);new PlannerFeatures(this).courseCatalog(body);}

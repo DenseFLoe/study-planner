@@ -15,9 +15,12 @@ final class ConfirmationReview {
         final String id, course, lesson;
         final double start, planningStart, planningEnd;
         final boolean floating;
+        private final String taskSignature;
+        boolean needsReview;
         String minutes = "", studyDate;
-        Row(int index, JSONObject task, String course, double now) {
+        Row(int index, JSONObject task, String course, double now) throws Exception {
             this.index = index; this.course = course; id = task.optString("id"); lesson = task.optString("lessonName");
+            taskSignature = SyncLedger.canonical(task);
             maximum = task.optInt("durationMinutes"); start = task.optDouble("start");
             planningStart = Planner.planningStart(task); planningEnd = Planner.planningEnd(task); floating = Planner.floatingTask(task);
             studyDate = Planner.date(Math.min(start, now));
@@ -51,10 +54,33 @@ final class ConfirmationReview {
         if (index < 0 || index >= pageCount()) return Collections.emptyList();
         int first = index * PAGE_SIZE; return rows.subList(first, Math.min(rows.size(), first + PAGE_SIZE));
     }
+    static final class Refresh {
+        final ConfirmationReview review;
+        final int added, changed, removed;
+        Refresh(ConfirmationReview review, int added, int changed, int removed) {
+            this.review = review; this.added = added; this.changed = changed; this.removed = removed;
+        }
+    }
+    /** Retain raw inputs across all pages; changed tasks need explicit review again. */
+    Refresh refresh(JSONObject state, double now) throws Exception {
+        ConfirmationReview next = new ConfirmationReview(state, Planner.review(state, now), now);
+        Map<String, Row> old = new HashMap<>(); for (Row row : rows) old.put(row.id, row);
+        int added = 0, changed = 0, retained = 0;
+        for (Row row : next.rows) {
+            Row previous = old.get(row.id);
+            if (previous == null) { added++; continue; }
+            retained++; row.minutes = previous.minutes; row.studyDate = previous.studyDate;
+            boolean updated = !row.taskSignature.equals(previous.taskSignature);
+            if (updated) changed++;
+            row.needsReview = previous.needsReview || updated;
+        }
+        return new Refresh(next, added, changed, rows.size() - retained);
+    }
     Submission submission(double now) {
         Map<String, Integer> minutes = new LinkedHashMap<>(); Map<String, LocalDate> dates = new LinkedHashMap<>();
         for (Row row : rows) {
             if (row.minutes.trim().isEmpty()) continue;
+            if (row.needsReview) throw new InputError(row, "安排已更新，请先核对并勾选本项；留空可暂不确认。");
             int value;
             try { value = Integer.parseInt(row.minutes.trim()); }
             catch (NumberFormatException error) { throw new InputError(row, "请填写整数分钟，留空暂不确认。"); }

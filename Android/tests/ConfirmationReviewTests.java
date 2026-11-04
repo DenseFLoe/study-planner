@@ -55,7 +55,48 @@ public final class ConfirmationReviewTests {
         try { empty.submission(NOW); throw new AssertionError("Empty submission accepted"); }
         catch (IllegalArgumentException expected) { checks++; }
     }
+    static JSONObject taskByID(JSONObject state,String id)throws Exception {
+        for(JSONObject task:Planner.list(state.getJSONArray("tasks")))if(task.getString("id").equals(id))return task;
+        throw new AssertionError("Missing fixture task");
+    }
+    static ConfirmationReview.Row find(ConfirmationReview review,String id) {
+        for(int page=0;page<review.pageCount();page++)for(ConfirmationReview.Row row:review.page(page))if(row.id.equals(id))return row;
+        return null;
+    }
+    static void refreshAcrossPages() throws Exception {
+        JSONObject state=fixture();ConfirmationReview original=review(state);
+        ConfirmationReview.Row first=original.page(0).get(0),last=original.page(2).get(10);
+        String oldDate=first.studyDate;first.minutes="12.";last.minutes="40";last.studyDate=DAY.minusDays(3).toString();
+        String confirmed=state.getJSONArray("tasks").getJSONObject(1).getString("id"),deleted=state.getJSONArray("tasks").getJSONObject(2).getString("id");
+        Planner.confirm(state,confirmed,30,NOW,DAY.minusDays(1));
+        JSONArray retained=new JSONArray();for(JSONObject task:Planner.list(state.getJSONArray("tasks")))if(!task.getString("id").equals(deleted))retained.put(task);
+        state.put("tasks",retained);JSONObject changed=taskByID(state,last.id);changed.put("durationMinutes",30);
+        JSONObject added=Planner.task(changed.getString("courseID"),Planner.at(DAY.minusDays(2),900),60);state.getJSONArray("tasks").put(added);
+        String before=SyncLedger.canonical(state);ConfirmationReview.Refresh refresh=original.refresh(state,NOW);ConfirmationReview latest=refresh.review;
+        check(refresh.added==1&&refresh.changed==1&&refresh.removed==2,"Refresh did not explain new, changed and removed rows");
+        check(latest.count()==50&&latest.pageCount()==3,"Refresh lost pagination after removals");
+        check(find(latest,first.id).minutes.equals("12.")&&find(latest,first.id).studyDate.equals(oldDate),"Refresh lost raw input or untouched date");
+        check(find(latest,last.id).minutes.equals("40")&&find(latest,last.id).studyDate.equals(DAY.minusDays(3).toString()),"Changed row was clamped or lost its explicit date");
+        check(find(latest,last.id).needsReview&&find(latest,last.id).maximum==30,"Changed row inherited previous approval");
+        check(find(latest,confirmed)==null&&find(latest,deleted)==null,"Confirmed or deleted task remained eligible");
+        check(find(latest,added.getString("id")).minutes.isEmpty(),"New task inherited stale input");
+        check(before.equals(SyncLedger.canonical(state)),"Refresh mutated planner state");
+        find(latest,first.id).minutes="20";find(latest,last.id).minutes="20";rejects(latest,find(latest,last.id).index);
+        find(latest,last.id).minutes="";check(latest.submission(NOW).minutes.size()==1,"Blank changed row blocked an independent confirmation");find(latest,last.id).minutes="20";
+        latest=latest.refresh(state,NOW).review;check(find(latest,last.id).needsReview,"Repeated refresh silently accepted changed task");
+        find(latest,last.id).needsReview=false;ConfirmationReview.Submission saved=latest.submission(NOW);
+        check(saved.minutes.size()==2&&!saved.minutes.containsKey(confirmed)&&!saved.minutes.containsKey(deleted),"Refresh reintroduced removed input into submission");
+        JSONObject copy=CourseTools.copy(state);latest.draft.apply(copy,saved.minutes,saved.dates,NOW);
+        check(copy.getJSONArray("completions").length()==3&&Planner.completed(copy,copy.getJSONArray("courses").getJSONObject(0))==70,"Fresh draft did not preserve remote confirmation and new values");
+        changed.put("start",changed.getDouble("start")+60);String newer=SyncLedger.canonical(state);
+        try{latest.draft.apply(state,saved.minutes,saved.dates,NOW);throw new AssertionError("Post-refresh remote change accepted");}
+        catch(IllegalArgumentException expected){check(newer.equals(SyncLedger.canonical(state)),"Post-refresh conflict partially saved rows");}
+        ConfirmationReview.Refresh again=latest.refresh(state,NOW);check(again.changed==1&&find(again.review,last.id).needsReview,"Second task change retained old approval");
+        original.page(0).get(0).minutes="99";check(find(again.review,first.id).minutes.equals("20"),"Refresh retained mutable old row");
+        state.put("tasks",new JSONArray());ConfirmationReview.Refresh empty=again.review.refresh(state,NOW);
+        check(empty.review.count()==0&&empty.review.pageCount()==0&&empty.removed==again.review.count(),"Empty refresh retained hidden pages");
+    }
     public static void main(String[] args) throws Exception {
-        pagingAndInputs(); staleBatch(); System.out.println("Confirmation review: " + checks + " checks passed");
+        pagingAndInputs(); staleBatch(); refreshAcrossPages(); System.out.println("Confirmation review: " + checks + " checks passed");
     }
 }
