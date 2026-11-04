@@ -379,9 +379,27 @@ struct DailyReviewView: View {
     @State private var studyDates: [UUID: Date] = [:]
     @State private var message = ""
     @State private var saving = false
+    @State private var changedTasks: Set<UUID> = []
+    @State private var refreshNotice = ""
+
+    private func refreshTasks() {
+        guard !saving, !store.orderSaveBusy else { return }
+        let next = DailyReviewRefresh(previous: tasks, latest: store.reviewTasks, values: values,
+                                      studyDates: studyDates, reviewed: reviewed)
+        tasks = next.tasks; values = next.values; studyDates = next.studyDates
+        reviewed = next.reviewed; changedTasks = next.changedIDs; message = ""
+        refreshNotice = "已刷新：新增 \(next.addedCount) 项、变化 \(next.changedIDs.count) 项、退出待确认 \(next.removedCount) 项。仍在列表中的输入已保留。"
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
             SheetHeading(title: "确认学习完成情况", subtitle: "请逐项选择实际完成量，包含昨天及更早的未确认计划。")
+            HStack(alignment: .top) {
+                Button("刷新待确认列表", action: refreshTasks).disabled(saving || store.orderSaveBusy)
+                Text("保留仍在列表中的输入；有变化的任务须重新核对。")
+                    .font(.caption).foregroundStyle(.secondary)
+            }.padding(.horizontal, 24)
+            if !refreshNotice.isEmpty { Text(refreshNotice).font(.caption).foregroundStyle(.secondary).padding(.horizontal, 24) }
             if tasks.isEmpty { ContentUnavailableView("没有待确认的任务", systemImage: "checkmark.circle", description: Text("所有历史计划均已确认。")) }
             ScrollView {
                 LazyVStack(spacing: 12) {
@@ -391,7 +409,10 @@ struct DailyReviewView: View {
                             if let lessonName = task.lessonName { Text(lessonName).font(.callout).foregroundStyle(.secondary) }
                             CompletionInput(actual: Binding(get: { values[task.id] ?? 0 }, set: { values[task.id] = $0; reviewed.insert(task.id) }), planned: task.durationMinutes)
                             DatePicker("实际学习日期（补录请核对）", selection: Binding(get: { studyDates[task.id] ?? min(task.start, Date()) }, set: { studyDates[task.id] = $0 }), in: ...Date(), displayedComponents: .date)
-                            if !reviewed.contains(task.id) { Text("尚未选择完成情况").font(.caption).foregroundStyle(.orange) }
+                            if !reviewed.contains(task.id) {
+                                Text(changedTasks.contains(task.id) ? "任务已更新，请核对分钟数和学习日期后重新选择完成情况。" : "尚未选择完成情况")
+                                    .font(.caption).foregroundStyle(.orange)
+                            }
                         }.padding(16).background(Color.primary.opacity(0.035), in: RoundedRectangle(cornerRadius: 10))
                     }
                 }.padding(.horizontal, 24)
