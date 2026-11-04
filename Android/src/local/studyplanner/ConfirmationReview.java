@@ -16,6 +16,7 @@ final class ConfirmationReview {
         final double start, planningStart, planningEnd;
         final boolean floating;
         private final String taskSignature;
+        private final String searchText;
         boolean needsReview;
         String minutes = "", studyDate;
         Row(int index, JSONObject task, String course, double now) throws Exception {
@@ -24,6 +25,7 @@ final class ConfirmationReview {
             maximum = task.optInt("durationMinutes"); start = task.optDouble("start");
             planningStart = Planner.planningStart(task); planningEnd = Planner.planningEnd(task); floating = Planner.floatingTask(task);
             studyDate = Planner.date(Math.min(start, now));
+            searchText = TaskSearch.normalize(course + " " + lesson + " " + Planner.date(start));
         }
         String label() {
             return (index + 1) + ". " + Planner.date(start) + " " + Planner.clock(planningStart) +
@@ -53,6 +55,32 @@ final class ConfirmationReview {
     List<Row> page(int index) {
         if (index < 0 || index >= pageCount()) return Collections.emptyList();
         int first = index * PAGE_SIZE; return rows.subList(first, Math.min(rows.size(), first + PAGE_SIZE));
+    }
+    static final class Filtered {
+        private final List<Row> rows;
+        Filtered(List<Row> rows) { this.rows = Collections.unmodifiableList(new ArrayList<>(rows)); }
+        int count() { return rows.size(); }
+        int pageCount() { return rows.isEmpty() ? 0 : (rows.size() - 1) / PAGE_SIZE + 1; }
+        List<Row> page(int index) {
+            if (index < 0 || index >= pageCount()) return Collections.emptyList();
+            int first = index * PAGE_SIZE; return rows.subList(first, Math.min(rows.size(), first + PAGE_SIZE));
+        }
+        int filledCount() { return filled(rows); }
+    }
+    private static int filled(List<Row> rows) {
+        int count = 0; for (Row row : rows) if (!row.minutes.trim().isEmpty()) count++; return count;
+    }
+    int filledCount() { return filled(rows); }
+    /** Filtering reads immutable labels; input fields remain owned by the UI thread. */
+    Filtered filter(String query) {
+        String term = TaskSearch.normalize(query);
+        if (term.isEmpty()) return new Filtered(rows);
+        String[] terms = term.split("\\s+"); List<Row> found = new ArrayList<>();
+        outer: for (Row row : rows) {
+            for (String part : terms) if (!row.searchText.contains(part)) continue outer;
+            found.add(row);
+        }
+        return new Filtered(found);
     }
     static final class Refresh {
         final ConfirmationReview review;

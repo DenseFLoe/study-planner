@@ -96,7 +96,37 @@ public final class ConfirmationReviewTests {
         state.put("tasks",new JSONArray());ConfirmationReview.Refresh empty=again.review.refresh(state,NOW);
         check(empty.review.count()==0&&empty.review.pageCount()==0&&empty.removed==again.review.count(),"Empty refresh retained hidden pages");
     }
+    static void filteringKeepsHiddenInputsAndOriginalErrorLocations() throws Exception {
+        JSONObject state=fixture();state.getJSONArray("courses").getJSONObject(0).put("name","Math 高数");
+        String before=SyncLedger.canonical(state);ConfirmationReview review=review(state);
+        ConfirmationReview.Row first=review.page(0).get(0),last=review.page(2).get(10);
+        first.minutes="20";last.minutes="12.";
+        ConfirmationReview.Filtered shown=review.filter("高数 "+Planner.date(first.start));
+        check(shown.count()==1&&shown.pageCount()==1&&shown.page(0).get(0)==first,"Combined date search did not preserve row identity");
+        check(shown.page(-1).isEmpty()&&shown.page(1).isEmpty(),"Filtered invalid page escaped bounds");
+        check(review.filledCount()==2&&shown.filledCount()==1,"Hidden filled count was lost");
+        rejects(review,last.index);
+        check(last.minutes.equals("12."),"Filtering parsed or discarded invalid raw input");
+        ConfirmationReview.Filtered normalized=review.filter("ＭＡＴＨ　高数 第 ５０");
+        check(normalized.count()==1&&normalized.page(0).get(0)==last,"Full-width multi-keyword lesson search failed");
+        normalized.page(0).get(0).minutes="0";
+        check(review.page(2).get(10).minutes.equals("0")&&normalized.filledCount()==1,"Editing a filtered row lost its original input");
+        last.studyDate=DAY.minusDays(60).toString();
+        check(review.filter(last.studyDate).count()==0,"Search substituted the draft study date for the original plan date");
+        last.studyDate=DAY.minusDays(1).toString();last.needsReview=true;rejects(review,last.index);last.needsReview=false;
+        ConfirmationReview.Submission submission=review.submission(NOW);
+        check(submission.minutes.size()==2&&submission.minutes.get(last.id)==0,"Hidden explicit zero was omitted from the reviewed submission");
+        check(review.filter("不存在").count()==0&&review.filledCount()==2,"No results cleared filled inputs");
+        ConfirmationReview.Filtered all=review.filter("　 ");
+        check(all.count()==51&&all.pageCount()==3&&all.page(0).size()==20&&all.page(2).size()==11,"Clearing the filter changed bounded paging");
+        try{all.page(0).clear();throw new AssertionError("Filtered rows mutable");}catch(UnsupportedOperationException expected){checks++;}
+        check(before.equals(SyncLedger.canonical(state)),"Filtering or input validation changed the stored planner");
+        state.getJSONArray("courses").getJSONObject(0).put("name","新课程");
+        check(review.filter("Math").count()==51,"Search labels retained mutable source metadata");
+        ConfirmationReview refreshed=review.refresh(state,NOW).review;
+        check(refreshed.filter("新课程").count()==51&&refreshed.filledCount()==2,"Refreshing metadata lost inputs or search terms");
+    }
     public static void main(String[] args) throws Exception {
-        pagingAndInputs(); staleBatch(); refreshAcrossPages(); System.out.println("Confirmation review: " + checks + " checks passed");
+        pagingAndInputs(); staleBatch(); refreshAcrossPages(); filteringKeepsHiddenInputsAndOriginalErrorLocations(); System.out.println("Confirmation review: " + checks + " checks passed");
     }
 }

@@ -9,6 +9,8 @@ import android.graphics.drawable.GradientDrawable;
 import android.view.*;
 import android.widget.*;
 import android.text.InputType;
+import android.text.Editable;
+import android.text.TextWatcher;
 import android.util.AtomicFile;
 import android.net.Uri;
 import org.json.*;
@@ -412,34 +414,67 @@ public class MainActivity extends Activity {
     void review(){run(()->{
         double now=Planner.now();List<JSONObject> displayed=Planner.review(state,now);
         if(displayed.isEmpty()){alert("学习完成确认","当前没有待确认的任务。");return;}
-        ConfirmationReview[] review={new ConfirmationReview(state,displayed,now)};int[] page={0};Button[] buttons=new Button[3];
+        ConfirmationReview[] review={new ConfirmationReview(state,displayed,now)};
+        ConfirmationReview.Filtered[] filtered={review[0].filter("")};int[] page={0},targetPage={0};Button[] buttons=new Button[3];
         LinearLayout form=col(),list=col();form.setPadding(dp(16),0,dp(16),dp(8));
-        form.addView(text("留空不处理，翻页保留输入。保存会提交所有页面已填写的项目。",13,muted));TextView position=text("",12,muted);form.addView(position);
+        form.addView(text("留空不处理，翻页和筛选保留输入。保存会提交所有页面已填写的项目，包括筛选外项目。",13,muted));
+        EditText query=field(form,"筛选课程、课节或原计划日期（可组合关键词）","",false);
+        TextView position=text("",12,muted);form.addView(position);
         TextView refreshNotice=text("刷新保留各页输入；变化的任务需要重新核对。",12,muted);form.addView(refreshNotice);
-        ScrollView sv=new ScrollView(this);sv.addView(list);form.addView(sv,new LinearLayout.LayoutParams(-1,dp(340)));
+        ScrollView sv=new ScrollView(this);sv.addView(list);form.addView(sv,new LinearLayout.LayoutParams(-1,dp(300)));
         PlannerUi.Flow navigation=new PlannerUi.Flow(this);form.addView(navigation);
         Map<String,EditText> values=new LinkedHashMap<>(),studyDates=new LinkedHashMap<>();
-        Runnable capture=()->{for(ConfirmationReview.Row row:review[0].page(page[0])){row.minutes=value(values.get(row.id));row.studyDate=value(studyDates.get(row.id));}};
+        Runnable capture=()->{if(filtered[0]!=null)for(ConfirmationReview.Row row:filtered[0].page(page[0])){row.minutes=value(values.get(row.id));row.studyDate=value(studyDates.get(row.id));}};
+        Runnable counts=()->{
+            int filled=review[0].filledCount(),shown=filtered[0]==null?0:filtered[0].count(),pages=filtered[0]==null?0:filtered[0].pageCount();
+            if(filtered[0]==null)position.setText("正在筛选…");
+            else position.setText("显示 "+shown+" / "+review[0].count()+" 项"+(pages==0?"":" · 第 "+(page[0]+1)+" / "+pages+" 页")+
+                "\n已填写 "+filled+" 项，其中 "+(filled-filtered[0].filledCount())+" 项在筛选外；保存包含全部已填写项。");
+            if(buttons[0]!=null)buttons[0].setEnabled(filtered[0]!=null&&page[0]>0);
+            if(buttons[1]!=null)buttons[1].setEnabled(filtered[0]!=null&&page[0]+1<pages);
+            if(buttons[2]!=null)buttons[2].setEnabled(filtered[0]!=null&&filled>0);
+        };
         Runnable render=()->{
-            list.removeAllViews();values.clear();studyDates.clear();position.setText(review[0].count()==0?"当前没有待确认的任务":"共 "+review[0].count()+" 项 · 第 "+(page[0]+1)+" / "+review[0].pageCount()+" 页");
-            for(ConfirmationReview.Row row:review[0].page(page[0])){
+            list.removeAllViews();values.clear();studyDates.clear();
+            if(filtered[0]!=null)for(ConfirmationReview.Row row:filtered[0].page(page[0])){
                 EditText minutes=field(list,row.label(),row.minutes,true);minutes.setHint("留空暂不确认，0 表示未完成");values.put(row.id,minutes);
+                minutes.addTextChangedListener(new TextWatcher(){
+                    public void beforeTextChanged(CharSequence s,int start,int count,int after){}
+                    public void onTextChanged(CharSequence s,int start,int before,int count){row.minutes=s.toString();counts.run();}
+                    public void afterTextChanged(Editable s){}
+                });
                 studyDates.put(row.id,dateField(list,"实际学习日期（补录请核对）",row.studyDate));
                 if(row.needsReview){CheckBox checked=new CheckBox(this);checked.setText("安排已更新，我已核对本项分钟数与学习日期");checked.setTextColor(ink);checked.setOnCheckedChangeListener((button,value)->row.needsReview=!value);list.addView(checked);}
             }
-            buttons[0].setEnabled(page[0]>0);buttons[1].setEnabled(page[0]+1<review[0].pageCount());if(buttons[2]!=null)buttons[2].setEnabled(review[0].count()>0);sv.scrollTo(0,0);
+            counts.run();sv.scrollTo(0,0);
         };
         buttons[0]=button("上一页",()->{capture.run();page[0]--;render.run();});buttons[1]=button("下一页",()->{capture.run();page[0]++;render.run();});navigation.addView(buttons[0]);navigation.addView(buttons[1]);render.run();
+        AlertDialog d=new AlertDialog.Builder(this).setTitle("逐项确认实际学习分钟").setView(form).setNegativeButton("稍后",null).setPositiveButton("保存所有已填写项",null).create();
+        LatestWork<ConfirmationReview.Filtered> work=new LatestWork<>(worker,this::runOnUiThread,result->{
+            if(isDestroyed()||!d.isShowing())return;filtered[0]=result;page[0]=Math.min(targetPage[0],Math.max(0,result.pageCount()-1));render.run();
+        },error->{if(!isDestroyed()&&d.isShowing())position.setText("筛选失败："+error.getMessage());});
+        Runnable[] pending={null};
+        java.util.function.IntConsumer search=desiredPage->{
+            capture.run();work.clear();if(pending[0]!=null)handler.removeCallbacks(pending[0]);
+            filtered[0]=null;targetPage[0]=Math.max(0,desiredPage);page[0]=0;render.run();
+            String term=query.getText().toString();ConfirmationReview source=review[0];
+            pending[0]=()->work.submit(()->source.filter(term));handler.postDelayed(pending[0],200);
+        };
+        query.addTextChangedListener(new TextWatcher(){
+            public void beforeTextChanged(CharSequence s,int start,int count,int after){}
+            public void onTextChanged(CharSequence s,int start,int before,int count){search.accept(0);}
+            public void afterTextChanged(Editable s){}
+        });
+        navigation.addView(button("清除筛选",()->query.setText("")));
         navigation.addView(button("刷新待确认列表",()->run(()->{
-            if(busy||!ready||isDestroyed())return;capture.run();
-            ConfirmationReview.Refresh refreshed=review[0].refresh(state,Planner.now());review[0]=refreshed.review;
-            page[0]=Math.min(page[0],Math.max(0,review[0].pageCount()-1));render.run();
+            if(busy||!ready||isDestroyed())return;capture.run();int desired=page[0];
+            ConfirmationReview.Refresh refreshed=review[0].refresh(state,Planner.now());review[0]=refreshed.review;filtered[0]=null;search.accept(desired);
             refreshNotice.setText("已刷新：新增 "+refreshed.added+" 项、变化 "+refreshed.changed+" 项、退出待确认 "+refreshed.removed+" 项。仍在列表中的输入已保留。");
         })));
-        AlertDialog d=new AlertDialog.Builder(this).setTitle("逐项确认实际学习分钟").setView(form).setNegativeButton("稍后",null).setPositiveButton("保存所有已填写项",null).create();
-        d.setOnShowListener(v->{buttons[2]=d.getButton(-1);buttons[2].setEnabled(review[0].count()>0);buttons[2].setOnClickListener(x->run(()->{
-            capture.run();ConfirmationReview.Submission submission;
-            try{submission=review[0].submission(Planner.now());}catch(ConfirmationReview.InputError error){page[0]=error.index/ConfirmationReview.PAGE_SIZE;render.run();throw error;}
+        d.setOnDismissListener(dialog->{work.close();if(pending[0]!=null)handler.removeCallbacks(pending[0]);});
+        d.setOnShowListener(v->{buttons[2]=d.getButton(-1);counts.run();buttons[2].setOnClickListener(x->run(()->{
+            if(filtered[0]==null)return;capture.run();ConfirmationReview.Submission submission;
+            try{submission=review[0].submission(Planner.now());}catch(ConfirmationReview.InputError error){query.setText("");search.accept(error.index/ConfirmationReview.PAGE_SIZE);throw error;}
             confirmTasks(review[0].draft,submission.minutes,submission.dates,d::dismiss);
         }));});d.show();
     });}
