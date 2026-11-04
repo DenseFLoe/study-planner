@@ -7,17 +7,12 @@ if [[ "$(uname -s)" == Darwin ]]; then
 else
   JDK="${JAVA_HOME:-$(dirname "$(dirname "$(readlink -f "$(command -v javac)")")")}"
 fi
+bash Scripts/prepare-json-java.sh
 stage="$PWD/.build/cloud-server-package"
 classes="$PWD/.build/cloud-server-classes"
 rm -rf -- "$classes" "$stage"
 mkdir -p "$classes" "$stage/lib" dist
 json_source="$PWD/Android/tools/json.jar"
-if [[ ! -f "$json_source" ]]; then
-  json_source="$PWD/.build/json-20240303.jar"
-  curl --fail --location --proto '=https' --tlsv1.2 --output "$json_source" 'https://repo.maven.apache.org/maven2/org/json/json/20240303/json-20240303.jar'
-fi
-if command -v sha256sum >/dev/null; then digest="$(sha256sum "$json_source")"; else digest="$(shasum -a 256 "$json_source")"; fi
-[[ "${digest%% *}" == 3cf6cd6892e32e2b4c1c39e0f52f5248a2f5b37646fdfbb79a66b46b618414ed ]] || { echo 'JSON-java dependency checksum mismatch' >&2; exit 1; }
 sources=()
 for name in Planner SchedulePreferenceOptimizer SchedulePriorities ScheduleExplanation DailyTaskOrdering CourseTools StudyLoad ScheduleFeasibilitySearch ScheduleHealth SavedScheduleAssessment WebCourseImport SyncLedger SyncJSON SyncExchange CloudSnapshot; do
   sources+=("Android/src/local/studyplanner/$name.java")

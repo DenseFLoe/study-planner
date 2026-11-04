@@ -5,6 +5,7 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 python3 Scripts/test-build-metadata.py
+python3 Scripts/test-json-bootstrap.py
 bash Android/check-api.sh
 
 bash Scripts/prepare-json-java.sh
