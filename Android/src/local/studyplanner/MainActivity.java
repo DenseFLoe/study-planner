@@ -101,7 +101,21 @@ public class MainActivity extends Activity {
             refreshSyncData();
         });}});
     }
-    void swapDailyTasks(String source,String target){if(busy)return;run(()->{JSONObject before=state,preview=CourseTools.copy(state);double now=Planner.now();DailyTaskOrdering.swap(preview,source,target,now);Planner.validate(preview);busy=true;state=preview;render();worker.execute(()->{try{JSONObject fresh=database.update(latest->{DailyTaskOrdering.swap(latest,source,target,now);Planner.refreshDiagnostics(latest,now);});runOnUiThread(()->{state=fresh;busy=false;if(!isDestroyed()){render();resumeSyncRefresh();}});}catch(Exception error){JSONObject latest=before;try{latest=database.load();}catch(Exception ignored){}final JSONObject restored=latest;runOnUiThread(()->{state=restored;busy=false;if(!isDestroyed()){render();alert("交换未保存",error.getMessage());resumeSyncRefresh();}});}});});}
+    void swapDailyTasks(String source,String target){
+        if(busy)return;
+        run(()->{
+            JSONObject before=state;DailyTaskSwapDraft draft=new DailyTaskSwapDraft(state,source,target,Planner.now());
+            Planner.validate(draft.preview);busy=true;state=draft.preview;render();
+            worker.execute(()->{try{
+                JSONObject fresh=database.update(latest->{double now=Planner.now();draft.apply(latest,now);Planner.refreshDiagnostics(latest,now);});
+                runOnUiThread(()->{state=fresh;busy=false;if(!isDestroyed()){render();resumeSyncRefresh();}});
+            }catch(Exception error){
+                JSONObject latest=before;try{latest=database.load();}catch(Exception ignored){}
+                final JSONObject restored=latest;
+                runOnUiThread(()->{state=restored;busy=false;if(!isDestroyed()){render();alert("交换未保存",error.getMessage());resumeSyncRefresh();}});
+            }});
+        });
+    }
     void receiveCourses(Intent data)throws Exception{String courseID=data.getStringExtra("courseID");if(courseID!=null){JSONObject course=Planner.course(state,courseID);if(course==null)throw new Exception("该课程已删除。");page=1;render();courseEditor(course);return;}String path=data.getStringExtra("captureFile");if(path==null)throw new Exception("导入结果缺失");File file=new File(path).getCanonicalFile();if(!file.getParentFile().equals(getCacheDir().getCanonicalFile())||!file.getName().matches("course-import-[A-Fa-f0-9-]+\\.json")||file.length()>25000000)throw new Exception("导入结果无效");JSONObject captured;try{captured=new JSONObject(read(new FileInputStream(file)));}finally{file.delete();}List<JSONObject> snapshots=Planner.list(captured.getJSONArray("snapshots"));double deadline=captured.getDouble("deadline");mutate(s->WebCourseImport.save(s,snapshots,deadline,Planner.now()),true,null);}
     int dp(int n){return (int)(n*getResources().getDisplayMetrics().density+.5f);}
     LinearLayout col(){LinearLayout v=new LinearLayout(this);v.setOrientation(1);return v;}
