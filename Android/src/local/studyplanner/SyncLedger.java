@@ -143,7 +143,7 @@ public final class SyncLedger {
             if(!tasks.containsKey(id)&&row!=null&&row.getBoolean("deleted")){
                 JSONObject old=payload(row);
                 if(!record.getString("courseID").equals(old.getString("courseID")))throw new IllegalArgumentException("完成记录与关联任务的课程不一致");
-                if(!old.has("confirmedAt"))tasks.put(id,old);
+                if(!Planner.hasConfirmationTime(old))tasks.put(id,old);
             }
         }
         for(JSONObject task:tasks.values()){
@@ -151,7 +151,7 @@ public final class SyncLedger {
             JSONObject record=completions.get(id);
             if(record!=null&&!record.getString("courseID").equals(task.getString("courseID")))throw new IllegalArgumentException("完成记录与关联任务的课程不一致");
             if(row!=null&&row.getBoolean("deleted")){
-                if(task.has("confirmedAt"))task.put("status","planned");task.remove("confirmedAt");task.put("completedMinutes",0);
+                if(Planner.hasConfirmationTime(task))task.put("status","planned");task.remove("confirmedAt");task.put("completedMinutes",0);
             }else if(record!=null){
                 int minutes=record.getInt("minutes");if(minutes<0||minutes>task.getInt("durationMinutes"))throw new IllegalArgumentException("确认时长无效");
                 task.put("confirmedAt",record.getDouble("recordedAt")).put("completedMinutes",minutes)
@@ -162,7 +162,7 @@ public final class SyncLedger {
         SyncExchange.reconcileTasks(this,state);
         Set<String> kept=new HashSet<>();for(JSONObject task:Planner.list(state.getJSONArray("tasks")))kept.add(task.getString("id"));
         JSONArray result=new JSONArray();for(JSONObject record:completions.values())if(!tasks.containsKey(record.getString("taskID"))||kept.contains(record.getString("taskID")))result.put(record);
-        for(JSONObject task:Planner.list(state.getJSONArray("tasks")))if(task.has("confirmedAt")&&!completions.containsKey(task.getString("id"))){
+        for(JSONObject task:Planner.list(state.getJSONArray("tasks")))if(Planner.hasConfirmationTime(task)&&!completions.containsKey(task.getString("id"))){
             int minutes=task.getInt("completedMinutes");if(minutes<0||minutes>task.getInt("durationMinutes"))throw new IllegalArgumentException("确认时长无效");
             result.put(new JSONObject().put("id",Planner.stableID("completion|"+task.getString("id"))).put("taskID",task.getString("id")).put("courseID",task.getString("courseID"))
                 .put("minutes",minutes).put("recordedAt",task.getDouble("confirmedAt")));

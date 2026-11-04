@@ -37,7 +37,7 @@ final class ScheduleHealth {
         for(JSONObject c:Planner.list(state.getJSONArray("courses")))if(!c.optBoolean("isArchived")&&Planner.remaining(state,c)>0){
             int n=Planner.remaining(state,c);remaining+=n;if(!c.optBoolean("autoScheduleEnabled",true))paused+=n;else missing+=absent==null?0:absent.optInt(c.optString("id"));
         }
-        for(JSONObject t:Planner.list(state.getJSONArray("tasks")))if(t.has("confirmedAt")&&Planner.day(t.optDouble("confirmedAt")).equals(Planner.day(now))){
+        for(JSONObject t:Planner.list(state.getJSONArray("tasks")))if(Planner.hasConfirmationTime(t)&&Planner.day(t.optDouble("confirmedAt")).equals(Planner.day(now))){
             reviewed+=t.optInt("durationMinutes");credited+=t.optInt("completedMinutes");JSONObject c=Planner.course(state,t.optString("courseID"));
             if(c==null||c.optBoolean("isArchived"))continue;int cap=Planner.remaining(state,c);
             if(t.has("lessonID"))for(Planner.Work w:Planner.lessonWorkAll(state,c))if(w.lessonID.equals(t.optString("lessonID"))){cap=w.minutes;break;}

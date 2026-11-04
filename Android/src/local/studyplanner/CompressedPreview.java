@@ -12,7 +12,7 @@ final class CompressedPreview {
     static List<JSONObject> sorted(JSONObject state,String key)throws Exception {List<JSONObject> rows=Planner.list(state.optJSONArray(key));rows.sort(Comparator.comparing(v->v.optString("id")));return rows;}
     static String signature(JSONObject state)throws Exception {
         JSONArray tasks=new JSONArray(),windows=new JSONArray();
-        for(JSONObject t:sorted(state,"tasks"))if(t.has("confirmedAt")){JSONObject row=new JSONObject();for(String k:new String[]{"id","courseID","lessonID"})if(t.has(k))row.put(k,t.get(k));tasks.put(row);}
+        for(JSONObject t:sorted(state,"tasks"))if(Planner.hasConfirmationTime(t)){JSONObject row=new JSONObject();for(String k:new String[]{"id","courseID","lessonID"})if(t.has(k))row.put(k,t.get(k));tasks.put(row);}
         JSONObject settings=state.getJSONObject("settings");List<JSONObject> availability=Planner.list(settings.getJSONArray("availability"));
         availability.sort(Comparator.comparingInt((JSONObject w)->w.optInt("weekday")).thenComparingInt(w->w.optInt("startMinute")).thenComparingInt(w->w.optInt("endMinute")));
         for(JSONObject w:availability)windows.put(new JSONObject().put("weekday",w.getInt("weekday")).put("startMinute",w.getInt("startMinute")).put("endMinute",w.getInt("endMinute")));

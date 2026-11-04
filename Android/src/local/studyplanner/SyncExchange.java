@@ -61,14 +61,14 @@ final class SyncExchange {
                 // Recognize older salted IDs only for colliding slots, keeping normal reads linear.
                 String base="task|"+task.getString("courseID")+"|"+(long)task.getDouble("start")+"|"+task.getInt("durationMinutes")+(task.has("lessonID")?"|"+task.optString("lessonID"):"");
                 if(!id.equals(Planner.stableID(base))){
-                    List<String> confirmed=new ArrayList<>();for(JSONObject other:tasks)if(other.has("confirmedAt")&&other.getString("courseID").equals(task.getString("courseID"))&&!other.getString("id").equals(id))confirmed.add(other.getString("id"));Collections.sort(confirmed);
+                    List<String> confirmed=new ArrayList<>();for(JSONObject other:tasks)if(Planner.hasConfirmationTime(other)&&other.getString("courseID").equals(task.getString("courseID"))&&!other.getString("id").equals(id))confirmed.add(other.getString("id"));Collections.sort(confirmed);
                     if(id.equals(Planner.stableID(base+"|confirmed|"+String.join(",",confirmed))))generation=id;
                 }
             }
             String key=new JSONArray().put(slot).put(generation).toString();
             JSONObject old=winners.get(key);
             if(old==null){winners.put(key,task);continue;}
-            if(task.has("confirmedAt")!=old.has("confirmedAt")){if(task.has("confirmedAt"))winners.put(key,task);continue;}
+            if(Planner.hasConfirmationTime(task)!=Planner.hasConfirmationTime(old)){if(Planner.hasConfirmationTime(task))winners.put(key,task);continue;}
             JSONObject a=ledger.records().optJSONObject("completions/"+Planner.stableID("completion|"+task.getString("id"))),b=ledger.records().optJSONObject("completions/"+Planner.stableID("completion|"+old.getString("id")));
             if(a==null)a=ledger.records().getJSONObject("tasks/"+task.getString("id"));if(b==null)b=ledger.records().getJSONObject("tasks/"+old.getString("id"));
             if(SyncLedger.wins(a,b)||(!SyncLedger.wins(b,a)&&task.getString("id").compareTo(old.getString("id"))>0))winners.put(key,task);

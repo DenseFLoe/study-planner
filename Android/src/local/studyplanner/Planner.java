@@ -151,7 +151,7 @@ public final class Planner {
     }
     public static double retainedHistoryStart(JSONObject t){return Math.min(planningStart(t),t.optDouble("confirmedAt",planningStart(t)));}
     public static double retainedHistoryEnd(JSONObject t){return Math.min(planningEnd(t),t.optDouble("confirmedAt",planningEnd(t)));}
-    public static boolean floatingTask(JSONObject t){return t.has("floatingWindowStart")&&t.has("floatingWindowEnd");}
+    public static boolean floatingTask(JSONObject t){return t.has("floatingWindowStart")&&!t.isNull("floatingWindowStart")&&t.has("floatingWindowEnd")&&!t.isNull("floatingWindowEnd");}
     static Map<String,Integer> reserve(List<JSONObject> events){return reserve(events,new boolean[1440]);}
     static Map<String,Integer> reserve(List<JSONObject> events,boolean[] study){
         boolean[] busy=new boolean[1440];List<JSONObject> floats=new ArrayList<>();
@@ -189,7 +189,8 @@ public final class Planner {
             placements.remove(e.optString("id"));for(int m=a;m<a+n;m++)busy[m]=false;
         }
     }
-    public static boolean pending(JSONObject t){return !t.has("confirmedAt")&&(t.optString("status").equals("planned")||t.optString("status").equals("future"));}
+    public static boolean hasConfirmationTime(JSONObject task){return task.has("confirmedAt")&&!task.isNull("confirmedAt");}
+    public static boolean pending(JSONObject t){return !hasConfirmationTime(t)&&(t.optString("status").equals("planned")||t.optString("status").equals("future"));}
     public static JSONObject course(JSONObject s,String id){for(JSONObject c:list(s.optJSONArray("courses")))if(c.optString("id").equals(id))return c;return null;}
     public static void removeCourse(JSONObject s,String id)throws Exception{removeCourses(s,Collections.singleton(id));}
     public static void removeCourses(JSONObject s,Set<String> ids)throws Exception{
@@ -229,7 +230,7 @@ public final class Planner {
         int actual=task.optInt("completedMinutes"),planned=task.optInt("durationMinutes");
         return (actual==0?"未完成":actual>=planned?"已完成":"部分完成")+" · 实际完成 "+actual+" 分钟";
     }
-    public static void undoConfirmation(JSONObject s,String taskID,double now)throws Exception{JSONObject t=null;for(JSONObject v:list(s.getJSONArray("tasks")))if(v.getString("id").equals(taskID))t=v;if(t==null||!t.has("confirmedAt"))throw new IllegalArgumentException("该任务尚未确认，无需撤销");JSONArray records=s.getJSONArray("completions");boolean removed=false;for(int i=records.length()-1;i>=0;i--)if(records.getJSONObject(i).optString("taskID").equals(taskID)){records.remove(i);removed=true;}if(!removed)throw new IllegalArgumentException("找不到该任务的完成记录");t.remove("confirmedAt");t.put("completedMinutes",0).put("status",day(t.getDouble("start")).equals(day(now))?"planned":"future");JSONObject c=course(s,t.getString("courseID"));if(c!=null)reconcileWebsiteBaseline(s,c);}
+    public static void undoConfirmation(JSONObject s,String taskID,double now)throws Exception{JSONObject t=null;for(JSONObject v:list(s.getJSONArray("tasks")))if(v.getString("id").equals(taskID))t=v;if(t==null||!hasConfirmationTime(t))throw new IllegalArgumentException("该任务尚未确认，无需撤销");JSONArray records=s.getJSONArray("completions");boolean removed=false;for(int i=records.length()-1;i>=0;i--)if(records.getJSONObject(i).optString("taskID").equals(taskID)){records.remove(i);removed=true;}if(!removed)throw new IllegalArgumentException("找不到该任务的完成记录");t.remove("confirmedAt");t.put("completedMinutes",0).put("status",day(t.getDouble("start")).equals(day(now))?"planned":"future");JSONObject c=course(s,t.getString("courseID"));if(c!=null)reconcileWebsiteBaseline(s,c);}
 
     static void reconcileWebsiteBaseline(JSONObject state,JSONObject course)throws Exception {
         JSONArray sources=course.optJSONArray("mergedSources");
@@ -301,7 +302,7 @@ public final class Planner {
             }
             if(task!=null&&task.getString("courseID").equals(record.getString("courseID"))){
                 int minutes=record.getInt("minutes");if(minutes<0||minutes>task.getInt("durationMinutes"))throw new IllegalArgumentException("合并课程的确认时长无效");
-                if(task.has("confirmedAt")&&task.getDouble("confirmedAt")==record.getDouble("recordedAt")&&task.optInt("completedMinutes")==minutes)continue;
+                if(hasConfirmationTime(task)&&task.getDouble("confirmedAt")==record.getDouble("recordedAt")&&task.optInt("completedMinutes")==minutes)continue;
                 task.put("completedMinutes",minutes).put("confirmedAt",record.getDouble("recordedAt")).put("status",minutes==0?"missed":minutes==task.getInt("durationMinutes")?"completed":"partial");
             }
         }
@@ -728,7 +729,7 @@ public final class Planner {
         Double actualStart=actualStudyStart(s,now);double scheduleStart=actualStart==null?now:actualStart;
         // Keep remaining work after today's saved review, even for zero-minute
         // confirmations. Persisted history also preserves this floor on reopen/sync.
-        for(JSONObject task:list(s.getJSONArray("tasks")))if(task.has("confirmedAt")){
+        for(JSONObject task:list(s.getJSONArray("tasks")))if(hasConfirmationTime(task)){
             double confirmedAt=task.getDouble("confirmedAt");
             if(day(confirmedAt).equals(today))scheduleStart=Math.max(scheduleStart,confirmedAt);
         }

@@ -139,12 +139,12 @@ final class DailyConsequences {
         JSONObject projection=CourseTools.copy(entry.getJSONObject("baseline"));
         for(JSONObject r:Planner.list(state.getJSONArray("completions"))){JSONObject t=task(state,r.optString("taskID"));LocalDate effective=effectiveDay(r,state);
             if(effective==null&&(date.equals(Planner.day(r.optDouble("recordedAt")))||(t!=null&&date.equals(Planner.day(t.optDouble("start"))))))ambiguous++;
-            if(date.equals(effective)&&!r.has("studyDate"))legacy=true;if(captured.contains(r.optString("id")))continue;
+            if(date.equals(effective)&&(!r.has("studyDate")||r.isNull("studyDate")))legacy=true;if(captured.contains(r.optString("id")))continue;
             if(t!=null&&date.equals(Planner.day(t.optDouble("start")))){String key=ScheduleHealth.key(t);int n=t.optInt("durationMinutes");reviewed.put(key,t.has("lessonID")?Math.max(reviewed.getOrDefault(key,0),n):addMinutes(reviewed.getOrDefault(key,0),n));}
             if(date.equals(effective))credit(projection,r.optString("courseID"),t==null?"":t.optString("lessonID"),r.optInt("minutes"));
         }
         JSONArray history=new JSONArray();for(JSONObject t:Planner.list(state.getJSONArray("tasks"))){if(Planner.pending(t)&&date.equals(Planner.day(t.optDouble("start"))))pending=true;
-            if(t.has("confirmedAt")&&t.optInt("completedMinutes")>0&&date.equals(Planner.day(t.optDouble("confirmedAt"))))history.put(CourseTools.copy(t));}
+            if(Planner.hasConfirmationTime(t)&&t.optInt("completedMinutes")>0&&date.equals(Planner.day(t.optDouble("confirmedAt"))))history.put(CourseTools.copy(t));}
         boolean covered=true;for(String key:targets.keySet())if(reviewed.getOrDefault(key,0)<targets.get(key))covered=false;
         JSONObject value=new JSONObject().put("date",entry.getDouble("date")).put("confirmedMinutes",actual).put("goalMinutes",entry.optInt("goalMinutes")).put("ambiguousRecords",ambiguous).put("usesLegacyDates",legacy)
             .put("pending",pending).put("isReviewed",ambiguous==0&&!pending&&(entry.has("reviewedAt")||covered||actual>=entry.optInt("goalMinutes")));
