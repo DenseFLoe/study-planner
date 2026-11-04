@@ -30,6 +30,10 @@ public final class FixedEventTextParser {
             if(has("到|至|[-~—～]",list)&&days.size()==2){int d=days.get(0);for(int i=0;i<7;i++){out.add(d);if(d==days.get(1))break;d=d%7+1;}}else out.addAll(days);
         }return out;
     }
+    static boolean explicitRecurringStart(MatchResult match,String text){
+        String value=group(match,0);boolean bare=value.startsWith("周")||value.startsWith("星期")||value.startsWith("礼拜");
+        return !bare||has("(?:从|自)\\s*$",text.substring(0,match.start()))||has("^\\s*(?:开始|起)",text.substring(match.end()));
+    }
     static LocalDate relative(String s,LocalDate today){String[] days={"今天","今日","明天","明日","后天","后日","大后天"};int[] offsets={0,0,1,1,2,2,3};for(int i=0;i<days.length;i++)if(s.equals(days[i]))return today.plusDays(offsets[i]);int target=weekday(s.charAt(s.length()-1));if(target<0)return null;int delta=target-(today.getDayOfWeek().getValue()-1);if(s.startsWith("下下"))delta+=14;else if(s.startsWith("下"))delta+=7;else if(!s.startsWith("本")&&!s.startsWith("这")&&delta<0)delta+=7;return today.plusDays(delta);}
     static int clock(int hour,int minute,String period){if(period.isEmpty())return hour*60+minute;if(hour>12)return has("凌晨|早上|早晨|上午|中午",period)?-1:hour*60+minute;if(hour==12&&has("晚上|晚间|晚",period))return -1;if(has("下午|傍晚|晚上|晚间|晚",period))return (hour==12?12:hour+12)*60+minute;if(period.equals("中午"))return (hour<11?hour+12:hour)*60+minute;return (hour==12&&period.equals("凌晨")?0:hour)*60+minute;}
     static class Reject extends Exception {Reject(String text){super(text);}}
@@ -42,9 +46,14 @@ public final class FixedEventTextParser {
             try{date=LocalDate.of(year,month,day);}catch(DateTimeException e){throw new Reject("日期不存在，请核对原文中的月、日。");}
             if(y.isEmpty()){if(dates.isEmpty()?date.isBefore(today):date.isBefore(dates.get(dates.size()-1)))year++;try{date=LocalDate.of(year,month,day);}catch(DateTimeException e){throw new Reject("无法确定日期年份，请填写完整年月日。");}warnings.add("原文未写年份，按 "+year+" 年解释，请核对。");}inferred=year;dates.add(date);
         }
-        boolean repeat=recurring(text);Set<Integer> weeks=repeat?weekdays(text):new TreeSet<>();require(!repeat||!weeks.isEmpty(),"重复星期不明确，请补充例如“每周一、三”或“每天”。");
+        boolean repeat=recurring(text);
+        List<MatchResult> starts=new ArrayList<>();StringBuilder recurrenceText=new StringBuilder(text);
+        for(MatchResult match:relativeMatches)if(!repeat||explicitRecurringStart(match,text))starts.add(match);
+        // Explicit start weekdays are not additional repeating weekdays.
+        if(repeat)for(MatchResult match:starts)for(int i=match.start();i<match.end();i++)recurrenceText.setCharAt(i,' ');
+        Set<Integer> weeks=repeat?weekdays(recurrenceText.toString()):new TreeSet<>();require(!repeat||!weeks.isEmpty(),"重复星期不明确，请补充例如“每周一、三”或“每天”。");
         String prefix=dateMatches.isEmpty()?"":text.substring(0,dateMatches.get(0).start());boolean onlyEnd=repeat&&dates.size()==1&&has("(?:截止|截至|直到|至|到)\\s*$",prefix);LocalDate start;
-        if(!dates.isEmpty()&&!onlyEnd)start=dates.get(0);else if(!relativeMatches.isEmpty())start=relative(group(relativeMatches.get(0),0),today);else if(repeat)start=today;else throw new Reject("找到了时间，但没有明确日期；请补充今天、明天或具体月日。");
+        if(!dates.isEmpty()&&!onlyEnd)start=dates.get(0);else if(!starts.isEmpty())start=relative(group(starts.get(0),0),today);else if(repeat)start=today;else throw new Reject("找到了时间，但没有明确日期；请补充今天、明天或具体月日。");
         require(start!=null,"无法确定相对日期，请补充具体日期。");require(repeat||dates.size()<=1,"同一段出现多个日期，请将每项日程分行粘贴。");
         if(!repeat)for(MatchResult m:relativeMatches){String s=group(m,0);LocalDate implied=relative(s,today);boolean bare=s.startsWith("周")||s.startsWith("星期")||s.startsWith("礼拜");require(implied==null||(bare?implied.getDayOfWeek()==start.getDayOfWeek():implied.equals(start)),"同一段出现不一致的日期或星期，请核对或分行粘贴。");}
         LocalDate endDate=start;if(repeat){require(dates.size()<=2,"重复日程包含多组日期，请分段识别。");if(onlyEnd)endDate=dates.get(0);else if(dates.size()==2)endDate=dates.get(1);else{List<MatchResult> durations=matches("(?:持续|共|为期)\\s*([0-9一二三四五六七八九十]{1,3})\\s*周",text);int n=durations.isEmpty()?-1:integer(group(durations.get(0),1));if(n>=1&&n<=520)endDate=start.plusDays(n*7-1);else{endDate=start.plusDays(111);warnings.add("未写重复截止日期，暂按持续 16 周预填，请核对。");}}require(!endDate.isBefore(start),"重复结束日期早于开始日期，请核对。");}

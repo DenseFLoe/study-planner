@@ -120,13 +120,19 @@ public enum FixedEventTextParser {
             dates.append(date)
         }
         let recurring = isRecurring(text)
-        let weekdays = recurring ? recurringWeekdays(text) : []
+        let starts = relativeMatches.filter { !recurring || explicitRecurringStart($0, text: text) }
+        let recurrenceText = NSMutableString(string: text)
+        // Mask explicit start markers without moving the UTF-16 match ranges.
+        if recurring {
+            for match in starts.reversed() { recurrenceText.replaceCharacters(in: match.range, with: String(repeating: " ", count: match.range.length)) }
+        }
+        let weekdays = recurring ? recurringWeekdays(recurrenceText as String) : []
         if recurring && weekdays.isEmpty { return fail("重复星期不明确，请补充例如“每周一、三”或“每天”。") }
         let datePrefix = dateMatches.first.map { (text as NSString).substring(to: $0.range.location) } ?? ""
         let singleDateIsEnd = recurring && dates.count == 1 && !matches("(?:截止|截至|直到|至|到)\\s*$", datePrefix).isEmpty
         let start: Date
         if let date = dates.first, !singleDateIsEnd { start = date }
-        else if let relative = relativeMatches.first {
+        else if let relative = starts.first {
             guard let value = relativeDate(capture(relative, 0, text), today: today, calendar: calendar) else { return fail("无法确定相对日期，请补充具体日期。") }
             start = value
         } else if recurring { start = today }
@@ -227,6 +233,13 @@ public enum FixedEventTextParser {
             } else { result.formUnion(days) }
         }
         return result
+    }
+    private static func explicitRecurringStart(_ match: NSTextCheckingResult, text: String) -> Bool {
+        let value = capture(match, 0, text)
+        let bare = value.hasPrefix("周") || value.hasPrefix("星期") || value.hasPrefix("礼拜")
+        let source = text as NSString
+        return !bare || !matches("(?:从|自)\\s*$", source.substring(to: match.range.location)).isEmpty
+            || !matches("^\\s*(?:开始|起)", source.substring(from: NSMaxRange(match.range))).isEmpty
     }
     private static func relativeDate(_ expression: String, today: Date, calendar: Calendar) -> Date? {
         let offsets = ["今天":0,"今日":0,"明天":1,"明日":1,"后天":2,"后日":2,"大后天":3]

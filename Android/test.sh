@@ -89,6 +89,8 @@ mkdir -p Android/build/controller-tests
 "$JDK/bin/java" -Xmx256m -XX:-CompactStrings -cp Android/tools/json.jar:Android/build/tests local.studyplanner.SyncMemoryTests
 
 "$JDK/bin/java" -cp Android/tools/json.jar:Android/build/tests local.studyplanner.MigrationTests
+"$JDK/bin/javac" -cp Android/tools/json.jar:Android/build/tests -d Android/build/tests Android/tests/RecurringRecognitionTests.java
+"$JDK/bin/java" -cp Android/tools/json.jar:Android/build/tests local.studyplanner.RecurringRecognitionTests
 
 "$JDK/bin/javac" -cp Android/tools/json.jar:Android/build/tests -d Android/build/tests Android/tests/CourseEditingTests.java
 "$JDK/bin/java" -cp Android/tools/json.jar:Android/build/tests local.studyplanner.CourseEditingTests

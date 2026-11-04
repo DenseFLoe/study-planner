@@ -69,17 +69,47 @@ final class FixedEventTextParserTests: XCTestCase {
         XCTAssertEqual(try draft("每周五到周一9:00-10:00早读").event.weekdays, [6, 7, 1, 2])
         XCTAssertEqual(try draft("每周一、周三9:00-10:00早读").event.weekdays, [2, 4])
         let until = try draft("每周三19:00-20:00上课，截止2026年12月31日")
-        XCTAssertEqual(until.event.startDate, date(2026, 10, 21, 0))
+        XCTAssertEqual(until.event.startDate, date(2026, 10, 20, 0))
         XCTAssertEqual(until.event.endDate, date(2026, 12, 31, 0))
     }
     func testRepeatDefaultAndDurationAreVisible() throws {
         let value = try draft("每天19:00-20:00锻炼")
         XCTAssertEqual(value.event.weekdays, Set(1...7))
         XCTAssertTrue(value.warnings.contains { $0.contains("16 周") })
-        XCTAssertEqual(try draft("每周三9:00-10:00上课，持续4周").event.endDate, date(2026, 11, 17, 0))
+        XCTAssertEqual(try draft("每周三9:00-10:00上课，持续4周").event.endDate, date(2026, 11, 16, 0))
         XCTAssertEqual(try draft("工作日9:00-10:00早读").event.weekdays, Set(2...6))
         XCTAssertEqual(try draft("周末9:00-10:00早读").event.weekdays, [1, 7])
     }
+    func testRecurringListsKeepThisWeekAndExplicitStartIsNotAWeekday() throws {
+        let today = date(2026, 11, 4)
+        let samples: [(String, Int, Set<Int>)] = [
+            ("每周一、三、五18:00-19:00复习", 4, [2, 4, 6]),
+            ("每周一、周三、周五18:00-19:00复习", 4, [2, 4, 6]),
+            ("每星期一、星期三、星期五18:00-19:00复习", 4, [2, 4, 6]),
+            ("每周一至五18:00-19:00复习", 4, Set(2...6)),
+            ("每周五到周一18:00-19:00复习", 4, [1, 2, 6, 7]),
+            ("每周一、三18:00-19:00复习，截止2026年11月6日", 4, [2, 4]),
+            ("从周五开始，每周一、三18:00-19:00复习", 6, [2, 4]),
+            ("每周一、三18:00-19:00复习，从周五开始", 6, [2, 4]),
+            ("从下周五起，每周一、三18:00-19:00复习", 13, [2, 4]),
+            ("明天起，每周一、三18:00-19:00复习", 5, [2, 4]),
+            ("从2026年11月6日开始，每周一、三18:00-19:00复习", 6, [2, 4]),
+            ("周五18:00-19:00复习", 6, [])
+        ]
+        for (text, day, weekdays) in samples {
+            let event = try draft(text, now: today).event
+            XCTAssertEqual(event.startDate, date(2026, 11, day, 0), text)
+            XCTAssertEqual(event.weekdays, weekdays, text)
+        }
+    }
+
+    func testRecurringListActuallyIncludesThisWednesdayAndFriday() throws {
+        let value = try draft("每周一、三、五18:00-19:00复习", now: date(2026, 11, 4)).event
+        XCTAssertTrue(value.occurs(on: date(2026, 11, 4, 0), calendar: calendar))
+        XCTAssertTrue(value.occurs(on: date(2026, 11, 6, 0), calendar: calendar))
+        XCTAssertFalse(value.occurs(on: date(2026, 11, 5, 0), calendar: calendar))
+    }
+
     func testDurationAndHalfHours() throws {
         XCTAssertEqual(try draft("明天18:00开会，持续90分钟").event.endMinute, 1170)
         XCTAssertEqual(try draft("明天18:00开会，时长1小时30分钟").event.endMinute, 1170)
