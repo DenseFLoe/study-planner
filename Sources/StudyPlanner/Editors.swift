@@ -416,8 +416,9 @@ struct DailyReviewView: View {
     }
 
     var body: some View {
+        let selectedTasks = tasks.filter { reviewed.contains($0.id) }
         VStack(alignment: .leading, spacing: 18) {
-            SheetHeading(title: "确认学习完成情况", subtitle: "请逐项选择实际完成量，包含昨天及更早的未确认计划。")
+            SheetHeading(title: "确认学习完成情况", subtitle: "只保存已勾选并核对的项目；未勾选项目不确认，待学日程仍可能随重排更新。")
             HStack(alignment: .top) {
                 Button("刷新待确认列表", action: refreshTasks).disabled(saving || store.orderSaveBusy)
                 Text("保留仍在列表中的输入；有变化的任务须重新核对。")
@@ -433,8 +434,15 @@ struct DailyReviewView: View {
                             if let lessonName = task.lessonName { Text(lessonName).font(.callout).foregroundStyle(.secondary) }
                             CompletionInput(actual: Binding(get: { values[task.id] ?? 0 }, set: { values[task.id] = $0; reviewed.insert(task.id) }), planned: task.durationMinutes)
                             DatePicker("实际学习日期（补录请核对）", selection: Binding(get: { studyDates[task.id] ?? min(task.start, Date()) }, set: { studyDates[task.id] = $0 }), in: ...Date(), displayedComponents: .date)
+                            Toggle("已核对并提交本项（\(values[task.id] ?? 0) 分钟）", isOn: Binding(
+                                get: { reviewed.contains(task.id) },
+                                set: { selected in
+                                    if selected { values[task.id] = values[task.id] ?? 0; reviewed.insert(task.id) }
+                                    else { reviewed.remove(task.id) }
+                                }
+                            )).toggleStyle(.checkbox)
                             if !reviewed.contains(task.id) {
-                                Text(changedTasks.contains(task.id) ? "任务已更新，请核对分钟数和学习日期后重新选择完成情况。" : "尚未选择完成情况")
+                                Text(changedTasks.contains(task.id) ? "任务已更新，请核对分钟数和学习日期后重新选择完成情况。" : "本项暂不提交，填写分钟数会自动勾选。")
                                     .font(.caption).foregroundStyle(.orange)
                             }
                         }.padding(16).background(Color.primary.opacity(0.035), in: RoundedRectangle(cornerRadius: 10))
@@ -446,24 +454,31 @@ struct DailyReviewView: View {
             HStack {
                 Button("全部标记完成") { for task in tasks { values[task.id] = task.durationMinutes; reviewed.insert(task.id) } }
                 Button("全部未完成") { for task in tasks { values[task.id] = 0; reviewed.insert(task.id) } }
+                Button("全部暂不提交") { reviewed.removeAll() }
                 Spacer()
                 Button("稍后确认") { dismiss() }.keyboardShortcut(.cancelAction)
-                Button("保存并重新排程") {
-                    guard !saving else { return }
-                    let selectedTasks = tasks, minutes = values, dates = studyDates
+                Button("保存已核对 \(selectedTasks.count) 项") {
+                    guard !saving, !store.orderSaveBusy else { return }
+                    let draft: ConfirmationBatchDraft
+                    do { draft = try ConfirmationBatchDraft(reviewed: selectedTasks, minutes: values, studyDates: studyDates) }
+                    catch { message = error.localizedDescription; return }
                     saving = true; message = ""
                     Task {
                         defer { saving = false }
                         let now = Date()
-                        let needsReplan = selectedTasks.contains { $0.confirmationRequiresReplan(actualMinutes: minutes[$0.id] ?? 0, now: now) }
-                        let success = await store.change(replan: needsReplan, now: now) { state in
-                            for task in selectedTasks { try state.checkReviewedTask(task) }
-                            for task in selectedTasks { try state.confirm(reviewed: task, actualMinutes: minutes[task.id] ?? 0, now: now, studyDate: dates[task.id] ?? min(task.start, now)) }
+                        let success = await store.change(replan: draft.requiresReplan(at: now), now: now) { state in
+                            try draft.apply(to: &state, now: now)
                         }
-                        if success { dismiss() }
-                        else { message = store.errorMessage ?? "本批确认未保存" }
+                        if success {
+                            saving = false; refreshTasks()
+                            if tasks.isEmpty { dismiss() }
+                            else { refreshNotice = "已保存 \(draft.count) 项。" + refreshNotice }
+                        } else { message = store.errorMessage ?? "本批确认未保存" }
                     }
-                }.buttonStyle(.borderedProminent).disabled(store.orderSaveBusy || tasks.isEmpty || reviewed.count != tasks.count || tasks.contains { !(0...$0.durationMinutes).contains(values[$0.id] ?? -1) })
+                }.buttonStyle(.borderedProminent).disabled(store.orderSaveBusy || selectedTasks.isEmpty || selectedTasks.contains {
+                    let value = values[$0.id] ?? -1
+                    return value < 0 || value > $0.durationMinutes
+                })
             }.padding(24).disabled(saving)
         }.frame(width: 740, height: 620).interactiveDismissDisabled(saving)
         .onAppear { tasks = store.reviewTasks }
