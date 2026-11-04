@@ -64,7 +64,7 @@ public final class SyncLedger {
             for(JSONObject source:values){
                 if(archived.contains(source.optString(kind.equals("courses")?"id":"courseID")))continue;
                 if(kind.equals("tasks")){
-                    Planner.validateTaskNumbers(source);
+                    Planner.validateTaskData(source);
                     if(!Planner.hasValidPlanningInterval(source))throw new IllegalArgumentException("任务时间区间无效");
                 }
                 // Detect conflicts before canonical IDs collapse rows or mutate the ledger.
@@ -108,7 +108,7 @@ public final class SyncLedger {
         JSONObject s=new JSONObject().put("schemaVersion",1);for(String kind:KINDS)if(!kind.equals("settings"))s.put(kind,new JSONArray());
         List<String> keys=new ArrayList<>();Iterator<String> it=records().keys();while(it.hasNext())keys.add(it.next());Collections.sort(keys);
         for(String k:keys){JSONObject r=records().getJSONObject(k);if(r.getBoolean("deleted"))continue;String kind=r.getString("kind");JSONObject p=payload(r);if(kind.equals("settings"))s.put(kind,p);else{if(!r.getString("id").equals(p.getString("id")))throw new IllegalArgumentException("记录 ID 不匹配");s.getJSONArray(kind).put(p);}}
-        for(JSONObject task:Planner.list(s.getJSONArray("tasks")))Planner.validateTaskNumbers(task);
+        for(JSONObject task:Planner.list(s.getJSONArray("tasks")))Planner.validateTaskData(task);
         Planner.validateSettingsNumbers(s.getJSONObject("settings"));
         for(JSONObject event:Planner.list(s.getJSONArray("fixedEvents")))Planner.validateEventWindow(event);
         Planner.validateCourseNumbers(s.getJSONArray("courses"),Collections.emptySet());
@@ -123,7 +123,7 @@ public final class SyncLedger {
             if(row.getString("kind").equals("tasks")&&row.getBoolean("deleted")&&confirmationTasks.contains(row.getString("id"))){
                 JSONObject task=payload(row);
                 if(!row.getString("id").equals(task.getString("id")))throw new IllegalArgumentException("已删除任务的记录 ID 不匹配");
-                Planner.validateTaskNumbers(task);
+                Planner.validateTaskData(task);
                 deletedTasks.put(row.getString("id"),task);
             }
         }
