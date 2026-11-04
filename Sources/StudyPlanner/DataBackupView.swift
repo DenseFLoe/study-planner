@@ -20,7 +20,7 @@ struct DataBackupView: View {
                 Button("立即备份") { Task { await store.createBackup() } }
                 Button("导出备份…", action: exportBackup)
                 Button("从文件恢复…", action: chooseBackup)
-            }.disabled(working || store.orderSaveBusy)
+            }.disabled(working || confirmingRestore || store.orderSaveBusy)
             if working { ProgressView("正在处理备份…") }
             if let message { Text(message).font(.caption).textSelection(.enabled) }
             if let message = store.backupMessage { Text(message).font(.caption).foregroundStyle(.orange) }
@@ -38,11 +38,20 @@ struct DataBackupView: View {
                     Spacer()
                     if let id = entry.deletedCourseID, store.course(id) == nil {
                         Button("恢复「\(entry.deletedCourseName ?? "课程")」") {
-                            Task { _ = await store.undoCourseDeletion(entry.id) }
+                            guard !working, !confirmingRestore else { return }
+                            working = true; message = nil
+                            Task {
+                                defer { working = false }
+                                _ = await store.undoCourseDeletion(entry.id)
+                            }
                         }
                     }
                     Button("恢复全部…") {
+                        guard !working, !confirmingRestore else { return }
+                        working = true; message = nil
+                        candidate = nil; reviewedState = nil
                         Task {
+                            defer { working = false }
                             do {
                                 candidate = try await store.backups.load(entry.id)
                                 reviewedState = store.state
@@ -51,13 +60,15 @@ struct DataBackupView: View {
                             catch { message = "无法读取备份，当前数据未改动。" }
                         }
                     }
-                }.disabled(working || store.orderSaveBusy || store.syncBusy)
+                }.disabled(working || confirmingRestore || store.orderSaveBusy || store.syncBusy)
             }
         }
         .confirmationDialog("恢复这份备份？", isPresented: $confirmingRestore, titleVisibility: .visible) {
             Button("备份当前数据并恢复", role: .destructive) {
-                guard let candidate, let reviewedState else { return }
+                guard !working, let candidate, let reviewedState else { return }
+                working = true
                 Task {
+                    defer { working = false }
                     if await store.restoreBackup(candidate, from: reviewedState) { message = "已恢复备份。恢复前的数据也已保留在列表中。" }
                     self.candidate = nil
                     self.reviewedState = nil
@@ -73,6 +84,7 @@ struct DataBackupView: View {
     }
 
     private func exportBackup() {
+        guard !working, !confirmingRestore else { return }
         let panel = NSSavePanel()
         panel.allowedContentTypes = [.json]
         panel.nameFieldStringValue = "学习日程备份.json"
@@ -94,10 +106,12 @@ struct DataBackupView: View {
     }
 
     private func chooseBackup() {
+        guard !working, !confirmingRestore else { return }
         let panel = NSOpenPanel()
         panel.allowedContentTypes = [.json]; panel.allowsMultipleSelection = false
         guard panel.runModal() == .OK, let url = panel.url else { return }
         working = true; message = nil
+        candidate = nil; reviewedState = nil
         Task {
             defer { working = false }
             do {
