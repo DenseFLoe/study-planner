@@ -1,5 +1,6 @@
 import SwiftUI
 import UniformTypeIdentifiers
+import StudyCore
 import StudySync
 
 struct CloudConnectionSettings: View {
@@ -18,12 +19,17 @@ struct CloudConnectionSettings: View {
     @State private var hasSavedKey = false
     @State private var passphrase = ""
     @State private var importing = false
+    @State private var importingKey = false
     @State private var reading = false
     @State private var savedHost = ""
     @State private var savedPort = ""
     @State private var savedFingerprint = ""
 
     var body: some View {
+        connectionForm.disabled(importingKey)
+    }
+
+    @ViewBuilder private var connectionForm: some View {
         Toggle("启用云同步", isOn: $enabled)
         HStack(spacing: 12) {
             connectionCard(.https, icon: "lock.shield", detail: "已有 HTTPS 地址")
@@ -42,6 +48,7 @@ struct CloudConnectionSettings: View {
             }
             HStack {
                 Button("导入私钥文件") { importing = true }
+                if importingKey { ProgressView().controlSize(.small) }
                 Text(importedKey.isEmpty ? (hasSavedKey ? "已安全保存私钥" : "尚未导入私钥") : "已选择新私钥，保存后生效")
                     .font(.caption).foregroundStyle(.secondary)
             }
@@ -66,15 +73,26 @@ struct CloudConnectionSettings: View {
         .onAppear { load() }
         .fileImporter(isPresented: $importing, allowedContentTypes: [.data, .text]) { result in
             do {
-                let file = try result.get(), scoped = file.startAccessingSecurityScopedResource()
-                defer { if scoped { file.stopAccessingSecurityScopedResource() } }
-                guard (try file.resourceValues(forKeys: [.fileSizeKey]).fileSize ?? Int.max) <= 65536 else {
-                    throw ClientError.message("私钥文件不能超过 64KB。")
+                let file = try result.get()
+                importingKey = true
+                Task {
+                    defer { importingKey = false }
+                    do {
+                        let key = try await Task.detached(priority: .userInitiated) {
+                            let scoped = file.startAccessingSecurityScopedResource()
+                            defer { if scoped { file.stopAccessingSecurityScopedResource() } }
+                            let key = try BoundedUTF8File.read(file, maximumBytes: 65536)
+                            guard key.contains("PRIVATE KEY-----"), key.contains("-----END ") else {
+                                throw ClientError.message("请选择 SSH 私钥文件，而非公钥。")
+                            }
+                            return key
+                        }.value
+                        importedKey = key; passphrase = ""
+                    } catch { store.errorMessage = "私钥未导入，请选择有效的 UTF-8 私钥文件（最大 64KB）。" }
                 }
-                let key = try String(contentsOf: file, encoding: .utf8)
-                guard key.contains("PRIVATE KEY-----"), key.contains("-----END ") else { throw ClientError.message("请选择 SSH 私钥文件，而非公钥。") }
-                importedKey = key; passphrase = ""
-            } catch { store.errorMessage = "私钥未导入，请选择有效的私钥文件（最大 64KB）。" }
+            } catch {
+                if (error as? CocoaError)?.code != .userCancelled { store.errorMessage = "无法打开所选私钥文件。" }
+            }
         }
     }
     private func connectionCard(_ option: CloudConnectionMethod, icon: String, detail: String) -> some View {
