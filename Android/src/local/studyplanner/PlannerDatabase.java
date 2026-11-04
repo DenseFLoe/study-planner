@@ -6,7 +6,7 @@ import android.database.sqlite.*;
 import org.json.*;
 
 /** Business rows, tombstones and sync cursors commit together. Legacy JSON stays as backup. */
-public final class PlannerDatabase extends SQLiteOpenHelper {
+public final class PlannerDatabase extends SQLiteOpenHelper implements StateMutation.Store<JSONObject> {
     private final Context context;
     public PlannerDatabase(Context context){this(context,"planner-sync-v1.db");}
     PlannerDatabase(Context context,String name){super(context,name,null,1);this.context=context.getApplicationContext();setWriteAheadLoggingEnabled(true);}
@@ -22,6 +22,7 @@ public final class PlannerDatabase extends SQLiteOpenHelper {
         SyncLedger l=ledger();long before=l.sequence();JSONObject state=l.materialize();l.capture(state);if(l.sequence()!=before)commit(l);return state;
     }
     public synchronized void save(JSONObject state)throws Exception{Planner.validate(state);SyncLedger l=ledger();l.capture(state);commit(l);}
+    public JSONObject update(StateMutation.Change<JSONObject> change)throws Exception{return StateMutation.apply(this,change);}
     public synchronized void commit(SyncLedger l)throws Exception{
         commit(l,true);
     }
