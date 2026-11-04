@@ -27,13 +27,11 @@ final class DayAgendaText {
         for(Row row:rows)lines.add("• "+row.text);
     }
     static String make(JSONObject state, LocalDate day) throws Exception {
-        Map<String,JSONObject> courses=new HashMap<>();
-        for(JSONObject course:Planner.list(state.getJSONArray("courses")))courses.putIfAbsent(course.getString("id"),course);
+        CalendarDay agenda=new CalendarDay(state,day);
         List<Row> planned=new ArrayList<>(),history=new ArrayList<>(),skipped=new ArrayList<>();
-        for(JSONObject task:Planner.list(state.getJSONArray("tasks"))){
-            double start=task.getDouble("start");if(!Planner.day(start).equals(day))continue;
-            JSONObject course=courses.get(task.getString("courseID"));boolean pending=Planner.pending(task);
-            if(pending&&(course==null||course.optBoolean("isArchived")))continue;
+        for(JSONObject task:agenda.tasks){
+            double start=task.getDouble("start");
+            JSONObject course=agenda.course(task.getString("courseID"));boolean pending=Planner.pending(task);
             String title=oneLine(course==null?"已删除课程":course.getString("name")),lesson=oneLine(task.optString("lessonName"));
             if(!lesson.isEmpty())title+=" / "+lesson;
             String text=(Planner.floatingTask(task)?"预估 ":"")+range(start,Planner.end(task),day)+" · "+title+
@@ -42,11 +40,11 @@ final class DayAgendaText {
             text+=pending?" · 未确认":task.optInt("completedMinutes")==0?" · 未完成":" · 已确认 "+task.getInt("completedMinutes")+" 分钟";
             Row row=new Row(start,"task-"+task.getString("id"),text);(pending?planned:history).add(row);
         }
-        for(JSONObject event:Planner.list(state.getJSONArray("fixedEvents"))){
-            if(!Planner.occurs(event,day,true))continue;
+        List<JSONObject> rules=new ArrayList<>(agenda.events);rules.addAll(agenda.skipped);
+        for(JSONObject event:rules){
             boolean excluded=!Planner.occurs(event,day);
             String text=Planner.time(event.getInt("startMinute"))+"–"+Planner.time(event.getInt("endMinute"))+" · "+oneLine(event.getString("title"));
-            text+=event.has("floatingDurationMinutes")?" · 浮动窗口，需 "+event.getInt("floatingDurationMinutes")+" 分钟":" · 固定事项";
+            text+=Planner.floating(event)?" · 浮动窗口，需 "+event.getInt("floatingDurationMinutes")+" 分钟":" · 固定事项";
             if(excluded)text+=" · 本日不占用时间";
             (excluded?skipped:planned).add(new Row(Planner.at(day,event.getInt("startMinute")),"event-"+event.getString("id"),text));
         }

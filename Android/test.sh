@@ -137,8 +137,9 @@ mkdir -p Android/build/controller-tests
 
 "$JDK/bin/javac" -cp Android/tools/json.jar:Android/build/tests -d Android/build/tests Android/tests/TaskSearchTests.java
 "$JDK/bin/java" -cp Android/tools/json.jar:Android/build/tests local.studyplanner.TaskSearchTests
-"$JDK/bin/javac" -cp Android/tools/json.jar:Android/build/tests -d Android/build/tests Android/src/local/studyplanner/DayAgendaText.java Android/tests/DayAgendaTextTests.java
+"$JDK/bin/javac" -cp Android/tools/json.jar:Android/build/tests -d Android/build/tests Android/src/local/studyplanner/CalendarDay.java Android/src/local/studyplanner/DayAgendaText.java Android/tests/DayAgendaTextTests.java Android/tests/CalendarDayTests.java
 "$JDK/bin/java" -cp Android/tools/json.jar:Android/build/tests local.studyplanner.DayAgendaTextTests
+"$JDK/bin/java" -cp Android/tools/json.jar:Android/build/tests local.studyplanner.CalendarDayTests
 
 "$JDK/bin/javac" -cp Android/tools/json.jar:Android/build/tests -d Android/build/tests Android/src/local/studyplanner/CourseCatalog.java Android/tests/CourseCatalogTests.java
 "$JDK/bin/java" -cp Android/tools/json.jar:Android/build/tests local.studyplanner.CourseCatalogTests

@@ -298,19 +298,20 @@ public class MainActivity extends Activity {
         });}});
     }
     void calendar()throws Exception{
+        CalendarDay agenda=new CalendarDay(state,selected);
         calendarSearch();
         LinearLayout c=card(body),bar=row();weighted(bar,title(month.getYear()+" 年 "+month.getMonthValue()+" 月"));bar.addView(pill("今天",()->{selected=LocalDate.now(Planner.ZONE);month=selected.withDayOfMonth(1);render();}));bar.addView(pill("‹",()->moveCalendar(-1)));bar.addView(pill("›",()->moveCalendar(1)));c.addView(bar);
-        Set<LocalDate> marked=new HashSet<>();for(JSONObject t:Planner.list(state.getJSONArray("tasks")))marked.add(Planner.day(t.getDouble("start")));LinearLayout week=row();for(String w:new String[]{"一","二","三","四","五","六","日"}){TextView v=text(w,12,muted);v.setGravity(Gravity.CENTER);weighted(week,v);}c.addView(week);
+        Set<LocalDate> marked=agenda.taskDates;LinearLayout week=row();for(String w:new String[]{"一","二","三","四","五","六","日"}){TextView v=text(w,12,muted);v.setGravity(Gravity.CENTER);weighted(week,v);}c.addView(week);
         int offset=month.getDayOfWeek().getValue()-1;LocalDate first=calendarExpanded?month.minusDays(offset):selected.minusDays(selected.getDayOfWeek().getValue()-1);for(int r=0;r<(calendarExpanded?6:1);r++){LinearLayout rr=row();for(int j=0;j<7;j++){LocalDate d=first.plusDays(r*7+j);boolean mark=marked.contains(d);if(!mark)for(JSONObject e:Planner.list(state.getJSONArray("fixedEvents")))if(Planner.occurs(e,d)){mark=true;break;}TextView v=text(d.getDayOfMonth()+(mark?"\n·":"\n "),14,d.getMonth()==month.getMonth()?ink:0xffb2b2b2);v.setGravity(Gravity.CENTER);v.setMinHeight(dp(43));v.setContentDescription(d.toString()+(mark?" 有安排":""));v.setSelected(d.equals(selected));if(d.equals(selected)){v.setTextColor(Color.WHITE);v.setBackground(rounded(blue,10));}else if(d.equals(LocalDate.now(Planner.ZONE)))v.setTextColor(blue);v.setOnClickListener(x->{selected=d;month=d.withDayOfMonth(1);render();});weighted(rr,v);}c.addView(rr);if(!first.plusDays((r+1)*7).isBefore(month.plusMonths(1)))break;}
         Button toggle=pill(calendarExpanded?"收起月历 ∧":"展开月历 ∨",()->{calendarExpanded=!calendarExpanded;month=selected.withDayOfMonth(1);render();});
         LinearLayout.LayoutParams toggleParams=new LinearLayout.LayoutParams(-2,-2);toggleParams.gravity=Gravity.CENTER_HORIZONTAL;c.addView(toggle,toggleParams);
         LinearLayout head=row();weighted(head,title(selected.getMonthValue()+" 月 "+selected.getDayOfMonth()+" 日 · "+new String[]{"一","二","三","四","五","六","日"}[selected.getDayOfWeek().getValue()-1]));head.addView(button("‹",()->{selected=selected.minusDays(1);month=selected.withDayOfMonth(1);render();}));head.addView(button("›",()->{selected=selected.plusDays(1);month=selected.withDayOfMonth(1);render();}));body.addView(head);
-        List<JSONObject> tasks=new ArrayList<>(),events=new ArrayList<>();int planned=0;for(JSONObject t:Planner.list(state.getJSONArray("tasks")))if(Planner.day(t.getDouble("start")).equals(selected)){JSONObject owner=Planner.course(state,t.getString("courseID"));if(!owner.optBoolean("isArchived")||!Planner.pending(t)){tasks.add(t);if(Planner.pending(t))planned+=t.getInt("durationMinutes");}}for(JSONObject e:Planner.list(state.getJSONArray("fixedEvents")))if(Planner.occurs(e,selected))events.add(e);String confirmedText;
+        List<JSONObject> tasks=agenda.tasks,events=agenda.events;long planned=agenda.plannedMinutes;String confirmedText;
         try{confirmedText=hours(DailyConsequences.confirmed(selected,state));}
         catch(DailyConsequences.CalculationException e){confirmedText="无法计算（分钟数合计超出范围，记录已保留）";}
         body.addView(text("待学 "+hours(planned)+"   已确认 "+confirmedText+"   固定 "+events.size()+" 项",12,muted));
         body.addView(button("复制当天安排",this::copyDayAgenda));
-        List<JSONObject> timeline=new ArrayList<>(events);for(JSONObject t:tasks)if(Planner.pending(t))timeline.add(t);timeline.sort(Comparator.comparingDouble(t->t.has("courseID")?t.optDouble("start"):Planner.at(selected,t.optInt("startMinute"))));for(JSONObject item:timeline){if(item.has("courseID"))taskCard(body,item);else eventCard(body,item,false);}if(timeline.isEmpty())card(body).addView(text("这一天没有待进行的安排",15,muted));boolean label=false;for(JSONObject t:tasks)if(!Planner.pending(t)){if(!label){body.addView(title("完成记录"));label=true;}taskCard(body,t);}for(JSONObject e:Planner.list(state.getJSONArray("fixedEvents")))if(Planner.occurs(e,selected,true)&&!Planner.occurs(e,selected)){
+        List<JSONObject> timeline=agenda.timeline;for(JSONObject item:timeline){if(item.has("courseID"))taskCard(body,item,agenda.course(item.getString("courseID")));else eventCard(body,item,false);}if(timeline.isEmpty())card(body).addView(text("这一天没有待进行的安排",15,muted));boolean label=false;for(JSONObject t:tasks)if(!Planner.pending(t)){if(!label){body.addView(title("完成记录"));label=true;}taskCard(body,t,agenda.course(t.getString("courseID")));}for(JSONObject e:agenda.skipped){
             LinearLayout skipped=card(body);cardBorder(skipped,color(e.optString("color","orange")));skipped.addView(text(e.optString("title")+" · 本日已临时移除",16,muted));
             skipped.addView(text(Planner.time(e.optInt("startMinute"))+" — "+Planner.time(e.optInt("endMinute"))+" · 本日不占用时间，其他日期照常安排",12,muted));
             final LocalDate date=selected;
@@ -331,13 +332,13 @@ public class MainActivity extends Activity {
         startCard.addView(button("生成新课表",()->run(()->{int minute=Planner.minute(value(startTime));if(minute>=1440)throw new Exception("实际开课时间须为 00:00–23:59");mutate(s->Planner.recordActualStudyStart(s,minute,Planner.now()),true,()->{selected=LocalDate.now(Planner.ZONE);month=selected.withDayOfMonth(1);});})));
         body.addView(pill("重新排程",()->mutate(s->{},true,null)));
     }
-    void taskCard(LinearLayout parent,JSONObject t)throws Exception{
-        JSONObject c=Planner.course(state,t.getString("courseID"));
-        LinearLayout box=card(parent);cardBorder(box,color(c.optString("color")));
-        if(Planner.floatingTask(t))floatingStyle(box,color(c.optString("color")));
+    void taskCard(LinearLayout parent,JSONObject t,JSONObject c)throws Exception{
+        String courseColor=c==null?"blue":c.optString("color");
+        LinearLayout box=card(parent);cardBorder(box,color(courseColor));
+        if(Planner.floatingTask(t))floatingStyle(box,color(courseColor));
         box.addView(text((Planner.floatingTask(t)?"预估 ":"")+Planner.clock(t.getDouble("start"))+" — "+Planner.clock(Planner.end(t))+"   "+t.getInt("durationMinutes")+" 分钟"+(Planner.floatingTask(t)?" · 按当前顺序预估":""),12,muted));
         if(Planner.floatingTask(t))box.addView(text("完成窗口："+Planner.clock(Planner.planningStart(t))+"–"+Planner.clock(Planner.planningEnd(t))+" · 顺序调整后预估时间更新",12,muted));
-        TextView name=text(c.getString("name"),18,ink);name.setTypeface(null,Typeface.BOLD);box.addView(name);
+        TextView name=text(c==null?"已删除课程":c.getString("name"),18,ink);name.setTypeface(null,Typeface.BOLD);box.addView(name);
         if(!t.optString("lessonName").isEmpty())box.addView(text(t.optString("lessonName"),16,ink));
         if(Planner.pending(t)){
             PlannerUi.Flow actions=new PlannerUi.Flow(this);
@@ -349,7 +350,7 @@ public class MainActivity extends Activity {
             ConfirmationDraft.Undo undo=new ConfirmationDraft.Undo(state,t);
             LinearLayout result=row();
             weighted(result,text(t.optString("status").equals("missed")?"未完成 · 已保留剩余学习量":"已确认 "+t.optInt("completedMinutes")+" 分钟",13,muted));
-            result.addView(pill("撤销",()->mutate(s->undo.apply(s,Planner.now()),true,null)));
+            if(c!=null)result.addView(pill("撤销",()->mutate(s->undo.apply(s,Planner.now()),true,null)));
             box.addView(result);
         }
     }
