@@ -812,6 +812,8 @@ struct MainView: View {
                 ForEach(active) { event in
                     FixedEventListRow(
                         event: event,
+                        referenceDate: now,
+                        showCalendar: showFixedDay,
                         edit: { sheet = .fixed(event) },
                         duplicate: { duplicateFixed(event) },
                         delete: { reviewed in Task { await store.deleteEvent(reviewed) } }
@@ -824,6 +826,8 @@ struct MainView: View {
                             ForEach(completed.reversed()) { event in
                                 FixedEventListRow(
                                     event: event,
+                                    referenceDate: now,
+                                    showCalendar: showFixedDay,
                                     edit: nil,
                                     duplicate: { duplicateFixed(event) },
                                     delete: { reviewed in Task { await store.deleteEvent(reviewed) } }
@@ -917,6 +921,12 @@ struct MainView: View {
     private func duplicateFixed(_ event: FixedEvent) {
         do { sheet = .fixed(try event.duplicate(startingOn: selectedDay)) }
         catch { store.errorMessage = error.localizedDescription }
+    }
+
+    private func showFixedDay(_ day: Date) {
+        selectedDay = Calendar.current.startOfDay(for: day)
+        month = selectedDay
+        page = .calendar
     }
 
     private func newFixed() {
@@ -1657,6 +1667,8 @@ private struct CourseListRow: View {
 
 private struct FixedEventListRow: View {
     var event: FixedEvent
+    var referenceDate: Date
+    var showCalendar: (Date) -> Void
     var edit: (() -> Void)?
     var duplicate: () -> Void
     var delete: (FixedEvent) -> Void
@@ -1664,6 +1676,8 @@ private struct FixedEventListRow: View {
     @State private var deletionReview: FixedEvent?
 
     var body: some View {
+        let calendarDay = event.calendarNavigationDay(relativeTo: referenceDate)
+        let firstDate = event.startDate.formatted(date: .abbreviated, time: .omitted)
         HStack(spacing: 17) {
             ZStack {
                 RoundedRectangle(cornerRadius: 15, style: .continuous)
@@ -1685,13 +1699,18 @@ private struct FixedEventListRow: View {
                 Text("\(clockTime(event.startMinute))–\(clockTime(event.endMinute)) · \(repeatLabel(event.weekdays))")
                     .font(.callout)
                     .foregroundStyle(.secondary)
-                Text("\(event.startDate.formatted(date: .abbreviated, time: .omitted)) 至 \(event.endDate.formatted(date: .abbreviated, time: .omitted))")
+                Text(event.weekdays.isEmpty ? firstDate : "\(firstDate) 至 \(event.endDate.formatted(date: .abbreviated, time: .omitted))")
                     .font(.caption)
                     .foregroundStyle(.tertiary)
             }
 
             Spacer()
 
+            Button("查看日历", systemImage: "calendar") {
+                if let calendarDay { showCalendar(calendarDay) }
+            }
+            .disabled(calendarDay == nil)
+            .help("定位今天或下一次规则日期；已结束的事项定位最后一次，临时跳过的日期仍可查看")
             if let edit {
                 Button("编辑", action: edit).buttonStyle(SoftButtonStyle())
             } else {

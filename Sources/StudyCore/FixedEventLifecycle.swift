@@ -1,6 +1,25 @@
 import Foundation
 
 extension FixedEvent {
+    /// Locate a rule in the calendar, including temporarily skipped occurrences
+    /// so their restore controls remain reachable. Prefer today or the next rule
+    /// day, falling back to the last occurrence when the rule has ended.
+    public func calendarNavigationDay(relativeTo reference: Date, calendar: Calendar = .current) -> Date? {
+        let first = calendar.startOfDay(for: startDate)
+        let last = calendar.startOfDay(for: weekdays.isEmpty ? min(startDate, endDate) : endDate)
+        guard first <= last else { return nil }
+        let anchor = min(max(calendar.startOfDay(for: reference), first), last)
+        for offset in 0..<7 {
+            guard let candidate = calendar.date(byAdding: .day, value: offset, to: anchor), candidate <= last else { break }
+            if occurs(on: candidate, calendar: calendar, includingExcluded: true) { return candidate }
+        }
+        for offset in 1...6 {
+            guard let candidate = calendar.date(byAdding: .day, value: -offset, to: anchor), candidate >= first else { break }
+            if occurs(on: candidate, calendar: calendar, includingExcluded: true) { return candidate }
+        }
+        return nil
+    }
+
     /// A rule ends with its last scheduled occurrence, including floating windows.
     /// Temporary skips remain restorable and do not end a rule early.
     public func hasEnded(at now: Date, calendar: Calendar = .current) -> Bool {
