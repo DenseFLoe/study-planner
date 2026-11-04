@@ -61,10 +61,23 @@ final class FixedEventEditingStoreTests: XCTestCase {
                 XCTAssertEqual(try repo.load().fixedEvents, store.state.fixedEvents)
             } else {
                 XCTAssertEqual(try repo.load(), remote)
-                XCTAssertEqual(store.state, baseline)
+                // Conflicts refresh the visible store to the committed remote
+                // state, while the editor retains its rejected local draft.
+                XCTAssertEqual(store.state, remote)
                 XCTAssertNotNil(store.errorMessage)
                 XCTAssertNil(store.pendingEventConflicts)
                 XCTAssertEqual(draft.notes, "Mac notes")
+                XCTAssertFalse(store.orderSaveBusy)
+                if scenario == 1 {
+                    // Reconfirming against that latest baseline may explicitly
+                    // replace the conflicting notes; the first attempt must not.
+                    repo.incoming = nil
+                    let retry = await store.saveEvent(draft, from: remote.fixedEvents[0])
+                    XCTAssertTrue(retry)
+                    XCTAssertEqual(store.state.fixedEvents[0].notes, "Mac notes")
+                    XCTAssertEqual(try repo.load(), store.state)
+                    XCTAssertNil(store.errorMessage)
+                }
             }
         }
     }
