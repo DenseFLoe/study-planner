@@ -15,6 +15,21 @@ final class FixedEventCatalog {
         String first=Planner.date(event.optDouble("startDate")),last=Planner.date(lastRuleDate(event));
         return first.equals(last)?first:first+" 至 "+last;
     }
+    /** Keep skipped rule days reachable; prefer today/next, then the last occurrence. */
+    static LocalDate navigationDay(JSONObject event,LocalDate reference) {
+        LocalDate first=Planner.day(event.optDouble("startDate")),last=Planner.day(lastRuleDate(event));
+        if(first.isAfter(last))return null;
+        LocalDate anchor=reference.isBefore(first)?first:reference.isAfter(last)?last:reference;
+        for(int offset=0;offset<7;offset++){
+            LocalDate candidate=anchor.plusDays(offset);if(candidate.isAfter(last))break;
+            if(Planner.occurs(event,candidate,true))return candidate;
+        }
+        for(int offset=1;offset<7;offset++){
+            LocalDate candidate=anchor.minusDays(offset);if(candidate.isBefore(first))break;
+            if(Planner.occurs(event,candidate,true))return candidate;
+        }
+        return null;
+    }
     enum Scope {
         CURRENT("当前与未来"), HISTORY("历史"), ALL("全部");
         final String title; Scope(String title) { this.title = title; }

@@ -74,6 +74,32 @@ public final class FixedEventCatalogTests {
         check(legacy.find("",FixedEventCatalog.Scope.ALL,0,0).count==3,"Clearing weekday did not restore all rules");
         for(int invalid:new int[]{-1,8})try{legacy.find("",FixedEventCatalog.Scope.ALL,invalid,0);throw new AssertionError("Invalid weekday accepted");}catch(IllegalArgumentException expected){checks++;}
         check(SyncLedger.canonical(legacyState).equals(original),"Weekday filtering modified stored rules");
+        navigationDays();
         System.out.println("Fixed event catalog: " + checks + " checks passed");
+    }
+
+    static void navigationDays()throws Exception{
+        JSONObject event=CourseTools.copy(fixture().getJSONArray("fixedEvents").getJSONObject(0))
+            .put("startDate",Planner.at(LocalDate.of(2026,11,2),0)).put("endDate",Planner.at(LocalDate.of(2026,11,16),0))
+            .put("weekdays",new JSONArray().put(2).put(4));
+        for(int[] pair:new int[][]{{1,2},{2,2},{3,4},{4,4},{5,9},{16,16},{30,16}})
+            check(FixedEventCatalog.navigationDay(event,LocalDate.of(2026,11,pair[0])).equals(LocalDate.of(2026,11,pair[1])),"Calendar link selected a nonmatching or distant date");
+        event.put("endDate",Planner.at(LocalDate.of(2026,11,15),0));
+        check(FixedEventCatalog.navigationDay(event,LocalDate.of(2026,11,16)).equals(LocalDate.of(2026,11,11)),"Ended rule uses cutoff instead of last occurrence");
+        check(FixedEventCatalog.navigationDay(event,LocalDate.of(2026,11,14)).equals(LocalDate.of(2026,11,11)),"Tail of rule range invents a later occurrence");
+        event.put("excludedDates",new JSONArray().put(Planner.at(DAY,720))).put("floatingDurationMinutes",30);
+        String before=SyncLedger.canonical(event);
+        check(FixedEventCatalog.navigationDay(event,DAY.minusDays(1)).equals(DAY)&&!Planner.occurs(event,DAY),"Skipped floating rule cannot be located for restoration");
+        check(SyncLedger.canonical(event).equals(before),"Navigation modified the rule");
+        JSONObject single=CourseTools.copy(event).put("weekdays",new JSONArray()).put("endDate",Planner.at(LocalDate.of(2026,11,30),0));
+        for(int day:new int[]{1,2,3,30})check(FixedEventCatalog.navigationDay(single,LocalDate.of(2026,11,day)).equals(LocalDate.of(2026,11,2)),"Legacy one-off end date affects navigation");
+        single.remove("weekdays");check(FixedEventCatalog.navigationDay(single,DAY).equals(LocalDate.of(2026,11,2)),"Legacy missing weekdays are not treated as a single occurrence");
+        JSONObject none=CourseTools.copy(event).put("startDate",Planner.at(DAY.minusDays(1),0)).put("endDate",Planner.at(DAY.minusDays(1),0));
+        check(FixedEventCatalog.navigationDay(none,DAY)==null,"No-match short range invented an occurrence");
+        none.put("startDate",Planner.at(DAY,0));check(FixedEventCatalog.navigationDay(none,DAY)==null,"Reversed range invented an occurrence");
+        none=CourseTools.copy(event).put("weekdays",new JSONArray().put(0).put(8));check(FixedEventCatalog.navigationDay(none,DAY)==null,"Invalid weekdays invented an occurrence");
+        LocalDate cutoff=LocalDate.of(2200,11,1);event.put("endDate",Planner.at(cutoff,0)).put("weekdays",new JSONArray().put(1));
+        LocalDate last=FixedEventCatalog.navigationDay(event,cutoff.plusDays(30));
+        check(last!=null&&!last.isAfter(cutoff)&&Planner.weekday(last)==1&&java.time.temporal.ChronoUnit.DAYS.between(last,cutoff)<7,"Long range navigation did not use the last matching week");
     }
 }
