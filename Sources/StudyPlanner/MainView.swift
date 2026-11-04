@@ -1289,9 +1289,10 @@ private struct CompletedTaskRow: View {
 struct WeeklyBarSegment: Identifiable, Equatable {
     let dayIndex: Int
     let dayLabel: String
+    let courseID: UUID
     let courseName: String
     let minutes: Int
-    var id: String { "\(dayIndex)-\(courseName)" }
+    var id: String { "\(dayIndex)-\(courseID.uuidString)" }
 }
 
 /// Swift Charts traps unless the foreground-style scale domain covers every
@@ -1299,9 +1300,34 @@ struct WeeklyBarSegment: Identifiable, Equatable {
 /// crashed the app as soon as a fifth course had work in the same week, so the
 /// domain is always derived from the full data set.
 enum WeeklyChartSeries {
-    static func names(in segments: [WeeklyBarSegment]) -> [String] {
-        var seen = Set<String>()
-        return segments.map(\.courseName).filter { seen.insert($0).inserted }
+    static func ids(in segments: [WeeklyBarSegment]) -> [UUID] {
+        var seen = Set<UUID>()
+        return segments.map(\.courseID).filter { seen.insert($0).inserted }
+    }
+
+    static func segments(tasks: [ScheduledTask], courses: [Course], weekStart: Date,
+                         calendar: Calendar) -> [WeeklyBarSegment] {
+        let end = calendar.date(byAdding: .day, value: 7, to: weekStart)!
+        let byID = Dictionary(uniqueKeysWithValues: courses.map { ($0.id, $0) })
+        var grouped: [Int: [UUID: Int]] = [:]
+        for task in tasks where task.start >= weekStart && task.start < end {
+            guard byID[task.courseID] != nil else { continue }
+            let day = calendar.dateComponents([.day], from: weekStart,
+                                              to: calendar.startOfDay(for: task.start)).day ?? 0
+            guard (0..<7).contains(day) else { continue }
+            grouped[day, default: [:]][task.courseID, default: 0] += task.durationMinutes
+        }
+        let dayNames = ["周一", "周二", "周三", "周四", "周五", "周六", "周日"]
+        return grouped.flatMap { day, totals in
+            totals.map { id, minutes in
+                WeeklyBarSegment(dayIndex: day, dayLabel: dayNames[day], courseID: id,
+                                 courseName: byID[id]!.name, minutes: minutes)
+            }
+        }.sorted {
+            if $0.dayIndex != $1.dayIndex { return $0.dayIndex < $1.dayIndex }
+            if $0.courseName != $1.courseName { return $0.courseName < $1.courseName }
+            return $0.courseID.uuidString < $1.courseID.uuidString
+        }
     }
 }
 
@@ -1321,40 +1347,17 @@ private struct WeeklyStudyChart: View {
     }
 
     private var segments: [WeeklyBarSegment] {
-        let weekStart = self.weekStart
-        let end = calendar.date(byAdding: .day, value: 7, to: weekStart)!
-        var grouped: [String: Int] = [:]
-        for task in tasks where task.start >= weekStart && task.start < end {
-            guard let course = courses.first(where: { $0.id == task.courseID }) else { continue }
-            let distance = calendar.dateComponents(
-                [.day],
-                from: weekStart,
-                to: calendar.startOfDay(for: task.start)
-            ).day ?? 0
-            guard (0..<7).contains(distance) else { continue }
-            grouped["\(distance)|\(course.name)", default: 0] += task.durationMinutes
-        }
-        return grouped.map { key, value in
-            let parts = key.split(separator: "|", maxSplits: 1).map(String.init)
-            let day = Int(parts[0]) ?? 0
-            return WeeklyBarSegment(
-                dayIndex: day,
-                dayLabel: dayNames[day],
-                courseName: parts[1],
-                minutes: value
-            )
-        }
-        .sorted { $0.dayIndex == $1.dayIndex ? $0.courseName < $1.courseName : $0.dayIndex < $1.dayIndex }
+        WeeklyChartSeries.segments(tasks: tasks, courses: courses, weekStart: weekStart, calendar: calendar)
     }
 
     var body: some View {
         // Each aggregation runs once per render, rather than once per chart/legend property.
         let segments = self.segments
-        let seriesNames = WeeklyChartSeries.names(in: segments)
-        let seriesColors = seriesNames.map { name in
-            courseColor(courses.first { $0.name == name }?.color ?? "blue")
+        let seriesIDs = WeeklyChartSeries.ids(in: segments)
+        let seriesColors = seriesIDs.map { id in
+            courseColor(courses.first { $0.id == id }?.color ?? "blue")
         }
-        let legendCourses = seriesNames.compactMap { name in courses.first { $0.name == name } }
+        let legendCourses = seriesIDs.compactMap { id in courses.first { $0.id == id } }
         let totalMinutes = segments.reduce(0) { $0 + $1.minutes }
         VStack(alignment: .leading, spacing: 16) {
             PlannerSectionTitle(title: "周计划时长", detail: "合计 \(hours(totalMinutes))")
@@ -1379,12 +1382,12 @@ private struct WeeklyStudyChart: View {
                         x: .value("小时", appeared ? Double(segment.minutes) / 60 : 0),
                         y: .value("日期", segment.dayLabel)
                     )
-                    .foregroundStyle(by: .value("课程", segment.courseName))
+                    .foregroundStyle(by: .value("课程", segment.courseID.uuidString))
                     .cornerRadius(4)
                     .accessibilityLabel("\(segment.dayLabel)，\(segment.courseName)")
                     .accessibilityValue("计划 \(studyDuration(segment.minutes))")
                 }
-                .chartForegroundStyleScale(domain: seriesNames, range: seriesColors)
+                .chartForegroundStyleScale(domain: seriesIDs.map(\.uuidString), range: seriesColors)
                 .chartLegend(.hidden)
                 .chartYScale(domain: dayNames)
                 .chartXAxis {
