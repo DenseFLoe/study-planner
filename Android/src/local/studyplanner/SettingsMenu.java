@@ -48,6 +48,10 @@ final class SettingsMenu {
         saveBar.addView(app.text("可先调整多个设置，再一起保存并重排。",13,app.muted));
         saveBar.addView(button);parent.addView(saveBar);
     }
+    void setRestoreButton(Button button){
+        saveBar.addView(button);
+        saveBar.addView(app.text("切换页面或同步后，未保存输入仍会保留。",13,app.muted));
+    }
     void show(String key){
         if(!pages.containsKey(key))key="";
         app.settingsSection=key;boolean home=key.isEmpty();

@@ -22,6 +22,9 @@ public class MainActivity extends Activity {
     TextView cloudLabel;
     CloudSettingsPanel cloudPanel;
     SettingsMenu settingsMenu;
+    SettingsDraft settingsDraft;
+    Checked captureSettingsDraft;
+    String restoredSettingsDraft;
     LinearLayout syncProgress; boolean syncRefreshing=false,syncRefreshAgain=false;
     String settingsSection="";
     static final int EXPORT_BACKUP=101,IMPORT_BACKUP=102,SCAN_PAIRING_QR=103,IMPORT_COURSES=104,IMPORT_SSH_KEY=105;
@@ -32,7 +35,7 @@ public class MainActivity extends Activity {
     final Runnable ticker=new Runnable(){public void run(){if(ready&&!busy){LocalDate today=LocalDate.now(Planner.ZONE);if(!today.equals(lastDay)){lastDay=today;mutate(s->{},true,null);}else showReviewNotice();}handler.postDelayed(this,30000);}};
     interface Change{void run(JSONObject s)throws Exception;}
     interface Checked{void run()throws Exception;}
-    @Override public void onCreate(Bundle b){super.onCreate(b);getWindow().setStatusBarColor(bg);getWindow().setNavigationBarColor(Color.WHITE);getWindow().getDecorView().setSystemUiVisibility(View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR|View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR);storage=new AtomicFile(new File(getFilesDir(),"planner-v1.json"));if(b!=null){selected=LocalDate.parse(b.getString("selected",selected.toString()));month=selected.withDayOfMonth(1);page=b.getInt("page",0);settingsSection=b.getString("settingsSection","");calendarExpanded=b.getBoolean("calendarExpanded",false);month=LocalDate.parse(b.getString("month",month.toString()));}PlannerRuntime runtime=PlannerRuntime.get(this);database=runtime.database;worker=runtime.worker;
+    @Override public void onCreate(Bundle b){super.onCreate(b);getWindow().setStatusBarColor(bg);getWindow().setNavigationBarColor(Color.WHITE);getWindow().getDecorView().setSystemUiVisibility(View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR|View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR);storage=new AtomicFile(new File(getFilesDir(),"planner-v1.json"));if(b!=null){restoredSettingsDraft=b.getString("studySettingsDraft");selected=LocalDate.parse(b.getString("selected",selected.toString()));month=selected.withDayOfMonth(1);page=b.getInt("page",0);settingsSection=b.getString("settingsSection","");calendarExpanded=b.getBoolean("calendarExpanded",false);month=LocalDate.parse(b.getString("month",month.toString()));}PlannerRuntime runtime=PlannerRuntime.get(this);database=runtime.database;worker=runtime.worker;
         consequences=new DailyConsequenceController(this);
         syncServer=new SyncWindow(this,message->{syncStatus=message;updateSyncLabel();});
         IntentFilter filter=new IntentFilter(SyncWindowService.ACTION_STATUS);
@@ -50,7 +53,16 @@ public class MainActivity extends Activity {
     @Override protected void onResume(){super.onResume();if(ready&&syncServer!=null){refreshSyncData();syncStatus=SyncWindowService.lastStatus;updateSyncLabel();syncServer.start(false,false);CloudSync.get(this).start();}}
     // A bounded foreground service owns the window; onStop must not invalidate pairing.
 
-    @Override public void onSaveInstanceState(Bundle b){super.onSaveInstanceState(b);b.putString("selected",selected.toString());b.putInt("page",page);b.putString("settingsSection",settingsSection);b.putBoolean("calendarExpanded",calendarExpanded);b.putString("month",month.toString());}
+    @Override public void onSaveInstanceState(Bundle b){
+        super.onSaveInstanceState(b);
+        try{
+            if(captureSettingsDraft!=null)captureSettingsDraft.run();
+            if(settingsDraft!=null&&settingsDraft.isDirty())b.putString("studySettingsDraft",settingsDraft.snapshot().toString());
+            else if(restoredSettingsDraft!=null)b.putString("studySettingsDraft",restoredSettingsDraft);
+        }catch(Exception error){android.util.Log.w("StudyPlanner","Unable to retain settings draft",error);}
+        b.putString("selected",selected.toString());b.putInt("page",page);b.putString("settingsSection",settingsSection);
+        b.putBoolean("calendarExpanded",calendarExpanded);b.putString("month",month.toString());
+    }
     @Override public void onDestroy(){handler.removeCallbacks(ticker);if(consequences!=null)consequences.close();unregisterReceiver(syncReceiver);super.onDestroy();}
     @Override public void onBackPressed(){if(busy){Toast.makeText(this,"正在保存，请稍后",Toast.LENGTH_SHORT).show();return;}if(page==3&&!settingsSection.isEmpty()&&settingsMenu!=null){settingsMenu.show("");}else if(page!=0){page=0;render();}else super.onBackPressed();}
     static String read(InputStream stream)throws Exception{try(InputStream in=stream;ByteArrayOutputStream out=new ByteArrayOutputStream()){byte[] b=new byte[8192];int n;while((n=in.read(b))!=-1)out.write(b,0,n);return out.toString("UTF-8");}}
@@ -75,6 +87,8 @@ public class MainActivity extends Activity {
     void cardBorder(LinearLayout box,int tint){GradientDrawable background=rounded(Color.WHITE,16);background.setStroke(dp(2),tint);box.setBackground(background);}
     void render(){
         if(!ready)return;
+        try{if(captureSettingsDraft!=null)captureSettingsDraft.run();}catch(Exception error){alert("草稿未刷新",error.getMessage());return;}
+        captureSettingsDraft=null;settingsMenu=null;
         consequences.refresh(state);consequencePanel=null;
         root=col();root.setBackgroundColor(bg);root.setFitsSystemWindows(true);setContentView(root);
         if(page!=0){LinearLayout top=row();top.setPadding(dp(18),dp(12),dp(18),dp(8));top.addView(title("学习日程"));root.addView(top);}
@@ -249,7 +263,14 @@ public class MainActivity extends Activity {
     void eventEditor(JSONObject original,boolean recognized){run(()->{final JSONObject baseline=original==null||recognized?null:CourseTools.copy(original);JSONObject e=original==null?new JSONObject().put("id",Planner.id()).put("title","").put("startMinute",480).put("endMinute",540).put("startDate",Planner.at(selected,0)).put("endDate",Planner.at(selected.plusDays(112),0)).put("weekdays",new JSONArray()).put("excludedDates",new JSONArray()).put("color","orange").put("notes",""):new JSONObject(original.toString());LinearLayout f=col();Spinner timing=spinner(f,"时间方式",new String[]{"固定时间","时段内浮动"},Planner.floating(e)?1:0);EditText duration=field(f,"浮动占用分钟（仅时段内浮动生效）",""+(Planner.floating(e)?Planner.occupied(e):60),true);f.addView(text("浮动时：起止时间表示窗口，仅扣除固定占用分钟，学习任务也标记为时段内完成。",12,muted));EditText title=field(f,"事项名称",e.optString("title"),false),start=field(f,"开始时间（HH:mm）",Planner.time(e.getInt("startMinute")),false),end=field(f,"结束时间（HH:mm）",Planner.time(e.getInt("endMinute")),false),first=dateField(f,"开始日期",Planner.date(e.getDouble("startDate"))),last=dateField(f,"结束日期",Planner.date(e.getDouble("endDate")));f.addView(text("重复星期（不选为单次）",13,muted));CheckBox[] checks=new CheckBox[7];String[] names={"星期日","星期一","星期二","星期三","星期四","星期五","星期六"};for(int i=0;i<7;i++){checks[i]=new CheckBox(this);checks[i].setText(names[i]);for(int j=0;j<e.getJSONArray("weekdays").length();j++)if(e.getJSONArray("weekdays").getInt(j)==i+1)checks[i].setChecked(true);f.addView(checks[i]);}String excluded="";JSONArray exc=e.optJSONArray("excludedDates");if(exc!=null)for(int i=0;i<exc.length();i++)excluded+=Planner.date(exc.getDouble(i))+" ";EditText exclusions=field(f,"跳过日期（YYYY-MM-DD，空格分隔）",excluded.trim(),false);exclusions.setSingleLine(false);EditText notes=field(f,"备注",e.optString("notes"),false);String[] keys={"blue","green","purple","orange","pink"};Spinner color=spinner(f,"颜色",new String[]{"蓝色","绿色","紫色","橙色","粉色"},Arrays.asList(keys).indexOf(e.optString("color")));AlertDialog d=editor(original==null||recognized?"添加固定事项":"编辑固定事项",f);if(original!=null&&!recognized)f.addView(button("删除未来安排",()->new AlertDialog.Builder(this).setTitle("删除此事项的未来安排？").setMessage("历史和今天已开始的安排会保留。").setNegativeButton("取消",null).setPositiveButton("删除",(a,b)->mutate(s->Planner.removeEvent(s,e.getString("id"),Planner.now()),true,d::dismiss)).show()));d.setOnShowListener(v->d.getButton(-1).setOnClickListener(x->run(()->{if(value(title).isEmpty())throw new Exception("请填写事项名称");JSONArray weeks=new JSONArray(),ex=new JSONArray();for(int i=0;i<7;i++)if(checks[i].isChecked())weeks.put(i+1);if(!value(exclusions).isEmpty())for(String token:value(exclusions).split("[\\s,，]+"))ex.put(Planner.at(LocalDate.parse(token),0));double a=dateValue(first),b=weeks.length()==0?a:dateValue(last);e.put("title",value(title)).put("startMinute",Planner.minute(value(start))).put("endMinute",Planner.minute(value(end))).put("startDate",a).put("endDate",b).put("weekdays",weeks).put("excludedDates",ex).put("notes",value(notes)).put("color",keys[color.getSelectedItemPosition()]);if(timing.getSelectedItemPosition()==1)e.put("floatingDurationMinutes",integer(duration));else e.remove("floatingDurationMinutes");saveEventResolvingConflicts(e,baseline,d,null,Collections.emptySet(),Collections.emptySet(),null);})));d.show();});}
     void settings()throws Exception{
         SettingsMenu menu=new SettingsMenu(this,body);settingsMenu=menu;
-        JSONObject settings=state.getJSONObject("settings");
+        if(restoredSettingsDraft!=null){
+            try{settingsDraft=SettingsDraft.restore(new JSONObject(restoredSettingsDraft));}
+            catch(Exception error){alert("设置草稿无法恢复","已保存设置未被修改，请重新输入未保存的设置。");}
+            restoredSettingsDraft=null;
+        }
+        if(settingsDraft==null||!settingsDraft.isDirty())settingsDraft=new SettingsDraft(state.getJSONObject("settings"));
+        final SettingsDraft draft=settingsDraft;
+        JSONObject settings=CourseTools.copy(draft.baseline).put("schedulingRuleLevels",draft.levels);
         LinearLayout rules=menu.page("priorities","排课逻辑权重",3,true);
         SchedulePrioritiesPanel priorities=new SchedulePrioritiesPanel(this,rules,settings);
         LinearLayout explanation=card(menu.page("explanation","排课原因",4,false));
@@ -258,24 +279,43 @@ public class MainActivity extends Activity {
         explanation.addView(text("依据已保存的设置与最近一次排程结果。修改权重后，保存设置并重排才会更新原因。",13,muted));
         LinearLayout f=card(menu.page("defaults","默认规则",3,true));
         f.addView(title("默认规则"));
-        EditText unit=field(f,"全局最小学习时间块（分钟）",""+settings.getInt("minimumScheduleUnit"),true);
-        EditText notification=field(f,"应用内每日确认时间（HH:mm）",Planner.time(settings.getInt("notificationMinute")),false);
+        EditText unit=field(f,"全局最小学习时间块（分钟）",draft.unit,true);
+        EditText notification=field(f,"应用内每日确认时间（HH:mm）",draft.notification,false);
         LinearLayout availabilityBox=card(menu.page("availability","每日可学习时间",2,true));
         availabilityBox.addView(title("每日可学习时间"));
         availabilityBox.addView(text("每行支持多个时段，以逗号分隔；留空为休息日。",13,muted));
         EditText[] availability=new EditText[7];
         for(int i=0;i<7;i++){
-            int weekday=(i+1)%7+1;String v="";
-            for(JSONObject window:Planner.list(settings.getJSONArray("availability")))if(window.getInt("weekday")==weekday)
-                v+=(v.isEmpty()?"":", ")+Planner.time(window.getInt("startMinute"))+"-"+Planner.time(window.getInt("endMinute"));
-            availability[i]=field(availabilityBox,"星期"+new String[]{"一","二","三","四","五","六","日"}[i],v,false);
+            availability[i]=field(availabilityBox,"星期"+new String[]{"一","二","三","四","五","六","日"}[i],draft.availability[i],false);
             availability[i].setHint("08:00-12:00, 14:00-22:00");
         }
         syncSettings(menu.page("localSync","热点局域网同步",0,false));
         CloudSettingsPanel.render(this,menu.page("cloudSync","云端同步",3,false));
         LinearLayout backup=card(menu.page("data","数据与备份",1,false));backup.addView(title("数据与备份"));backup.addView(text("安装包不含个人日程；首次安装以空白日程开始。覆盖安装不会替换手机进度。卸载会删除手机数据，请先导出备份。",13,muted));PlannerUi.Flow backupActions=new PlannerUi.Flow(this);backup.addView(backupActions);backupActions.addView(button("导出手机日程备份",()->{Intent intent=new Intent(Intent.ACTION_CREATE_DOCUMENT);intent.setType("application/json");intent.addCategory(Intent.CATEGORY_OPENABLE);intent.putExtra(Intent.EXTRA_TITLE,"学习日程-"+LocalDate.now(Planner.ZONE)+".json");startActivityForResult(intent,EXPORT_BACKUP);}));backupActions.addView(button("从备份恢复",()->{Intent intent=new Intent(Intent.ACTION_OPEN_DOCUMENT);intent.setType("application/json");intent.addCategory(Intent.CATEGORY_OPENABLE);startActivityForResult(intent,IMPORT_BACKUP);}));JSONObject meta=new JSONObject(read(getAssets().open("snapshot-info.json")));backup.addView(text("初始数据："+meta.getJSONObject("counts").getInt("courses")+" 门课程 · "+meta.getJSONObject("counts").getInt("fixedEvents")+" 条固定规则 · "+meta.getJSONObject("counts").getInt("tasks")+" 条任务 · "+meta.getJSONObject("counts").getInt("completions")+" 条完成记录\n安卓版 "+getPackageManager().getPackageInfo(getPackageName(),0).versionName+" · Android 8.0 及以上",12,muted));
-        menu.setSaveButton(button("保存设置并重排",()->run(()->{int n=integer(unit),time=Planner.minute(value(notification));if(n<1||n>1440||time>=1440)throw new Exception("时间块或确认时间无效");JSONArray windows=new JSONArray();for(int i=0;i<7;i++){String line=value(availability[i]);if(line.isEmpty())continue;for(String token:line.split("[,，]")){String[] parts=token.trim().split("-");if(parts.length!=2)throw new Exception("时段格式应为 08:00-12:00");int a=Planner.minute(parts[0]),b=Planner.minute(parts[1]);if(a>=b)throw new Exception("时段结束必须晚于开始");windows.put(new JSONObject().put("id",Planner.id()).put("weekday",(i+1)%7+1).put("startMinute",a).put("endMinute",b));}}mutate(s->{JSONObject updated=new JSONObject(s.getJSONObject("settings").toString()).put("minimumScheduleUnit",n).put("notificationMinute",time).put("availability",windows).put("schedulingRuleLevels",priorities.levels());Planner.updateStudySettings(s,updated,Planner.now());},true,null);})));
+        captureSettingsDraft=()->{
+            draft.unit=unit.getText().toString();draft.notification=notification.getText().toString();
+            for(int i=0;i<7;i++)draft.availability[i]=availability[i].getText().toString();
+            draft.levels=priorities.levels();
+        };
+        menu.setSaveButton(button("保存设置并重排",()->run(()->{
+            captureSettingsDraft.run();
+            JSONObject edited=draft.editedSettings(),baseline=CourseTools.copy(draft.baseline);
+            mutate(s->SettingsEditing.save(s,edited,baseline,Planner.now()),true,()->{settingsDraft=null;captureSettingsDraft=null;});
+        })));
+        menu.setRestoreButton(button("恢复已保存设置",()->new AlertDialog.Builder(this)
+            .setTitle("恢复已保存设置？").setMessage("放弃当前未保存的设置输入，重新载入已保存值。")
+            .setNegativeButton("取消",null).setPositiveButton("恢复",(dialog,which)->reloadStudySettings()).show()));
         menu.show(settingsSection);
+    }
+    void reloadStudySettings(){
+        if(busy)return;
+        busy=true;ProgressDialog progress=new ProgressDialog(this);progress.setMessage("正在读取已保存设置…");progress.setCancelable(false);progress.show();
+        worker.execute(()->{try{
+            JSONObject latest=database.load();Planner.refreshDiagnostics(latest,Planner.now());
+            runOnUiThread(()->{busy=false;progress.dismiss();if(isDestroyed())return;
+                state=latest;settingsDraft=null;captureSettingsDraft=null;render();
+            });
+        }catch(Exception error){runOnUiThread(()->{busy=false;progress.dismiss();if(!isDestroyed())alert("读取失败",error.getMessage()+"\n未保存输入仍保留。");});}});
     }
     final BroadcastReceiver syncReceiver=new BroadcastReceiver(){public void onReceive(Context c,Intent i){if(CloudSync.ACTION.equals(i.getAction())){if(cloudLabel!=null)cloudLabel.setText(CloudSync.summary(c));refreshSyncData();return;}syncStatus=SyncWindowService.lastStatus;updateSyncLabel();updateSyncProgress();if(i.getBooleanExtra("changed",false))refreshSyncData();}};
     void updateSyncProgress(){if(syncProgress!=null)syncProgress.setVisibility(CloudSync.get(this).isRunning()||syncRefreshing||SyncWindowService.transferring()?View.VISIBLE:View.GONE);}
