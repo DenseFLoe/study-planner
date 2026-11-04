@@ -19,6 +19,18 @@ public final class RecurringRecognitionTests {
         Planner.validateEventWindow(value); checks += 3;
     }
     public static void main(String[] args) throws Exception {
+        for(String text:new String[]{"隔周周三09:00到10:00复习", "每周三（单周）09:00到10:00复习",
+            "双周周三09:00到10:00复习", "从明天起每两天09:00到10:00复习", "从明天起隔两天09:00到10:00复习",
+            "从明天起每个月09:00到10:00复习", "从明天起每年09:00到10:00复习", "从明天起每隔一周09:00到10:00复习",
+            "每周一至五09:00到10:00复习，节假日除外", "每天09:00到10:00复习，除周三外",
+            "每天09:00到10:00复习，假期顺延", "每周三09:00到10:00复习，不含法定假日",
+            "隔周周三\n09:00到10:00复习\n14:00到15:00讨论", "每个月\n09:00到10:00复习\n14:00到15:00讨论"}){
+            FixedEventTextParser.Result result=FixedEventTextParser.parse(text,Planner.at(TODAY,600));
+            if(!result.drafts.isEmpty()||result.messages.stream().noneMatch(s->s.contains("暂不支持")))throw new AssertionError("Unsupported recurrence simplified: "+text);checks+=2;
+        }
+        FixedEventTextParser.Result mixed=FixedEventTextParser.parse("隔周周三09:00到10:00复习\n明天14:00到15:00讨论",Planner.at(TODAY,600));
+        if(mixed.drafts.size()!=1||!mixed.drafts.get(0).event.getString("title").equals("讨论")||mixed.messages.stream().noneMatch(s->s.contains("暂不支持")))throw new AssertionError("Valid notice lost beside unsupported recurrence");checks+=3;
+        if(!event("明天09:00到10:00，主题：单周总结").getString("title").equals("单周总结"))throw new AssertionError("Non-recurring title rejected");checks++;
         for(String[] sample:new String[][]{
             {"每周一至三、五","[2,3,4,6]"},{"每周一到三、五到日","[1,2,3,4,6,7]"},
             {"每周五到一、三","[1,2,4,6,7]"},{"每周一–三","[2,3,4]"},

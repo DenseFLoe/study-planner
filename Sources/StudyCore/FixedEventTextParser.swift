@@ -43,7 +43,7 @@ public enum FixedEventTextParser {
         let separated = source.components(separatedBy: CharacterSet(charactersIn: "\n；;。"))
         let datedNotices = separated.filter {
             let text = normalize($0)
-            return !matches(clockPattern, text).isEmpty && (!matches(datePattern, text).isEmpty || !matches(relativePattern, text).isEmpty || isRecurring(text))
+            return !matches(clockPattern, text).isEmpty && (!matches(datePattern, text).isEmpty || !matches(relativePattern, text).isEmpty || isRecurring(text) || unsupportedRecurrence(text))
         }.count
         let pieces = matches(clockPattern, normalized).count <= 2 && datedNotices < 2 ? [source] : separated
         var result = FixedEventTextResult()
@@ -53,13 +53,13 @@ public enum FixedEventTextParser {
             let piece = piece.trimmingCharacters(in: .whitespacesAndNewlines)
             let normalizedPiece = normalize(piece)
             guard !piece.isEmpty else { continue }
-            let hasDate = !matches(datePattern, normalizedPiece).isEmpty || !matches(relativePattern, normalizedPiece).isEmpty || isRecurring(normalizedPiece)
+            let hasDate = !matches(datePattern, normalizedPiece).isEmpty || !matches(relativePattern, normalizedPiece).isEmpty || isRecurring(normalizedPiece) || unsupportedRecurrence(normalizedPiece)
             if hasDate {
                 // Carry only date expressions, never a previous appointment's clock.
                 dateContext = (matches(datePattern, normalizedPiece) + matches(relativePattern, normalizedPiece))
                     .sorted { $0.range.location < $1.range.location }
                     .map { capture($0, 0, normalizedPiece) }.joined(separator: " ")
-                if isRecurring(normalizedPiece) {
+                if isRecurring(normalizedPiece) || unsupportedRecurrence(normalizedPiece) {
                     dateContext = replacing(clockPattern, normalizedPiece, with: "")
                 }
             }
@@ -97,6 +97,9 @@ public enum FixedEventTextParser {
         func fail(_ message: String) -> Result<FixedEventTextDraft, ParseError> { .failure(.init(message: message)) }
         if !matches("取消|改期|推迟|延期|(?:时间|日期|会议|活动)待定|暂不|另择|任选|之间|时段内|浮动", text).isEmpty {
             return fail("内容涉及取消、变更或浮动时段，请先整理明确的活动日期与起止时间，或手动添加。")
+        }
+        if unsupportedRecurrence(text) {
+            return fail("暂不支持隔周、单双周、按月或按间隔重复，以及排除或顺延规则。原文仍保留，请改成明确日期后逐条添加。")
         }
         var warnings: [String] = []
         let today = calendar.startOfDay(for: now)
@@ -241,6 +244,9 @@ public enum FixedEventTextParser {
 
     private static func isRecurring(_ text: String) -> Bool {
         !matches("每天|每日|每周|每星期|每礼拜|每逢|工作日|周末", text).isEmpty
+    }
+    private static func unsupportedRecurrence(_ text: String) -> Bool {
+        !matches("(?:隔|间隔)\\s*(?:[0-9零〇一二两三四五六七八九十]{1,3}\\s*)?(?:天|日|周|星期|礼拜)|单双周|(?:单|双)周(?=[一二三四五六日天0-9）)\\s，,。；;]|$|周|星期|礼拜|重复|轮换|上课)|每\\s*(?:个\\s*)?(?:月|年)|每\\s*隔|每\\s*\(number)\\s*(?:天|日|周|星期|礼拜|个?月|年)|(?:节假日|法定假日|假期|调休)\\s*(?:除外|不(?:上课|安排|进行)|顺延)|(?:除|不含|不包括|跳过|避开)\\s*(?:周[一二三四五六日天1-7]|星期[一二三四五六日天1-7]|礼拜[一二三四五六日天1-7]|节假日|法定假日|假期)", text).isEmpty
     }
     private static func recurringWeekdays(_ text: String) -> Set<Int> {
         if text.contains("每天") || text.contains("每日") { return Set(1...7) }

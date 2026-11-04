@@ -216,6 +216,25 @@ final class FixedEventTextParserTests: XCTestCase {
         XCTAssertTrue(parse("明天18:00会议取消").drafts.isEmpty)
         XCTAssertTrue(parse("明天14:00到18:00之间任选1小时锻炼").drafts.isEmpty)
     }
+    func testUnsupportedRecurrencesAndSharedHeadersAreNotSilentlySimplified() throws {
+        for text in ["隔周周三09:00到10:00复习", "每周三（单周）09:00到10:00复习",
+                     "双周周三09:00到10:00复习", "从明天起每两天09:00到10:00复习",
+                     "从明天起隔两天09:00到10:00复习", "从明天起每个月09:00到10:00复习",
+                     "从明天起每年09:00到10:00复习", "从明天起每隔一周09:00到10:00复习",
+                     "每周一至五09:00到10:00复习，节假日除外", "每天09:00到10:00复习，除周三外",
+                     "每天09:00到10:00复习，假期顺延", "每周三09:00到10:00复习，不含法定假日",
+                     "隔周周三\n09:00到10:00复习\n14:00到15:00讨论",
+                     "每个月\n09:00到10:00复习\n14:00到15:00讨论"] {
+            let result = parse(text)
+            XCTAssertTrue(result.drafts.isEmpty, text)
+            XCTAssertTrue(result.messages.contains { $0.contains("暂不支持") }, text)
+        }
+        let mixed = parse("隔周周三09:00到10:00复习\n明天14:00到15:00讨论")
+        XCTAssertEqual(mixed.drafts.count, 1)
+        XCTAssertEqual(mixed.drafts.first?.event.title, "讨论")
+        XCTAssertTrue(mixed.messages.contains { $0.contains("暂不支持") })
+        XCTAssertEqual(try draft("明天09:00到10:00，主题：单周总结").event.title, "单周总结")
+    }
 
     func testUncertainLocationDoesNotDiscardKnownTimeAndDraftsAreCapped() throws {
         let value = try draft("明天18:00召开例会，地点待定")

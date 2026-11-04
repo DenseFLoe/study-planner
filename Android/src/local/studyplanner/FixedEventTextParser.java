@@ -24,6 +24,9 @@ public final class FixedEventTextParser {
     static boolean has(String pattern,String text){return Pattern.compile(pattern).matcher(text).find();}
     static String normalize(String text){StringBuilder s=new StringBuilder();for(char c:text.toCharArray())s.append(c>=0xff01&&c<=0xff5e?(char)(c-0xfee0):c==0x3000?' ':c);return s.toString();}
     static boolean recurring(String text){return has("每天|每日|每周|每星期|每礼拜|每逢|工作日|周末",text);}
+    static boolean unsupportedRecurrence(String text){
+        return has("(?:隔|间隔)\\s*(?:[0-9零〇一二两三四五六七八九十]{1,3}\\s*)?(?:天|日|周|星期|礼拜)|单双周|(?:单|双)周(?=[一二三四五六日天0-9）)\\s，,。；;]|$|周|星期|礼拜|重复|轮换|上课)|每\\s*(?:个\\s*)?(?:月|年)|每\\s*隔|每\\s*"+NUMBER+"\\s*(?:天|日|周|星期|礼拜|个?月|年)|(?:节假日|法定假日|假期|调休)\\s*(?:除外|不(?:上课|安排|进行)|顺延)|(?:除|不含|不包括|跳过|避开)\\s*(?:周[一二三四五六日天1-7]|星期[一二三四五六日天1-7]|礼拜[一二三四五六日天1-7]|节假日|法定假日|假期)",text);
+    }
     static int integer(String s){try{return Integer.parseInt(s);}catch(Exception ignored){}if(s.isEmpty())return -1;int ten=s.indexOf('十');if(ten>=0){int a=ten==0?1:digit(s.charAt(0)),b=ten==s.length()-1?0:digit(s.charAt(ten+1));return a<0||b<0?-1:a*10+b;}return s.length()==1?digit(s.charAt(0)):-1;}
     static int digit(char c){int n="零一二三四五六七八九".indexOf(c);return c=='〇'?0:c=='两'?2:n;}
     static int weekday(char c){int n="一二三四五六日".indexOf(c);if(c=='天')n=6;if(c>='1'&&c<='7')n=c-'1';return n;}
@@ -50,6 +53,7 @@ public final class FixedEventTextParser {
     static final class Clock {int minute,hour;String period;MatchResult match;Clock(int minute,int hour,String period,MatchResult match){this.minute=minute;this.hour=hour;this.period=period;this.match=match;}}
     static Draft notice(String source,LocalDate today)throws Exception {
         String text=normalize(source);require(!has("取消|改期|推迟|延期|(?:时间|日期|会议|活动)待定|暂不|另择|任选|之间|时段内|浮动",text),"内容涉及取消、变更或浮动时段，请整理明确的日期与起止时间，或手动添加。");
+        require(!unsupportedRecurrence(text),"暂不支持隔周、单双周、按月或按间隔重复，以及排除或顺延规则。原文仍保留，请改成明确日期后逐条添加。");
         List<String> warnings=new ArrayList<>();List<MatchResult> dateMatches=matches(DATE,text),relativeMatches=matches(RELATIVE,text);List<LocalDate> dates=new ArrayList<>();Integer inferred=null;
         List<MatchResult> weekdayLists=matches(WEEKDAYS,text);
         dateMatches.removeIf(date->weekdayLists.stream().anyMatch(list->list.start()<=date.start()&&list.end()>=date.end()));
@@ -98,9 +102,9 @@ public final class FixedEventTextParser {
         for(String chunk:value.split("[\\n，,。；;]")){String s=chunk.replaceAll("^[\\s：:、-]+|[\\s：:、-]+$","");if(!s.isEmpty()&&!Arrays.asList("时间","日期","通知","地点另行通知").contains(s))return s.substring(0,Math.min(60,s.length()));}return "待命名事项";
     }
     public static Result parse(String input,double now){Result result=new Result();String source=input.trim();if(source.isEmpty()){result.messages.add("请先粘贴包含日期和时间的通知或聊天文字。");return result;}if(source.codePointCount(0,source.length())>30000){result.messages.add("一次最多识别 30000 字，请分段粘贴。");return result;}
-        String normalized=normalize(source);String[] separated=source.split("[\\n；;。]");int dated=0;for(String s:separated){s=normalize(s);if(has(CLOCK,s)&&(has(DATE,s)||has(RELATIVE,s)||recurring(s)))dated++;}String[] pieces=matches(CLOCK,normalized).size()<=2&&dated<2?new String[]{source}:separated;
+        String normalized=normalize(source);String[] separated=source.split("[\\n；;。]");int dated=0;for(String s:separated){s=normalize(s);if(has(CLOCK,s)&&(has(DATE,s)||has(RELATIVE,s)||recurring(s)||unsupportedRecurrence(s)))dated++;}String[] pieces=matches(CLOCK,normalized).size()<=2&&dated<2?new String[]{source}:separated;
         String dateContext="";int rejected=0;LocalDate today=Planner.day(now);Set<String> seen=new HashSet<>();
-        for(String raw:pieces){String piece=raw.trim(),text=normalize(piece);if(piece.isEmpty())continue;boolean hasDate=has(DATE,text)||has(RELATIVE,text)||recurring(text);if(hasDate){List<MatchResult> dateMatches=matches(DATE,text);dateMatches.addAll(matches(RELATIVE,text));dateMatches.sort(Comparator.comparingInt(MatchResult::start));StringBuilder b=new StringBuilder();for(MatchResult m:dateMatches)b.append(group(m,0)).append(' ');dateContext=recurring(text)?text.replaceAll(CLOCK,""):b.toString().trim();}if(!has(CLOCK,text))continue;
+        for(String raw:pieces){String piece=raw.trim(),text=normalize(piece);if(piece.isEmpty())continue;boolean hasDate=has(DATE,text)||has(RELATIVE,text)||recurring(text)||unsupportedRecurrence(text);if(hasDate){List<MatchResult> dateMatches=matches(DATE,text);dateMatches.addAll(matches(RELATIVE,text));dateMatches.sort(Comparator.comparingInt(MatchResult::start));StringBuilder b=new StringBuilder();for(MatchResult m:dateMatches)b.append(group(m,0)).append(' ');dateContext=(recurring(text)||unsupportedRecurrence(text))?text.replaceAll(CLOCK,""):b.toString().trim();}if(!has(CLOCK,text))continue;
             try{Draft draft=notice(hasDate||dateContext.isEmpty()?piece:dateContext+"\n"+piece,today);JSONObject e=draft.event;String key=e.getString("title")+"|"+e.getDouble("startDate")+"|"+e.getDouble("endDate")+"|"+e.getInt("startMinute")+"|"+e.getInt("endMinute")+"|"+e.getJSONArray("weekdays");if(seen.add(key))result.drafts.add(draft);}catch(Exception e){rejected++;String message=e instanceof Reject?e.getMessage():"内容无法确定，请核对日期与时间后重试。";if(!result.messages.contains(message))result.messages.add(message);}if(result.drafts.size()==20){result.messages.add("最多展示 20 条候选，请核对后分批添加其余事项。");break;}
         }if(result.drafts.isEmpty()&&rejected==0)result.messages.add("未找到明确的日期和时间。请补充例如明天18:00开会或每周三下午3点到5点上课。");if(rejected>0&&!result.drafts.isEmpty())result.messages.add("部分内容未能确定时间，请核对原文，避免遗漏。");return result;
     }
