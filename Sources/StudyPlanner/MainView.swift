@@ -483,12 +483,16 @@ struct MainView: View {
                     Label("浮动事项已预留 " + hours(dayEvents.filter(\.isFloating).reduce(0) { $0 + $1.occupiedMinutes }) + "；虚线学习卡片显示按当前顺序预估的起止时间，调整顺序后更新。", systemImage: "arrow.left.arrow.right")
                         .font(.caption).foregroundStyle(.secondary)
                 }
-                PlannerSectionTitle(
-                    title: Calendar.current.isDateInToday(selectedDay)
-                        ? (store.state.settings.actualStudyStart(on: Date()) == nil ? "今天的安排" : "新课表 · 今天")
-                        : "当天的安排",
-                    detail: "\(items.count) 项任务 · 长按课程可拖动交换"
-                )
+                HStack {
+                    PlannerSectionTitle(
+                        title: Calendar.current.isDateInToday(selectedDay)
+                            ? (store.state.settings.actualStudyStart(on: Date()) == nil ? "今天的安排" : "新课表 · 今天")
+                            : "当天的安排",
+                        detail: "\(items.count) 项任务 · 长按课程可拖动交换"
+                    )
+                    Spacer()
+                    DayAgendaCopyButton(day: selectedDay, state: store.state)
+                }
 
                 if dayTasks.isEmpty && dayEvents.isEmpty {
                     emptyAgenda
