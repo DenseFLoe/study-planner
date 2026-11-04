@@ -278,6 +278,7 @@ struct MainView: View {
                 selectedDay: $selectedDay,
                 month: $month,
                 tasks: store.state.tasks,
+                courses: store.state.courses,
                 fixed: store.state.fixedEvents
             ) {
                 withAnimation(reduceMotion ? nil : PlannerTheme.spring) { page = .calendar }
@@ -432,33 +433,16 @@ struct MainView: View {
         }
     }
 
-    private var dayTasks: [ScheduledTask] {
-        let start = Calendar.current.startOfDay(for: selectedDay)
-        let end = Calendar.current.date(byAdding: .day, value: 1, to: start)!
-        return store.state.tasks.filter {
-            $0.start >= start && $0.start < end &&
-            (store.course($0.courseID)?.isArchived == false || !$0.isUnconfirmed)
-        }
-    }
-
-    private var dayEvents: [FixedEvent] {
-        store.state.fixedEvents.filter { $0.occurs(on: selectedDay, calendar: .current) }
-    }
-
-    private var skippedDayEvents: [FixedEvent] {
-        store.state.fixedEvents.filter {
-            $0.occurs(on: selectedDay, calendar: .current, includingExcluded: true) &&
-            !$0.occurs(on: selectedDay, calendar: .current)
-        }.sorted { $0.startMinute < $1.startMinute }
-    }
-
     private var canChangeDayEvents: Bool {
         Calendar.current.startOfDay(for: selectedDay) >= Calendar.current.startOfDay(for: Date()) &&
         store.isReady
     }
 
     private var agenda: some View {
-        let items = timelineItems
+        let snapshot = CalendarDaySnapshot(state: store.state, day: selectedDay)
+        let dayTasks = snapshot.tasks, dayEvents = snapshot.events, skippedDayEvents = snapshot.skipped
+        let items = timelineItems(for: snapshot)
+        let floatingDuration = snapshot.floatingMinutes.map(hours) ?? "合计超出范围"
         return ScrollView {
             VStack(alignment: .leading, spacing: 26) {
                 ActualStudyStartEntry(store: store) {
@@ -478,9 +462,9 @@ struct MainView: View {
                 }
                 .buttonStyle(.plain)
                 .keyboardShortcut("f", modifiers: .command)
-                summaryBand
+                summaryBand(snapshot)
                 if dayEvents.contains(where: \.isFloating) {
-                    Label("浮动事项已预留 " + hours(dayEvents.filter(\.isFloating).reduce(0) { $0 + $1.occupiedMinutes }) + "；虚线学习卡片显示按当前顺序预估的起止时间，调整顺序后更新。", systemImage: "arrow.left.arrow.right")
+                    Label("浮动事项已预留 " + floatingDuration + "；虚线学习卡片显示按当前顺序预估的起止时间，调整顺序后更新。", systemImage: "arrow.left.arrow.right")
                         .font(.caption).foregroundStyle(.secondary)
                 }
                 HStack {
@@ -512,7 +496,7 @@ struct MainView: View {
                             ForEach(dayTasks.filter { !$0.isUnconfirmed }) { task in
                                 CompletedTaskRow(
                                     task: task,
-                                    course: store.course(task.courseID),
+                                    course: snapshot.course(task.courseID),
                                     undo: { Task { _ = await store.undoConfirmation(task) } }
                                 )
                             }
@@ -552,13 +536,13 @@ struct MainView: View {
         .environment(\.plannerScrollingContent, true)
     }
 
-    private var summaryBand: some View {
+    private func summaryBand(_ snapshot: CalendarDaySnapshot) -> some View {
         let confirmed = ConfirmedStudySummary(state: store.state, day: selectedDay)
         return VStack(alignment: .leading, spacing: 10) {
             HStack(spacing: 0) {
                 SummaryMetric(
                     title: "待学计划",
-                    value: studyDuration(dayTasks.filter(\.isUnconfirmed).reduce(0) { $0 + $1.durationMinutes }),
+                    value: snapshot.plannedMinutes.map(studyDuration) ?? "合计超出范围",
                     icon: "book.closed.fill",
                     color: PlannerTheme.accent
                 )
@@ -572,7 +556,7 @@ struct MainView: View {
                 metricDivider
                 SummaryMetric(
                     title: "固定事项",
-                    value: "\(dayEvents.count) 项",
+                    value: "\(snapshot.events.count) 项",
                     icon: "calendar",
                     color: .purple
                 )
@@ -895,10 +879,10 @@ struct MainView: View {
         }
     }
 
-    private var timelineItems: [TimelineItem] {
-        (dayTasks.filter(\.isUnconfirmed).map {
+    private func timelineItems(for snapshot: CalendarDaySnapshot) -> [TimelineItem] {
+        (snapshot.tasks.filter(\.isUnconfirmed).map {
             TimelineItem(id: $0.id, start: $0.start, end: $0.end, task: $0)
-        } + dayEvents.map {
+        } + snapshot.events.map {
             TimelineItem(
                 id: $0.id,
                 start: ScheduleEngine().instant(day: selectedDay, minute: $0.startMinute),
@@ -1755,6 +1739,8 @@ struct MonthCalendar: View {
     @Binding var selectedDay: Date
     @Binding var month: Date
     var tasks: [ScheduledTask]
+    /// Nil preserves all tasks in an independent compressed-plan preview.
+    var courses: [Course]? = nil
     var fixed: [FixedEvent]
     var select: () -> Void
     private let calendar = Calendar.current
@@ -1770,7 +1756,8 @@ struct MonthCalendar: View {
     var body: some View {
         let cells = self.cells
         let interval = calendar.dateInterval(of: .month, for: month)!
-        let occupiedDays = Set(tasks.lazy.filter { $0.start >= interval.start && $0.start < interval.end }
+        let visible = courses.map { CalendarDaySnapshot.visibleTasks(tasks, courses: $0) } ?? tasks
+        let occupiedDays = Set(visible.lazy.filter { $0.start >= interval.start && $0.start < interval.end }
             .map { calendar.startOfDay(for: $0.start) })
         VStack(spacing: 12) {
             HStack {
