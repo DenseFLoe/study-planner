@@ -170,6 +170,7 @@ struct NetdiskImportSheet: View {
     @State private var reader = NetdiskImportReader()
     @State private var selected = Set<String>()
     @State private var previouslyOffered = Set<String>()
+    @State private var lastScanSource = ""
     @State private var searchText = ""
     @State private var expandedGroups = Set<String>()
     @State private var mergeSelected = false
@@ -253,11 +254,18 @@ struct NetdiskImportSheet: View {
         .onDisappear { reader.stop() }
         .onChange(of: reader.revision) { _, _ in
             guard let result = reader.result else { return }
-            searchText = ""
-            expandedGroups = []
-            mergeSelected = false
-            mergeName = result.scan.displayName
+            let source = NetdiskLink.publicURL(result.scan.sourceURL)
+            let sameSource = !source.isEmpty && source == lastScanSource
+            if !sameSource {
+                searchText = ""
+                mergeSelected = false
+                mergeName = result.scan.displayName
+                selected = []
+                previouslyOffered = []
+            }
+            lastScanSource = source
             showMergedPreview = false
+            message = ""
             let autoDropped = Set(result.duplicates.droppedPackages
                 .filter { !$0.requiresReview }.map(\.droppedPackageID))
             let alreadyPresent = Set(result.duplicates.existingCourseMatches
@@ -272,9 +280,11 @@ struct NetdiskImportSheet: View {
             selected = WebCourseImportSelection.refreshed(selected: selected, previouslyOffered: previouslyOffered,
                                                          offered: offered, automaticallySelected: defaults)
             previouslyOffered = offered
-            let groups = NetdiskCourseBrowser(courses: result.courses, packages: result.scan.packages)
-                .grouped(result.courses)
-            expandedGroups = groups.children.count <= 3 ? Set(groups.children.map(\.path)) : []
+            if !sameSource {
+                let groups = NetdiskCourseBrowser(courses: result.courses, packages: result.scan.packages)
+                    .grouped(result.courses)
+                expandedGroups = groups.children.count <= 3 ? Set(groups.children.map(\.path)) : []
+            }
         }
     }
 
