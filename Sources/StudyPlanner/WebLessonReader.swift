@@ -721,6 +721,7 @@ struct WebCourseImportSheet: View {
     @State private var searchText = ""
     @State private var matchingIDs: Set<String>?
     @State private var filteredRequest: SearchRequest?
+    @State private var expandedPreviews = Set<String>()
     private let timer = Timer.publish(every: 2, on: .main, in: .common).autoconnect()
     private struct SearchRequest: Hashable { var query: String; var refreshedAt: Date? }
     private var searchRequest: SearchRequest { .init(query: searchText, refreshedAt: reader.lastRefresh) }
@@ -905,27 +906,18 @@ struct WebCourseImportSheet: View {
                 Text(problem).font(.caption).foregroundStyle(.orange)
             }
             ForEach(snapshot.issues, id: \.self) { Text($0).font(.caption).foregroundStyle(.orange) }
-            DisclosureGroup("查看课节与编排预览") {
-                if let candidate = previewState(for: snapshot), let course = candidate.courses.first(where: { $0.webCourse?.matchesIdentity(of: snapshot) == true }) {
-                    LessonSchedulePreview(state: candidate, course: course)
-                } else {
-                    ForEach(snapshot.lessons) { lesson in
-                        Text("\(lesson.name) · \(lesson.durationSeconds.map(WebLessonTiming.clock) ?? "时长待定")")
-                            .font(.caption)
-                    }
+            DisclosureGroup("查看课节与编排预览", isExpanded: Binding(
+                get: { expandedPreviews.contains(snapshot.identityKey) },
+                set: { if $0 { expandedPreviews.insert(snapshot.identityKey) } else { expandedPreviews.remove(snapshot.identityKey) } }
+            )) {
+                if expandedPreviews.contains(snapshot.identityKey) {
+                    WebCourseImportPreview(state: store.state, snapshot: snapshot, deadline: deadline)
                 }
             }
             .font(.caption)
         }
         .padding(12)
         .background(.background, in: RoundedRectangle(cornerRadius: 10))
-    }
-    private func previewState(for snapshot: WebCourseSnapshot) -> PlannerState? {
-        var candidate = store.state
-        do {
-            try candidate.importWebCourses([snapshot], deadline: deadline, now: Date())
-            return candidate
-        } catch { return nil }
     }
     private func filterCourses() async {
         let request = searchRequest
