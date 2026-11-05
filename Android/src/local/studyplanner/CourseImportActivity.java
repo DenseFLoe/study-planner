@@ -51,7 +51,7 @@ public class CourseImportActivity extends Activity {
     final Set<String> selected = new HashSet<>();
     List<JSONObject> captures = new ArrayList<>(), xuechengBase = new ArrayList<>();
     boolean netdisk, capturing, documentStart;
-    int generation;
+    volatile int generation;
     long lastRefresh;
     String pageTitle = "", failure = "";
     JSONObject directory;
@@ -185,22 +185,70 @@ public class CourseImportActivity extends Activity {
     void promise(WebView web,String expression,long timeout,Consumer<Object> done) {
         final int current=generation;final String key="__studyCapture_"+UUID.randomUUID().toString().replace("-","");final long until=System.currentTimeMillis()+timeout;
         web.evaluateJavascript("window["+JSONObject.quote(key)+"]={pending:true};Promise.resolve().then(()=> ("+expression+")).then(value=>window["+JSONObject.quote(key)+"]={value:value}).catch(()=>window["+JSONObject.quote(key)+"]={error:true});",null);
-        Runnable poll=new Runnable(){public void run(){if(isDestroyed()||current!=generation)return;if(System.currentTimeMillis()>until){failed("读取超时，请检查网络并重试。");return;}web.evaluateJavascript("JSON.stringify(Object.assign({},window["+JSONObject.quote(key)+"]||{pending:true},{status:window.__studyStatus}))",encoded->{if(isDestroyed()||current!=generation)return;try{Object outer=new JSONTokener(encoded).nextValue();if(!(outer instanceof String))throw new Exception();JSONObject value=new JSONObject((String)outer);if(value.optBoolean("pending")){if(!value.optString("status").isEmpty())status.setText(value.optString("status"));handler.postDelayed(this,350);return;}web.evaluateJavascript("delete window["+JSONObject.quote(key)+"]",null);if(value.optBoolean("error")){failed("页面读取失败。请确认已经登录、课程可见、分享提取码正确，刷新后重试。");return;}done.accept(value.opt("value"));}catch(Exception error){failed("页面返回的数据无法读取，请重试。");}});}};handler.postDelayed(poll,200);
+        Runnable poll=new Runnable(){public void run(){
+            if(isDestroyed()||current!=generation)return;
+            if(System.currentTimeMillis()>until){failed("读取超时，请检查网络并重试。");return;}
+            web.evaluateJavascript("JSON.stringify(Object.assign({},window["+JSONObject.quote(key)+"]||{pending:true},{status:window.__studyStatus}))",encoded->{
+                if(isDestroyed()||current!=generation)return;
+                intake(()->CourseCaptureIntake.envelope(encoded),value->{
+                    if(value.optBoolean("pending")){
+                        if(!value.optString("status").isEmpty())status.setText(value.optString("status"));
+                        handler.postDelayed(this,350);return;
+                    }
+                    web.evaluateJavascript("delete window["+JSONObject.quote(key)+"]",null);
+                    if(value.optBoolean("error")){failed("页面读取失败。请确认已经登录、课程可见、分享提取码正确，刷新后重试。");return;}
+                    done.accept(value.opt("value"));
+                },"页面返回的数据无法读取，请重试。");
+            });
+        }};handler.postDelayed(poll,200);
     }
+
     void capture(){if(capturing||previewing||delivering)return;generation++;capturing=true;lastRefresh=System.currentTimeMillis();refreshButton.setEnabled(false);importButton.setEnabled(false);status.setText("正在读取全部课程，请保留此窗口…");failure="";renderResults();inject(browser);
         if(netdisk){try{int folders=Integer.parseInt(folderLimit.getText().toString()),files=Integer.parseInt(fileLimit.getText().toString());if(folders<1||folders>500||files<1||files>20000)throw new Exception();String expression="studyQuarkScan("+JSONObject.quote(passcode.getText().toString())+","+folders+","+files+")";promise(browser,expression,600000,value->{if(!(value instanceof JSONObject)){failed("目录数据不完整。");return;}directory=(JSONObject)value;background(()->{List<JSONObject> values=NetdiskImport.build((JSONObject)value);NetdiskImport.compareExisting(values,PlannerRuntime.get(this).database.load());return values;});});}catch(Exception error){failed("目录上限须为1–500，条目上限须为1–20000。");}return;}
         String host=Uri.parse(browser.getUrl()==null?"":browser.getUrl()).getHost();
-        if(WebsiteCapture.isYantuHost(host)){promise(browser,"studyCourseCrawler.run()",600000,value->{try{JSONObject result=(JSONObject)value;List<JSONObject> snapshots=Planner.list(result.getJSONArray("snapshots"));if(result.optJSONArray("issues")!=null&&result.getJSONArray("issues").length()>0){failed("部分课程抓取失败，请重试后再导入。");return;}for(JSONObject snapshot:snapshots)snapshot.put("fetchedAt",snapshot.getDouble("fetchedAt")-978307200);accept(snapshots);JSONArray unavailable=result.optJSONArray("unavailable");if(unavailable!=null&&unavailable.length()>0){StringBuilder text=new StringBuilder(status.getText());text.append("\n未导入的失效或不可读取课程：");for(JSONObject item:Planner.list(unavailable))text.append("\n").append(item.optString("name")).append(" · ").append(item.optString("reason"));status.setText(text.toString());}}catch(Exception error){failed("课程列表不完整。");}});}
-        else {promise(browser,"(async()=>{const catalog=await studyXuechengCrawler.catalog(true);const activity=studyGenericCrawler.activity();return {catalog,responses:studyGenericCrawler.snapshot(),activity,url:location.href,title:document.title};})()",180000,value->{try{JSONObject result=(JSONObject)value;JSONObject activity=result.getJSONObject("activity");if(activity.optInt("pending")>0||activity.optInt("failed")>0){failed("网页请求尚未完成或有请求失败，请刷新后重试。");return;}List<JSONObject> generic=GenericCourseDigest.snapshots(result.getJSONArray("responses"),result.getString("url"),result.optString("title"),Planner.now());JSONObject catalog=result.optJSONObject("catalog");if(catalog==null)accept(generic);else xuecheng(catalog,generic);}catch(Exception error){failed("无法读取课程目录，请进入课程详情页后重试。");}});}
+        if(WebsiteCapture.isYantuHost(host)){
+            promise(browser,"studyCourseCrawler.run()",600000,value->intake(
+                ()->CourseCaptureIntake.yantu((JSONObject)value),
+                prepared->accept(prepared.values,prepared.notice),"课程列表不完整。"));
+        }else{
+            promise(browser,"(async()=>{const catalog=await studyXuechengCrawler.catalog(true);const activity=studyGenericCrawler.activity();return {catalog,responses:studyGenericCrawler.snapshot(),activity,url:location.href,title:document.title};})()",180000,value->intake(
+                ()->CourseCaptureIntake.generic((JSONObject)value,Planner.now()),prepared->{
+                    if(prepared.replay==null)accept(prepared.values);
+                    else{xuechengBase=prepared.values;readReplay(prepared.replay,prepared.replayRows,0);}
+                },"无法读取课程目录，请进入课程详情页后重试。"));
+        }
     }
-    void xuecheng(JSONObject catalog,List<JSONObject> generic){try{xuechengBase=generic;JSONObject snapshot=WebsiteCapture.xuecheng(catalog,generic,browser.getUrl(),Planner.now());readReplay(snapshot,catalog.getJSONArray("rows"),0);}catch(Exception error){failed("直播目录信息不完整。");}}
     void replayURL(WebView view,String url){try{if("view.csslcloud.net".equals(Uri.parse(url).getHost())){view.evaluateJavascript("window.webkit={messageHandlers:{replayMetadata:{postMessage:v=>window.__studyReplay=v}}};"+scripts.get("XuechengReplay"),null);}else view.evaluateJavascript("(()=>{const frame=[...document.querySelectorAll('iframe')].find(f=>{try{return new URL(f.src).hostname==='view.csslcloud.net'}catch{return false}});return frame?frame.src:null})()",encoded->{try{Object raw=new JSONTokener(encoded).nextValue();if(raw instanceof String&&https((String)raw))view.loadUrl((String)raw);}catch(Exception ignored){}});}catch(Exception ignored){}}
-    void readReplay(JSONObject snapshot,JSONArray rows,int index){try{while(index<rows.length()&&(!rows.getJSONObject(index).optBoolean("replay")||snapshot.getJSONArray("lessons").getJSONObject(index).has("durationSeconds")))index++;if(index==rows.length()){accept(WebsiteCapture.merge(xuechengBase,Collections.singletonList(snapshot)));return;}final int rowIndex=index;status.setText("正在读取直播回放 "+(index+1)+" / "+rows.length()+"…");if(replay!=null){replay.destroy();replay=null;}promise(browser,"studyXuechengCrawler.open("+index+")",30000,value->{if(!Boolean.TRUE.equals(value)){failed("回放入口无法打开，请重新进入课程详情页。");return;}pollReplay(snapshot,rows,rowIndex,System.currentTimeMillis()+45000,generation);});}catch(Exception error){failed("回放信息不完整。");}}
+    void readReplay(JSONObject snapshot,JSONArray rows,int index){try{while(index<rows.length()&&(!rows.getJSONObject(index).optBoolean("replay")||snapshot.getJSONArray("lessons").getJSONObject(index).has("durationSeconds")))index++;if(index==rows.length()){final List<JSONObject> base=xuechengBase;background(()->WebsiteCapture.merge(base,Collections.singletonList(snapshot)));return;}final int rowIndex=index;status.setText("正在读取直播回放 "+(index+1)+" / "+rows.length()+"…");if(replay!=null){replay.destroy();replay=null;}promise(browser,"studyXuechengCrawler.open("+index+")",30000,value->{if(!Boolean.TRUE.equals(value)){failed("回放入口无法打开，请重新进入课程详情页。");return;}pollReplay(snapshot,rows,rowIndex,System.currentTimeMillis()+45000,generation);});}catch(Exception error){failed("回放信息不完整。");}}
     void pollReplay(JSONObject snapshot,JSONArray rows,int index,long until,int current){if(current!=generation||isDestroyed())return;if(System.currentTimeMillis()>until){try{snapshot.getJSONArray("issues").put("回放时长未能读取："+rows.getJSONObject(index).getString("name"));readReplay(snapshot,rows,index+1);}catch(Exception error){failed("回放时长读取失败。");}return;}if(replay==null){handler.postDelayed(()->pollReplay(snapshot,rows,index,until,current),400);return;}replay.evaluateJavascript("JSON.stringify(window.__studyReplay||null)",encoded->{if(current!=generation)return;try{Object raw=new JSONTokener(encoded).nextValue();JSONObject metadata=raw instanceof String?new JSONObject((String)raw):null;if(metadata!=null&&metadata.optDouble("durationSeconds")>0&&metadata.optString("title").replaceAll("\\s+","").equals(rows.getJSONObject(index).optString("name").replaceAll("\\s+",""))){JSONObject lesson=snapshot.getJSONArray("lessons").getJSONObject(index);lesson.put("durationSeconds",metadata.getDouble("durationSeconds"));if(!lesson.has("watchedPercent")){lesson.put("watchedPercent",0);}readReplay(snapshot,rows,index+1);return;}}catch(Exception ignored){}handler.postDelayed(()->pollReplay(snapshot,rows,index,until,current),400);});}
 
     interface CaptureWork {List<JSONObject> run()throws Exception;}
-    void background(CaptureWork work){final int current=generation;worker.execute(()->{try{List<JSONObject> data=work.run();runOnUiThread(()->{if(current==generation&&!isDestroyed())accept(data);});}catch(Exception error){runOnUiThread(()->{if(current==generation&&!isDestroyed())failed("目录识别失败："+error.getMessage());});}});}
-    void accept(List<JSONObject> values){try{String host=Uri.parse(browser.getUrl()==null?"":browser.getUrl()).getHost();if(!netdisk&&host!=null&&!WebsiteCapture.isYantuHost(host))captures=WebsiteCapture.merge(captures,values);else captures=new ArrayList<>(values);Set<String> retained=CourseImportCatalog.retainedSelection(captures,selected);selected.clear();selected.addAll(retained);capturing=false;refreshButton.setEnabled(true);status.setText("识别到 "+captures.size()+" 门课程。请选择、核对课节与进度后导入；已有课程将保留完成流水。");if(values.isEmpty())status.setText(captures.isEmpty()?"尚未捕获可排程课节，请进入课程详情并展开章节，再重新抓取。":"本轮没有新的课程，已保留此前识别的课程。");renderResults();}catch(Exception error){failed("课程合并识别失败，请重试。");}}
+    /** Only decoded, current results reach the UI; callbacks never share a changing page context. */
+    <T> void intake(LatestWork.Work<T> work,Consumer<T> done,String failureMessage){
+        final int current=generation;
+        worker.execute(()->{try{
+            T value=BackgroundCancellation.call(()->current!=generation||Thread.currentThread().isInterrupted(),work::run);
+            runOnUiThread(()->{if(current!=generation||isDestroyed())return;try{done.accept(value);}catch(Exception error){failed(failureMessage);}});
+        }catch(CancellationException cancelled){
+            // Navigation or activity destruction invalidated this read-only capture.
+        }catch(Exception error){runOnUiThread(()->{if(current==generation&&!isDestroyed())
+            failed(error instanceof IllegalArgumentException?error.getMessage():failureMessage);});}});
+    }
+    void background(CaptureWork work){intake(work::run,this::accept,"目录识别失败，请重试。");}
+    void accept(List<JSONObject> values){accept(values,"");}
+    void accept(List<JSONObject> values,String notice){
+        String host=Uri.parse(browser.getUrl()==null?"":browser.getUrl()).getHost();
+        final boolean append=!netdisk&&host!=null&&!WebsiteCapture.isYantuHost(host);
+        final List<JSONObject> previous=captures;
+        final Set<String> choices=new HashSet<>(selected);
+        intake(()->CourseCaptureIntake.accept(previous,values,append,choices),prepared->{
+            captures=prepared.captures;selected.clear();selected.addAll(prepared.selected);
+            capturing=false;refreshButton.setEnabled(true);
+            String summary="识别到 "+captures.size()+" 门课程。请选择、核对课节与进度后导入；已有课程将保留完成流水。";
+            if(values.isEmpty())summary=captures.isEmpty()?"尚未捕获可排程课节，请进入课程详情并展开章节，再重新抓取。":"本轮没有新的课程，已保留此前识别的课程。";
+            status.setText(summary+notice);renderResults();
+        },"课程合并识别失败，请重试。");
+    }
     void failed(String message){capturing=false;failure=message;refreshButton.setEnabled(true);captures=Collections.emptyList();selected.clear();status.setText(message);renderResults();}
     boolean filterReady(){return !filtering&&searchResult!=null&&searchResult.isCurrent(captures,query.getText().toString());}
     void renderResults(){

@@ -42,6 +42,8 @@ mkdir -p Android/build/tests
 "$JDK/bin/javac" -cp Android/tools/json.jar:Android/build/tests -d Android/build/tests Android/src/local/studyplanner/CourseImportPreview.java Android/tests/BackgroundCancellationTests.java Android/tests/CourseImportPreviewTests.java
 "$JDK/bin/java" -cp Android/tools/json.jar:Android/build/tests local.studyplanner.BackgroundCancellationTests
 "$JDK/bin/java" -cp Android/tools/json.jar:Android/build/tests local.studyplanner.CourseImportPreviewTests
+"$JDK/bin/javac" -cp Android/tools/json.jar:Android/build/tests -d Android/build/tests Android/src/local/studyplanner/CourseCaptureIntake.java Android/tests/CourseCaptureIntakeTests.java
+"$JDK/bin/java" -cp Android/tools/json.jar:Android/build/tests local.studyplanner.CourseCaptureIntakeTests
 
 "$JDK/bin/javac" -cp Android/tools/json.jar:Android/build/tests -d Android/build/tests Android/src/local/studyplanner/CourseImportDetails.java Android/tests/CourseImportDetailsTests.java
 "$JDK/bin/java" -cp Android/tools/json.jar:Android/build/tests local.studyplanner.CourseImportDetailsTests
