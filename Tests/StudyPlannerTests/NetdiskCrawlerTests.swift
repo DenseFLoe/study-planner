@@ -392,6 +392,30 @@ final class QuarkCrawlerScriptTests: XCTestCase {
     }
 
     @MainActor
+    func testNativeTransportPreservesShareAndPasscodeInPageRequest() async throws {
+        let transport = WebViewNetdiskTransport()
+        defer { transport.stop() }
+        let view = transport.webView
+        try await ready(view)
+        _ = try await view.callAsyncJavaScript("""
+            window.fetch = async (url, init) => {
+              window.studyCapturedTokenBody = init.body;
+              return new Response('{"status":200,"code":0}', {status: 200});
+            };
+            """, arguments: [:], in: nil, contentWorld: .page)
+        let passcode = "synthetic-'\"\\测试"
+        _ = try await transport.post(path: "/1/clouddrive/share/sharepage/token", query: [:],
+                                     body: ["pwd_id": .string("abc123"), "passcode": .string(passcode),
+                                            "support_visit_limit_private_share": .bool(true)])
+        let captured = try await view.evaluateJavaScript("window.studyCapturedTokenBody") as? String
+        let body = try XCTUnwrap(captured?.data(using: .utf8))
+        let json = try XCTUnwrap(try JSONSerialization.jsonObject(with: body) as? [String: Any])
+        XCTAssertEqual(json["pwd_id"] as? String, "abc123")
+        XCTAssertEqual(json["passcode"] as? String, passcode)
+        XCTAssertEqual(json["support_visit_limit_private_share"] as? Bool, true)
+    }
+
+    @MainActor
     func testPageEnvelopeErrorsBecomeReadableErrors() throws {
         let failing = Data(#"{"ok":false,"error":"页面请求失败：TypeError"}"#.utf8)
         XCTAssertThrowsError(try WebViewNetdiskTransport.payload(fromPage: failing)) { error in

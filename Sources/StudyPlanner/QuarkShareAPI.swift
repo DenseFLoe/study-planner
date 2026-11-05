@@ -1,27 +1,6 @@
 import Foundation
 import StudyCore
 
-/// A JSON value that is safe to send across actors.
-enum NetdiskJSON: Sendable {
-    case string(String), number(Double), bool(Bool)
-    var anyValue: Any {
-        switch self {
-        case .string(let value): return value
-        case .number(let value): return value
-        case .bool(let value): return value
-        }
-    }
-    var javaScriptLiteral: String {
-        switch self {
-        case .string(let value):
-            guard let data = try? JSONSerialization.data(withJSONObject: value) else { return "null" }
-            return String(decoding: data, as: UTF8.self)
-        case .number(let value): return String(value)
-        case .bool(let value): return value ? "true" : "false"
-        }
-    }
-}
-
 /// How the crawler talks to the netdisk. Public shares use the plain transport; shares that
 /// require a signed-in session can fall back to requests from the embedded WebView.
 protocol NetdiskTransport: Sendable {
