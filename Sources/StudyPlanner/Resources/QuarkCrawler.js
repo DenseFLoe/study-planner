@@ -5,7 +5,7 @@
 (() => {
   if (window.studyQuarkCrawler) return;
 
-  const base = '/1/clouddrive/';
+  const base = '/1/clouddrive/share/sharepage/';
   const baseQuery = { pr: 'ucpro', fr: 'pc', uc_param_str: '' };
   let requests = 0;
 
@@ -18,7 +18,10 @@
   }
 
   async function call(path, query, body) {
-    if (typeof path !== 'string' || path.indexOf(base) !== 0) {
+    if (location.origin !== 'https://pan.quark.cn') {
+      return { ok: false, error: '当前页面不是夸克分享页面，请重新打开分享链接。' };
+    }
+    if (path !== base + (body === undefined ? 'detail' : 'token')) {
       return { ok: false, error: '拒绝访问非网盘接口：' + String(path) };
     }
     const url = path + '?' + queryString(query);
@@ -27,6 +30,8 @@
     const init = {
       method: body === undefined ? 'GET' : 'POST',
       credentials: 'include',
+      mode: 'same-origin',
+      redirect: 'error',
       signal: controller.signal,
       headers: { 'Accept': 'application/json, text/plain, */*' }
     };

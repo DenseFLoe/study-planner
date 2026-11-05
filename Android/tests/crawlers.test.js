@@ -54,6 +54,32 @@ async function run(detail, folders = 60, files = 2000, host = 'pan.quark.cn', ha
     verify(android.equals(expected),name+' packaged adapter diverged');
     new vm.Script(android.toString());
   }
+  // Recheck the actual page origin for every call, including after navigation.
+  const bridge = origin => {
+    const sent=[];
+    const context={window:{},location:{origin},AbortController,setTimeout,clearTimeout,
+      fetch:async(url,init)=>{sent.push({url,init});return {status:200,text:async()=>'{"code":0}'};}};
+    vm.createContext(context);vm.runInContext(readCrawler('QuarkCrawler').toString(),context);
+    return {context,sent,api:context.window.studyQuarkCrawler};
+  };
+  for(const origin of ['https://example.test','http://pan.quark.cn','https://pan.quark.cn:444','https://pan.quark.cn.example.test','null']){
+    const page=bridge(origin);
+    verify(!(await page.api.post('/1/clouddrive/share/sharepage/token',{}, {passcode:'SYNTHETIC'})).ok,'Foreign page accepted credentials');
+    verify(!(await page.api.get('/1/clouddrive/share/sharepage/detail',{stoken:'SYNTHETIC'})).ok,'Foreign page accepted token');
+    verify(page.sent.length===0,'Foreign page performed a request');
+  }
+  const page=bridge('https://pan.quark.cn');
+  verify((await page.api.get('/1/clouddrive/share/sharepage/detail',{pwd_id:'abc123'})).ok,'Share listing refused');
+  verify((await page.api.post('/1/clouddrive/share/sharepage/token',{}, {passcode:'SYNTHETIC'})).ok,'Token request refused');
+  verify(page.sent.every(call=>call.init.mode==='same-origin'&&call.init.redirect==='error'),'Requests could follow an unexpected origin');
+  for(const target of ['/1/clouddrive/file/delete','/1/clouddrive/share/sharepage/../../file/delete','https://example.test/','/1/clouddrive/share/sharepage/token']){
+    verify(!(await page.api.get(target,{})).ok,'Unexpected API or method accepted');
+  }
+  verify(!(await page.api.post('/1/clouddrive/share/sharepage/detail',{},{})).ok,'Unexpected POST accepted');
+  page.context.location.origin='https://example.test';
+  verify(!(await page.api.post('/1/clouddrive/share/sharepage/token',{}, {passcode:'SYNTHETIC'})).ok,'Navigation did not invalidate credentials destination');
+  verify(page.sent.length===2,'Rejected requests reached fetch');
+
   // A catalog WebView and a replay WebView do not share window globals.
   // Exercise both packaged entry points in fresh contexts, rather than only
   // checking source equality (which missed the new classifier dependency).

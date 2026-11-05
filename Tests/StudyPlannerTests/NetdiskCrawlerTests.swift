@@ -344,9 +344,9 @@ final class NetdiskCrawlerTests: XCTestCase {
 /// Drives the real injected script inside WebKit, the same way the app runs it.
 final class QuarkCrawlerScriptTests: XCTestCase {
     @MainActor
-    private func ready(_ webView: WKWebView) async throws {
+    private func ready(_ webView: WKWebView, baseURL: String = "https://pan.quark.cn/s/48d8818e6cc0") async throws {
         webView.loadHTMLString("<html><body>夸克抓取器测试</body></html>",
-                               baseURL: URL(string: "https://pan.quark.cn/s/48d8818e6cc0")!)
+                               baseURL: URL(string: baseURL)!)
         for _ in 0..<60 {
             if (try? await webView.evaluateJavaScript("typeof window.studyQuarkCrawler")) as? String == "object" {
                 return
@@ -364,6 +364,45 @@ final class QuarkCrawlerScriptTests: XCTestCase {
             WKUserScript(source: WebViewNetdiskTransport.script, injectionTime: .atDocumentEnd,
                          forMainFrameOnly: true))
         return WKWebView(frame: .zero, configuration: configuration)
+    }
+
+    @MainActor
+    func testPageAndNativeTransportRefuseOtherOriginsBeforeSendingCredentials() async throws {
+        let transport = WebViewNetdiskTransport()
+        defer { transport.stop() }
+        try await ready(transport.webView, baseURL: "https://example.test/share")
+        let result = try await transport.webView.callAsyncJavaScript("""
+            let sent = false;
+            window.fetch = async () => { sent = true; throw Error('must not send'); };
+            const answer = await window.studyQuarkCrawler.post('/1/clouddrive/share/sharepage/token', {},
+                                                               {pwd_id:'abc123',passcode:'synthetic'});
+            return JSON.stringify({sent,answer});
+            """, arguments: [:], in: nil, contentWorld: .page) as? String
+        let data = try XCTUnwrap(result?.data(using: .utf8))
+        let decoded = try XCTUnwrap(try JSONSerialization.jsonObject(with: data) as? [String: Any])
+        XCTAssertEqual(decoded["sent"] as? Bool, false)
+        XCTAssertEqual((decoded["answer"] as? [String: Any])?["ok"] as? Bool, false)
+        do {
+            _ = try await transport.post(path: "/1/clouddrive/share/sharepage/token", query: [:],
+                                         body: ["passcode": .string("synthetic")])
+            XCTFail("Native transport accepted a different origin")
+        } catch {
+            guard let apiError = error as? NetdiskAPIError, case .notLoggedIn = apiError else {
+                return XCTFail("Unexpected error: \(error)")
+            }
+        }
+    }
+
+    func testNativeTransportOriginIncludesSchemePortAndHost() {
+        for value in ["https://pan.quark.cn/s/abc123", "https://pan.quark.cn:443/s/abc123"] {
+            XCTAssertTrue(WebViewNetdiskTransport.allowsPage(URL(string: value)))
+        }
+        for value in ["http://pan.quark.cn/s/abc123", "https://pan.quark.cn:444/s/abc123",
+                      "https://pan.quark.cn.example.test/", "https://example.test/",
+                      "https://account@pan.quark.cn/", "file:///tmp/share", "about:blank"] {
+            XCTAssertFalse(WebViewNetdiskTransport.allowsPage(URL(string: value)))
+        }
+        XCTAssertFalse(WebViewNetdiskTransport.allowsPage(nil))
     }
 
     @MainActor

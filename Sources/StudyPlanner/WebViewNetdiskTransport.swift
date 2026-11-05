@@ -63,9 +63,15 @@ final class WebViewNetdiskTransport: NSObject, NetdiskTransport, WKScriptMessage
         return Data((envelope.text ?? "").utf8)
     }
 
+    nonisolated static func allowsPage(_ url: URL?) -> Bool {
+        guard let url else { return false }
+        return url.scheme?.lowercased() == "https" && url.host?.lowercased() == "pan.quark.cn"
+            && (url.port == nil || url.port == 443) && url.user == nil && url.password == nil
+    }
+
     private func call(path: String, query: [String: String], body: [String: NetdiskJSON]?) async throws -> Data {
-        guard webView.url != nil else {
-            throw NetdiskAPIError.notLoggedIn("请先在右侧打开分享链接，等页面加载完成后再读取。")
+        guard Self.allowsPage(webView.url) else {
+            throw NetdiskAPIError.notLoggedIn("请先在右侧打开夸克分享链接，等页面加载完成后再读取。")
         }
         let requestID = UUID().uuidString
         let script: String
