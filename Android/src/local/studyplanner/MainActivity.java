@@ -331,7 +331,7 @@ public class MainActivity extends Activity {
             LinearLayout skipped=card(body);cardBorder(skipped,color(e.optString("color","orange")));skipped.addView(text(e.optString("title")+" · 本日已临时移除",16,muted));
             skipped.addView(text(Planner.time(e.optInt("startMinute"))+" — "+Planner.time(e.optInt("endMinute"))+" · 本日不占用时间，其他日期照常安排",12,muted));
             final LocalDate date=selected;
-            if(!date.isBefore(LocalDate.now(Planner.ZONE)))skipped.addView(pill("恢复本日并重排",()->mutate(s->FixedEventEditing.setSkipped(s,e,date,false,Planner.now()),true,null)));
+            if(!date.isBefore(LocalDate.now(Planner.ZONE)))skipped.addView(pill("恢复本日并重排",()->FixedOccurrenceRecoveryPanel.restore(this,e,date)));
         }
     }
     void learning()throws Exception{

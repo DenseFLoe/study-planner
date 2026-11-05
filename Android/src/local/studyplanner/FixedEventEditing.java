@@ -65,6 +65,40 @@ public final class FixedEventEditing {
         Planner.setEventSkipped(state, latest.getString("id"), date, skipped, now);
     }
 
+    static boolean canRestoreSkipping(LocalDate date, List<Planner.EventConflict> conflicts) {
+        return !conflicts.isEmpty() && conflicts.stream().allMatch(item -> date.equals(item.date) && !"active".equals(item.reason));
+    }
+
+    /** Restore one occurrence, with consent limited to the current reviewed occupants. */
+    public static void restoreOccurrence(JSONObject state, JSONObject displayed, LocalDate date, double now,
+                                         List<Planner.EventConflict> reviewed) throws Exception {
+        JSONObject latest = current(state, displayed);
+        // Unlike a stale editor, another peer restoring this same occurrence is a
+        // safe no-op. Still reject changes to the occurrence the user actually saw.
+        if (!Planner.occurs(displayed, date, true) || !Planner.occurs(latest, date, true)
+                || !displayed.optString("title").equals(latest.optString("title"))
+                || displayed.getInt("startMinute") != latest.getInt("startMinute")
+                || displayed.getInt("endMinute") != latest.getInt("endMinute")
+                || Planner.floating(displayed) != Planner.floating(latest)
+                || Planner.occupied(displayed) != Planner.occupied(latest))
+            throw new IllegalArgumentException("这一天的固定事项已有变化，未执行恢复。请刷新日程并核对后重试。");
+        JSONObject next = CourseTools.copy(state);
+        try {
+            Planner.setEventSkipped(next, latest.getString("id"), date, false, now);
+        } catch (Planner.EventConflictException error) {
+            if (reviewed == null || !signature(error.conflicts).equals(signature(reviewed))
+                    || !canRestoreSkipping(date, error.conflicts))
+                throw new ReviewRequired(latest, error.conflicts);
+            // Publish only after both sides validate: a failed retry cannot leave
+            // some occupants skipped, split a rule, or change another date.
+            for (Planner.EventConflict conflict : error.conflicts)
+                Planner.setEventSkipped(next, conflict.eventID, date, true, now);
+            Planner.setEventSkipped(next, latest.getString("id"), date, false, now);
+        }
+        // A disappeared conflict needs no skip; never replay old choices blindly.
+        state.put("fixedEvents", next.getJSONArray("fixedEvents"));
+    }
+
     static String schedulingInputs(JSONObject event) throws Exception {
         JSONObject value = CourseTools.copy(event);
         for (String key : new String[]{"title", "notes", "color"}) value.remove(key);
