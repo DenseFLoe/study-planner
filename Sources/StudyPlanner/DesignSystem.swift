@@ -16,17 +16,22 @@ enum PlannerTheme {
 }
 
 /// Keep the agenda readable by giving up secondary columns before text space.
-struct PlannerWindowLayout {
+struct PlannerWindowLayout: Equatable {
     static let minimumWidth: CGFloat = 680
     static let sidebarWidth: CGFloat = 232
     static let insightsWidth: CGFloat = 330
-    var width: CGFloat
+    let showsSidebar: Bool
+    let showsInsights: Bool
+    let compactContent: Bool
+    let compactAgenda: Bool
 
-    var showsSidebar: Bool { width >= 960 }
-    var showsInsights: Bool { width >= PlannerTheme.referenceWindowWidth }
-    var contentWidth: CGFloat { width - (showsSidebar ? Self.sidebarWidth + 1 : 0) }
-    var agendaWidth: CGFloat {
-        contentWidth - (showsInsights ? Self.insightsWidth + 1 : 0)
+    init(width: CGFloat) {
+        showsSidebar = width >= 960
+        showsInsights = width >= PlannerTheme.referenceWindowWidth
+        let contentWidth = width - (showsSidebar ? Self.sidebarWidth + 1 : 0)
+        let agendaWidth = contentWidth - (showsInsights ? Self.insightsWidth + 1 : 0)
+        compactContent = contentWidth < 900
+        compactAgenda = agendaWidth < 760
     }
 }
 

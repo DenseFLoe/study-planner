@@ -32,6 +32,7 @@ enum EditorSheet: Identifiable {
 
 struct MainView: View {
     @Bindable var store: PlannerStore
+    @State private var layout = PlannerWindowLayout(width: PlannerTheme.referenceWindowWidth)
     @State private var page = Page.calendar
     @State private var selectedDay = Calendar.current.startOfDay(for: Date())
     @State private var month = Date()
@@ -50,8 +51,6 @@ struct MainView: View {
     @State private var courseOrder = CourseCatalogOrder.deadline
     @State private var matchingCourses: [Course] = []
     @State private var displayedCourseInput: CourseCatalogInput?
-    @AppStorage("dailyStudyLoadWarningMinutes") private var dailyLoadWarningMinutes = 480
-    @Namespace private var navigationSelection
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
@@ -70,15 +69,15 @@ struct MainView: View {
     }
 
     var body: some View {
-        GeometryReader { geometry in
-            let layout = PlannerWindowLayout(width: geometry.size.width)
-            windowContent(layout)
-                .onChange(of: layout.showsSidebar) { _, visible in
-                    if visible { showingNavigation = false }
-                }
-                .onChange(of: layout.showsInsights) { _, visible in
-                    if visible { showingInsights = false }
-                }
+        windowContent(layout)
+        // Observe only layout decisions, not every pixel of a live resize. The
+        // parent otherwise rebuilds the agenda and both panels on each frame.
+        .onGeometryChange(for: PlannerWindowLayout.self) { geometry in
+            PlannerWindowLayout(width: geometry.size.width)
+        } action: { newLayout in
+            layout = newLayout
+            if newLayout.showsSidebar { showingNavigation = false }
+            if newLayout.showsInsights { showingInsights = false }
         }
         .background { PlannerGlassBackdrop() }
         .animation(reduceMotion ? nil : PlannerTheme.spring, value: page)
@@ -214,7 +213,7 @@ struct MainView: View {
                         )
                     } else {
                         pageContent(layout)
-                            .environment(\.plannerCompactContent, layout.contentWidth < 900)
+                            .environment(\.plannerCompactContent, layout.compactContent)
                             .id(page)
                             .transition(.opacity.combined(with: .move(edge: .bottom)))
                     }
@@ -230,7 +229,7 @@ struct MainView: View {
         case .calendar:
             HStack(spacing: 0) {
                 agenda.frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .environment(\.plannerCompactContent, layout.agendaWidth < 760)
+                    .environment(\.plannerCompactContent, layout.compactAgenda)
                 if layout.showsInsights {
                     Rectangle().fill(PlannerTheme.hairline).frame(width: 1)
                     insightsPanel.frame(width: PlannerWindowLayout.insightsWidth)
@@ -243,120 +242,8 @@ struct MainView: View {
     }
 
     private var sidebar: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            HStack(spacing: 12) {
-                ZStack {
-                    Image(systemName: "calendar.badge.clock")
-                        .font(.system(size: 18, weight: .semibold))
-                        .foregroundStyle(.white)
-                }
-                .frame(width: 38, height: 38)
-                .liquidGlass(
-                    in: RoundedRectangle(cornerRadius: 11, style: .continuous),
-                    tint: PlannerTheme.accent
-                )
-                .shadow(color: PlannerTheme.accent.opacity(0.22), radius: 10, y: 4)
-
-                Text("学习日程")
-                    .font(.system(size: 18, weight: .bold, design: .rounded))
-            }
-            .padding(.horizontal, 18)
-            .padding(.top, 18)
-            .padding(.bottom, 20)
-
-            VStack(spacing: 5) {
-                ForEach(Page.allCases, id: \.self) { item in
-                    Button {
-                        showingNavigation = false
-                        withAnimation(reduceMotion ? nil : PlannerTheme.spring) { page = item }
-                    } label: {
-                        HStack(spacing: 12) {
-                            Image(systemName: icon(item))
-                                .font(.system(size: 15, weight: .semibold))
-                                .frame(width: 20)
-                            Text(item.rawValue)
-                                .font(.system(size: 14, weight: page == item ? .semibold : .medium))
-                            Spacer()
-                        }
-                        .foregroundStyle(page == item ? Color.white : Color.primary.opacity(0.72))
-                        .padding(.horizontal, 13)
-                        .frame(height: 42)
-                        .background {
-                            if page == item {
-                                Color.clear
-                                    .liquidGlass(
-                                        in: RoundedRectangle(cornerRadius: 12, style: .continuous),
-                                        tint: PlannerTheme.accent,
-                                        interactive: true,
-                                        fallbackMaterial: .thinMaterial
-                                    )
-                                    .matchedGeometryEffect(id: "navigation", in: navigationSelection)
-                                    .shadow(color: PlannerTheme.accent.opacity(0.18), radius: 10, y: 4)
-                            }
-                        }
-                        .contentShape(Rectangle())
-                    }
-                    .buttonStyle(.plain)
-                }
-            }
-            .padding(.horizontal, 12)
-
-            Rectangle()
-                .fill(PlannerTheme.hairline)
-                .frame(height: 1)
-                .padding(.horizontal, 18)
-                .padding(.vertical, 18)
-
-            MonthCalendar(
-                selectedDay: $selectedDay,
-                month: $month,
-                tasks: store.state.tasks,
-                courses: store.state.courses,
-                fixed: store.state.fixedEvents
-            ) {
-                showingNavigation = false
-                withAnimation(reduceMotion ? nil : PlannerTheme.spring) { page = .calendar }
-            }
-            .padding(.horizontal, 16)
-
-            if !store.reviewTasks.isEmpty {
-                Button { sheet = .review } label: {
-                    HStack(spacing: 10) {
-                        Image(systemName: "checkmark.circle.fill")
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text("学习完成确认").fontWeight(.semibold)
-                            Text("\(store.reviewTasks.count) 项计划待确认").font(.caption)
-                        }
-                        Spacer()
-                        Image(systemName: "chevron.right").font(.caption.bold())
-                    }
-                    .padding(12)
-                    .foregroundStyle(.orange)
-                    .background(Color.orange.opacity(0.10), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
-                }
-                .buttonStyle(.plain)
-                .padding(.horizontal, 14)
-                .padding(.top, 16)
-            }
-
-            Spacer(minLength: 12)
-
-            VStack(alignment: .leading, spacing: 5) {
-                Text("持续的努力").font(.caption.weight(.semibold))
-                Text("会让平凡的日子发光。").font(.caption)
-            }
-            .foregroundStyle(.tertiary)
-            .padding(18)
-        }
-        .background(.ultraThinMaterial)
-        .overlay(alignment: .trailing) {
-            LinearGradient(
-                colors: [Color.white.opacity(0.48), PlannerTheme.hairline, Color.clear],
-                startPoint: .top,
-                endPoint: .bottom
-            )
-            .frame(width: 1)
-        }
+        CalendarNavigationView(store: store, page: $page, selectedDay: $selectedDay,
+                               month: $month, sheet: $sheet, showingNavigation: $showingNavigation)
     }
 
     private func header(_ layout: PlannerWindowLayout) -> some View {
@@ -509,250 +396,12 @@ struct MainView: View {
         }
     }
 
-    private var canChangeDayEvents: Bool {
-        Calendar.current.startOfDay(for: selectedDay) >= Calendar.current.startOfDay(for: Date()) &&
-        store.isReady
-    }
-
     private var agenda: some View {
-        let snapshot = CalendarDaySnapshot(state: store.state, day: selectedDay)
-        let dayTasks = snapshot.tasks, dayEvents = snapshot.events, skippedDayEvents = snapshot.skipped
-        let items = timelineItems(for: snapshot)
-        let floatingDuration = snapshot.floatingMinutes.map(hours) ?? "合计超出范围"
-        return ScrollView {
-            VStack(alignment: .leading, spacing: 26) {
-                ActualStudyStartEntry(store: store) {
-                    selectedDay = Calendar.current.startOfDay(for: Date())
-                    month = selectedDay
-                }
-                Button { sheet = .scheduleSearch } label: {
-                    HStack {
-                        Image(systemName: "magnifyingglass")
-                        Text("搜索课程或课时，查找安排日期")
-                            .lineLimit(1)
-                            .minimumScaleFactor(0.6)
-                        Spacer()
-                        Text("⌘F").font(.caption)
-                    }
-                    .foregroundStyle(.secondary)
-                    .padding(14)
-                    .plannerSurface(radius: 14, material: .thinMaterial, shadow: false)
-                }
-                .buttonStyle(.plain)
-                .keyboardShortcut("f", modifiers: .command)
-                summaryBand(snapshot)
-                if dayEvents.contains(where: \.isFloating) {
-                    Label("浮动事项已预留 " + floatingDuration + "；虚线学习卡片显示按当前顺序预估的起止时间，调整顺序后更新。", systemImage: "arrow.left.arrow.right")
-                        .font(.caption).foregroundStyle(.secondary)
-                }
-                HStack(alignment: .top, spacing: 12) {
-                    VStack(alignment: .leading, spacing: 5) {
-                        Text(Calendar.current.isDateInToday(selectedDay)
-                             ? (store.state.settings.actualStudyStart(on: Date()) == nil ? "今天的安排" : "新课表 · 今天")
-                             : "当天的安排")
-                            .font(.system(size: 19, weight: .bold, design: .rounded))
-                        Text("\(items.count) 项任务 · 长按课程可拖动交换")
-                            .font(.caption).foregroundStyle(.secondary)
-                    }
-                    Spacer()
-                    DayAgendaCopyButton(day: selectedDay, state: store.state)
-                        .fixedSize()
-                }
-
-                if dayTasks.isEmpty && dayEvents.isEmpty {
-                    emptyAgenda
-                } else {
-                    DailyTaskTimeline(
-                        store: store, items: items, canEdit: canChangeDayEvents,
-                        editTask: { sheet = .completion($0) },
-                        editEvent: { sheet = .fixed($0) },
-                        skipEvent: { event in Task { await store.setEventSkipped(event, on: selectedDay, skipped: true) } }
-                    )
-                    .id(selectedDay)
-
-                    if dayTasks.contains(where: { !$0.isUnconfirmed }) {
-                        PlannerSectionTitle(title: "完成记录", detail: "不再占用时间")
-                            .padding(.top, 2)
-                        VStack(spacing: 10) {
-                            ForEach(dayTasks.filter { !$0.isUnconfirmed }) { task in
-                                CompletedTaskRow(
-                                    task: task,
-                                    course: snapshot.course(task.courseID),
-                                    undo: { Task { _ = await store.undoConfirmation(task) } }
-                                )
-                            }
-                        }
-                    }
-
-                    Text("可提前确认未来任务；未完成的学习量会在剩余日期中重新分配。")
-                        .font(.caption)
-                        .foregroundStyle(.tertiary)
-                        .padding(.leading, 76)
-                }
-                if !skippedDayEvents.isEmpty {
-                    PlannerSectionTitle(title: "本日已临时移除", detail: "仅影响这一天，其他日期照常安排")
-                    ForEach(skippedDayEvents) { event in
-                        HStack {
-                            VStack(alignment: .leading, spacing: 4) {
-                                Text(event.title).font(.headline)
-                                Text("\(clockTime(event.startMinute))–\(clockTime(event.endMinute)) · 本日不占用时间")
-                                    .font(.caption).foregroundStyle(.secondary)
-                            }
-                            Spacer()
-                            Button("恢复本日并重排", systemImage: "arrow.uturn.backward") {
-                                let day = selectedDay
-                                Task {
-                                    if !(await store.restoreEventOccurrence(event, on: day)),
-                                       let conflicts = store.pendingEventConflicts, !conflicts.isEmpty {
-                                        sheet = .restoreOccurrence(event, day, conflicts)
-                                    }
-                                }
-                            }
-                            .disabled(!canChangeDayEvents)
-                        }
-                        .padding(14)
-                        .plannerSurface(radius: 14, material: .thinMaterial, shadow: false)
-                    }
-                }
-            }
-            .padding(.horizontal, PlannerTheme.pagePadding)
-            .padding(.top, 8)
-            .padding(.bottom, 30)
-        }
-        .scrollIndicators(.hidden)
-        .environment(\.plannerScrollingContent, true)
-    }
-
-    private func summaryBand(_ snapshot: CalendarDaySnapshot) -> some View {
-        let confirmed = ConfirmedStudySummary(state: store.state, day: selectedDay)
-        return VStack(alignment: .leading, spacing: 10) {
-            HStack(spacing: 0) {
-                SummaryMetric(
-                    title: "待学计划",
-                    value: snapshot.plannedMinutes.map(studyDuration) ?? "合计超出范围",
-                    icon: "book.closed.fill",
-                    color: PlannerTheme.accent
-                )
-                metricDivider
-                SummaryMetric(
-                    title: "实际已学",
-                    value: confirmed.value,
-                    icon: "checkmark",
-                    color: .teal
-                )
-                metricDivider
-                SummaryMetric(
-                    title: "固定事项",
-                    value: "\(snapshot.events.count) 项",
-                    icon: "calendar",
-                    color: .purple
-                )
-            }
-            .padding(.vertical, 15)
-            .plannerSurface(radius: 18, material: .thinMaterial)
-            Text(confirmed.note)
-                .font(.caption)
-                .foregroundStyle(confirmed.ambiguousRecordCount > 0 || confirmed.minutes == nil ? Color.orange : .secondary)
-                .fixedSize(horizontal: false, vertical: true)
-        }
-    }
-
-    private var metricDivider: some View {
-        Rectangle().fill(PlannerTheme.hairline).frame(width: 1, height: 54)
-    }
-
-    private var emptyAgenda: some View {
-        VStack(spacing: 15) {
-            ZStack {
-                Circle().fill(PlannerTheme.accent.opacity(0.10))
-                Image(systemName: "sun.max.fill")
-                    .font(.system(size: 30, weight: .light))
-                    .foregroundStyle(PlannerTheme.accent)
-            }
-            .frame(width: 66, height: 66)
-
-            Text(store.courses.isEmpty ? "从第一门课程开始" : "这一天还没有安排")
-                .font(.title3.bold())
-            Text(store.courses.isEmpty ? "添加课程和截止日期，让学习计划自动生成。" : "可以查看其他日期，或调整可学习时间。")
-                .foregroundStyle(.secondary)
-            Button("添加学习课程") { newCourse() }
-                .buttonStyle(SoftButtonStyle(prominent: true))
-            if store.state.canLoadExample {
-                Button("载入示例，体验自动排程") { Task { await store.loadExample() } }.buttonStyle(.link)
-            }
-        }
-        .frame(maxWidth: .infinity)
-        .padding(.vertical, 54)
+        CalendarAgendaView(store: store, selectedDay: $selectedDay, month: $month, sheet: $sheet)
     }
 
     private var insightsPanel: some View {
-        ScrollView {
-            VStack(spacing: 16) {
-                VStack(alignment: .leading, spacing: 10) {
-                    if let task = store.state.firstUnconfirmedTask(on: selectedDay) {
-                        Text(task.lessonName ?? store.course(task.courseID)?.name ?? "待学习课程")
-                            .font(.subheadline.weight(.semibold))
-                            .fixedSize(horizontal: false, vertical: true)
-                        Text("当前所选日期的首项未确认课程 · \(studyDuration(task.durationMinutes))")
-                            .font(.caption).foregroundStyle(.secondary)
-                    }
-                    Button {
-                        Task {
-                            if await store.continueStudying(on: selectedDay) {
-                                selectedDay = Calendar.current.startOfDay(for: Date())
-                                month = selectedDay
-                            }
-                        }
-                    } label: {
-                        Label("继续上课", systemImage: "play.fill")
-                            .frame(maxWidth: .infinity)
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .disabled(!store.isReady || store.orderSaveBusy ||
-                        Calendar.current.startOfDay(for: selectedDay) < Calendar.current.startOfDay(for: Date()) ||
-                        store.state.firstUnconfirmedTask(on: selectedDay) == nil)
-                    .help("把当前查看课表中最上方的未确认课程移到现在（向上取整到分钟），保留该板块时长并重排后续课程；固定事项和已确认进度保留，空档不足时保留原课表")
-                    ImmediateStudyMenu(store: store) {
-                        selectedDay = Calendar.current.startOfDay(for: Date())
-                        month = selectedDay
-                    }
-                }
-                .padding(14).plannerSurface()
-
-                if let health = ScheduleHealthAnalyzer().assess(state: store.state, result: store.result, now: Date(), heavyDayMinutes: dailyLoadWarningMinutes) {
-                    ScheduleHealthWarning(health: health, adjustments: store.result.adjustments, showDetails: { sheet = .risks })
-                }
-
-                CourseProgressPanel(
-                    courses: store.courses,
-                    demands: store.result.demands,
-                    completedMinutes: { store.state.completedMinutes(for: $0) },
-                    edit: { sheet = .course($0) }
-                )
-
-                WeeklyStudyChart(
-                    selectedDay: $selectedDay,
-                    month: $month,
-                    state: store.state,
-                    tasks: store.state.tasks,
-                    courses: store.courses
-                )
-
-                if !store.courses.isEmpty { DailyConsequencesView(store: store) }
-
-                Label("计划会随学习进度动态变化", systemImage: "arrow.triangle.2.circlepath")
-                    .font(.caption)
-                    .foregroundStyle(.tertiary)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.horizontal, 4)
-            }
-            .padding(.horizontal, 18)
-            .padding(.top, 8)
-            .padding(.bottom, 24)
-        }
-        .scrollIndicators(.hidden)
-        .background(.ultraThinMaterial)
-        .environment(\.plannerScrollingContent, true)
+        CalendarInsightsView(store: store, selectedDay: $selectedDay, month: $month, sheet: $sheet)
     }
 
     private var courseList: some View {
@@ -972,23 +621,6 @@ struct MainView: View {
         }
     }
 
-    private func timelineItems(for snapshot: CalendarDaySnapshot) -> [TimelineItem] {
-        (snapshot.tasks.filter(\.isUnconfirmed).map {
-            TimelineItem(id: $0.id, start: $0.start, end: $0.end, task: $0)
-        } + snapshot.events.map {
-            TimelineItem(
-                id: $0.id,
-                start: ScheduleEngine().instant(day: selectedDay, minute: $0.startMinute),
-                end: ScheduleEngine().instant(day: selectedDay, minute: $0.endMinute),
-                event: $0
-            )
-        }).sorted {
-            let lhs = $0.task?.start ?? $0.start
-            let rhs = $1.task?.start ?? $1.start
-            return lhs != rhs ? lhs < rhs : $0.id.uuidString < $1.id.uuidString
-        }
-    }
-
     private func moveDay(_ step: Int) {
         withAnimation(reduceMotion ? nil : PlannerTheme.spring) {
             selectedDay = Calendar.current.date(byAdding: .day, value: step, to: selectedDay)!
@@ -1027,6 +659,135 @@ struct MainView: View {
             weekdays: [2]
         ))
     }
+}
+
+private struct CalendarNavigationView: View {
+    @Bindable var store: PlannerStore
+    @Binding var page: Page
+    @Binding var selectedDay: Date
+    @Binding var month: Date
+    @Binding var sheet: EditorSheet?
+    @Binding var showingNavigation: Bool
+    @Namespace private var navigationSelection
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    var body: some View {
+        let reviewTasks = store.reviewTasks
+        return VStack(alignment: .leading, spacing: 0) {
+            HStack(spacing: 12) {
+                ZStack {
+                    Image(systemName: "calendar.badge.clock")
+                        .font(.system(size: 18, weight: .semibold))
+                        .foregroundStyle(.white)
+                }
+                .frame(width: 38, height: 38)
+                .liquidGlass(
+                    in: RoundedRectangle(cornerRadius: 11, style: .continuous),
+                    tint: PlannerTheme.accent
+                )
+                .shadow(color: PlannerTheme.accent.opacity(0.22), radius: 10, y: 4)
+
+                Text("学习日程")
+                    .font(.system(size: 18, weight: .bold, design: .rounded))
+            }
+            .padding(.horizontal, 18)
+            .padding(.top, 18)
+            .padding(.bottom, 20)
+
+            VStack(spacing: 5) {
+                ForEach(Page.allCases, id: \.self) { item in
+                    Button {
+                        showingNavigation = false
+                        withAnimation(reduceMotion ? nil : PlannerTheme.spring) { page = item }
+                    } label: {
+                        HStack(spacing: 12) {
+                            Image(systemName: icon(item))
+                                .font(.system(size: 15, weight: .semibold))
+                                .frame(width: 20)
+                            Text(item.rawValue)
+                                .font(.system(size: 14, weight: page == item ? .semibold : .medium))
+                            Spacer()
+                        }
+                        .foregroundStyle(page == item ? Color.white : Color.primary.opacity(0.72))
+                        .padding(.horizontal, 13)
+                        .frame(height: 42)
+                        .background {
+                            if page == item {
+                                Color.clear
+                                    .liquidGlass(
+                                        in: RoundedRectangle(cornerRadius: 12, style: .continuous),
+                                        tint: PlannerTheme.accent,
+                                        interactive: true,
+                                        fallbackMaterial: .thinMaterial
+                                    )
+                                    .matchedGeometryEffect(id: "navigation", in: navigationSelection)
+                                    .shadow(color: PlannerTheme.accent.opacity(0.18), radius: 10, y: 4)
+                            }
+                        }
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            .padding(.horizontal, 12)
+
+            Rectangle()
+                .fill(PlannerTheme.hairline)
+                .frame(height: 1)
+                .padding(.horizontal, 18)
+                .padding(.vertical, 18)
+
+            MonthCalendar(
+                selectedDay: $selectedDay,
+                month: $month,
+                tasks: store.state.tasks,
+                courses: store.state.courses,
+                fixed: store.state.fixedEvents
+            ) {
+                showingNavigation = false
+                withAnimation(reduceMotion ? nil : PlannerTheme.spring) { page = .calendar }
+            }
+            .padding(.horizontal, 16)
+
+            if !reviewTasks.isEmpty {
+                Button { sheet = .review } label: {
+                    HStack(spacing: 10) {
+                        Image(systemName: "checkmark.circle.fill")
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("学习完成确认").fontWeight(.semibold)
+                            Text("\(reviewTasks.count) 项计划待确认").font(.caption)
+                        }
+                        Spacer()
+                        Image(systemName: "chevron.right").font(.caption.bold())
+                    }
+                    .padding(12)
+                    .foregroundStyle(.orange)
+                    .background(Color.orange.opacity(0.10), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                }
+                .buttonStyle(.plain)
+                .padding(.horizontal, 14)
+                .padding(.top, 16)
+            }
+
+            Spacer(minLength: 12)
+
+            VStack(alignment: .leading, spacing: 5) {
+                Text("持续的努力").font(.caption.weight(.semibold))
+                Text("会让平凡的日子发光。").font(.caption)
+            }
+            .foregroundStyle(.tertiary)
+            .padding(18)
+        }
+        .background(.ultraThinMaterial)
+        .overlay(alignment: .trailing) {
+            LinearGradient(
+                colors: [Color.white.opacity(0.48), PlannerTheme.hairline, Color.clear],
+                startPoint: .top,
+                endPoint: .bottom
+            )
+            .frame(width: 1)
+        }
+    }
 
     private func icon(_ page: Page) -> String {
         switch page {
@@ -1036,6 +797,301 @@ struct MainView: View {
         case .settings: "gearshape"
         }
     }
+}
+
+// Keep data-dependent work below a View boundary. Opening or dismissing a
+// secondary panel must not rebuild the selected day's task snapshot.
+private struct CalendarAgendaView: View {
+    @Bindable var store: PlannerStore
+    @Binding var selectedDay: Date
+    @Binding var month: Date
+    @Binding var sheet: EditorSheet?
+
+    private var canChangeDayEvents: Bool {
+        Calendar.current.startOfDay(for: selectedDay) >= Calendar.current.startOfDay(for: Date()) &&
+        store.isReady
+    }
+
+    var body: some View {
+        let snapshot = CalendarDaySnapshot(state: store.state, day: selectedDay)
+        let dayTasks = snapshot.tasks, dayEvents = snapshot.events, skippedDayEvents = snapshot.skipped
+        let items = timelineItems(for: snapshot)
+        let floatingDuration = snapshot.floatingMinutes.map(hours) ?? "合计超出范围"
+        return ScrollView {
+            VStack(alignment: .leading, spacing: 26) {
+                ActualStudyStartEntry(store: store) {
+                    selectedDay = Calendar.current.startOfDay(for: Date())
+                    month = selectedDay
+                }
+                Button { sheet = .scheduleSearch } label: {
+                    HStack {
+                        Image(systemName: "magnifyingglass")
+                        Text("搜索课程或课时，查找安排日期")
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.6)
+                        Spacer()
+                        Text("⌘F").font(.caption)
+                    }
+                    .foregroundStyle(.secondary)
+                    .padding(14)
+                    .plannerSurface(radius: 14, material: .thinMaterial, shadow: false)
+                }
+                .buttonStyle(.plain)
+                .keyboardShortcut("f", modifiers: .command)
+                summaryBand(snapshot)
+                if dayEvents.contains(where: \.isFloating) {
+                    Label("浮动事项已预留 " + floatingDuration + "；虚线学习卡片显示按当前顺序预估的起止时间，调整顺序后更新。", systemImage: "arrow.left.arrow.right")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+                HStack(alignment: .top, spacing: 12) {
+                    VStack(alignment: .leading, spacing: 5) {
+                        Text(Calendar.current.isDateInToday(selectedDay)
+                             ? (store.state.settings.actualStudyStart(on: Date()) == nil ? "今天的安排" : "新课表 · 今天")
+                             : "当天的安排")
+                            .font(.system(size: 19, weight: .bold, design: .rounded))
+                        Text("\(items.count) 项任务 · 长按课程可拖动交换")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
+                    Spacer()
+                    DayAgendaCopyButton(day: selectedDay, state: store.state)
+                        .fixedSize()
+                }
+
+                if dayTasks.isEmpty && dayEvents.isEmpty {
+                    emptyAgenda
+                } else {
+                    DailyTaskTimeline(
+                        store: store, items: items, canEdit: canChangeDayEvents,
+                        editTask: { sheet = .completion($0) },
+                        editEvent: { sheet = .fixed($0) },
+                        skipEvent: { event in Task { await store.setEventSkipped(event, on: selectedDay, skipped: true) } }
+                    )
+                    .id(selectedDay)
+
+                    if dayTasks.contains(where: { !$0.isUnconfirmed }) {
+                        PlannerSectionTitle(title: "完成记录", detail: "不再占用时间")
+                            .padding(.top, 2)
+                        VStack(spacing: 10) {
+                            ForEach(dayTasks.filter { !$0.isUnconfirmed }) { task in
+                                CompletedTaskRow(
+                                    task: task,
+                                    course: snapshot.course(task.courseID),
+                                    undo: { Task { _ = await store.undoConfirmation(task) } }
+                                )
+                            }
+                        }
+                    }
+
+                    Text("可提前确认未来任务；未完成的学习量会在剩余日期中重新分配。")
+                        .font(.caption)
+                        .foregroundStyle(.tertiary)
+                        .padding(.leading, 76)
+                }
+                if !skippedDayEvents.isEmpty {
+                    PlannerSectionTitle(title: "本日已临时移除", detail: "仅影响这一天，其他日期照常安排")
+                    ForEach(skippedDayEvents) { event in
+                        HStack {
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text(event.title).font(.headline)
+                                Text("\(clockTime(event.startMinute))–\(clockTime(event.endMinute)) · 本日不占用时间")
+                                    .font(.caption).foregroundStyle(.secondary)
+                            }
+                            Spacer()
+                            Button("恢复本日并重排", systemImage: "arrow.uturn.backward") {
+                                let day = selectedDay
+                                Task {
+                                    if !(await store.restoreEventOccurrence(event, on: day)),
+                                       let conflicts = store.pendingEventConflicts, !conflicts.isEmpty {
+                                        sheet = .restoreOccurrence(event, day, conflicts)
+                                    }
+                                }
+                            }
+                            .disabled(!canChangeDayEvents)
+                        }
+                        .padding(14)
+                        .plannerSurface(radius: 14, material: .thinMaterial, shadow: false)
+                    }
+                }
+            }
+            .padding(.horizontal, PlannerTheme.pagePadding)
+            .padding(.top, 8)
+            .padding(.bottom, 30)
+        }
+        .scrollIndicators(.hidden)
+        .environment(\.plannerScrollingContent, true)
+    }
+
+    private func summaryBand(_ snapshot: CalendarDaySnapshot) -> some View {
+        let confirmed = ConfirmedStudySummary(state: store.state, day: selectedDay)
+        return VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 0) {
+                SummaryMetric(
+                    title: "待学计划",
+                    value: snapshot.plannedMinutes.map(studyDuration) ?? "合计超出范围",
+                    icon: "book.closed.fill",
+                    color: PlannerTheme.accent
+                )
+                metricDivider
+                SummaryMetric(
+                    title: "实际已学",
+                    value: confirmed.value,
+                    icon: "checkmark",
+                    color: .teal
+                )
+                metricDivider
+                SummaryMetric(
+                    title: "固定事项",
+                    value: "\(snapshot.events.count) 项",
+                    icon: "calendar",
+                    color: .purple
+                )
+            }
+            .padding(.vertical, 15)
+            .plannerSurface(radius: 18, material: .thinMaterial)
+            Text(confirmed.note)
+                .font(.caption)
+                .foregroundStyle(confirmed.ambiguousRecordCount > 0 || confirmed.minutes == nil ? Color.orange : .secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    private var metricDivider: some View {
+        Rectangle().fill(PlannerTheme.hairline).frame(width: 1, height: 54)
+    }
+
+    private var emptyAgenda: some View {
+        VStack(spacing: 15) {
+            ZStack {
+                Circle().fill(PlannerTheme.accent.opacity(0.10))
+                Image(systemName: "sun.max.fill")
+                    .font(.system(size: 30, weight: .light))
+                    .foregroundStyle(PlannerTheme.accent)
+            }
+            .frame(width: 66, height: 66)
+
+            Text(store.courses.isEmpty ? "从第一门课程开始" : "这一天还没有安排")
+                .font(.title3.bold())
+            Text(store.courses.isEmpty ? "添加课程和截止日期，让学习计划自动生成。" : "可以查看其他日期，或调整可学习时间。")
+                .foregroundStyle(.secondary)
+            Button("添加学习课程") { newCourse() }
+                .buttonStyle(SoftButtonStyle(prominent: true))
+            if store.state.canLoadExample {
+                Button("载入示例，体验自动排程") { Task { await store.loadExample() } }.buttonStyle(.link)
+            }
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 54)
+    }
+
+    private func timelineItems(for snapshot: CalendarDaySnapshot) -> [TimelineItem] {
+        (snapshot.tasks.filter(\.isUnconfirmed).map {
+            TimelineItem(id: $0.id, start: $0.start, end: $0.end, task: $0)
+        } + snapshot.events.map {
+            TimelineItem(
+                id: $0.id,
+                start: ScheduleEngine().instant(day: selectedDay, minute: $0.startMinute),
+                end: ScheduleEngine().instant(day: selectedDay, minute: $0.endMinute),
+                event: $0
+            )
+        }).sorted {
+            let lhs = $0.task?.start ?? $0.start
+            let rhs = $1.task?.start ?? $1.start
+            return lhs != rhs ? lhs < rhs : $0.id.uuidString < $1.id.uuidString
+        }
+    }
+
+    private func newCourse() {
+        sheet = .course(Course(
+            name: "",
+            totalMinutes: 600,
+            startDate: Calendar.current.startOfDay(for: Date()),
+            deadline: Calendar.current.date(byAdding: .day, value: 30, to: Date())!,
+            minimumBlockMinutes: 0
+        ))
+    }
+}
+
+private struct CalendarInsightsView: View {
+    @Bindable var store: PlannerStore
+    @Binding var selectedDay: Date
+    @Binding var month: Date
+    @Binding var sheet: EditorSheet?
+    @AppStorage("dailyStudyLoadWarningMinutes") private var dailyLoadWarningMinutes = 480
+
+    var body: some View {
+        let courses = store.courses
+        let firstTask = store.state.firstUnconfirmedTask(on: selectedDay)
+        return ScrollView {
+            // Keep the daily forecast's task mounted even below the viewport;
+            // it captures today's baseline, so it must not wait for scrolling.
+            VStack(spacing: 16) {
+                VStack(alignment: .leading, spacing: 10) {
+                    if let task = firstTask {
+                        Text(task.lessonName ?? store.course(task.courseID)?.name ?? "待学习课程")
+                            .font(.subheadline.weight(.semibold))
+                            .fixedSize(horizontal: false, vertical: true)
+                        Text("当前所选日期的首项未确认课程 · \(studyDuration(task.durationMinutes))")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
+                    Button {
+                        Task {
+                            if await store.continueStudying(on: selectedDay) {
+                                selectedDay = Calendar.current.startOfDay(for: Date())
+                                month = selectedDay
+                            }
+                        }
+                    } label: {
+                        Label("继续上课", systemImage: "play.fill")
+                            .frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(!store.isReady || store.orderSaveBusy ||
+                        Calendar.current.startOfDay(for: selectedDay) < Calendar.current.startOfDay(for: Date()) ||
+                        firstTask == nil)
+                    .help("把当前查看课表中最上方的未确认课程移到现在（向上取整到分钟），保留该板块时长并重排后续课程；固定事项和已确认进度保留，空档不足时保留原课表")
+                    ImmediateStudyMenu(store: store) {
+                        selectedDay = Calendar.current.startOfDay(for: Date())
+                        month = selectedDay
+                    }
+                }
+                .padding(14).plannerSurface()
+
+                if let health = ScheduleHealthAnalyzer().assess(state: store.state, result: store.result, now: Date(), heavyDayMinutes: dailyLoadWarningMinutes) {
+                    ScheduleHealthWarning(health: health, adjustments: store.result.adjustments, showDetails: { sheet = .risks })
+                }
+
+                CourseProgressPanel(
+                    courses: courses,
+                    demands: store.result.demands,
+                    completedMinutes: { store.state.completedMinutes(for: $0) },
+                    edit: { sheet = .course($0) }
+                )
+
+                WeeklyStudyChart(
+                    selectedDay: $selectedDay,
+                    month: $month,
+                    state: store.state,
+                    tasks: store.state.tasks,
+                    courses: courses
+                )
+
+                if !courses.isEmpty { DailyConsequencesView(store: store) }
+
+                Label("计划会随学习进度动态变化", systemImage: "arrow.triangle.2.circlepath")
+                    .font(.caption)
+                    .foregroundStyle(.tertiary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 4)
+            }
+            .padding(.horizontal, 18)
+            .padding(.top, 8)
+            .padding(.bottom, 24)
+        }
+        .scrollIndicators(.hidden)
+        .background(.ultraThinMaterial)
+        .environment(\.plannerScrollingContent, true)
+    }
+
 }
 
 private struct AddMenuActionRow: View {
@@ -1471,7 +1527,6 @@ private struct WeeklyStudyChart: View {
     var state: PlannerState
     var tasks: [ScheduledTask]
     var courses: [Course]
-    @State private var appeared = false
     @State private var showingActual = false
 
     private let calendar = Calendar.current
@@ -1549,7 +1604,7 @@ private struct WeeklyStudyChart: View {
             } else {
                 Chart(segments) { segment in
                     BarMark(
-                        x: .value("小时", appeared ? Double(segment.minutes) / 60 : 0),
+                        x: .value("小时", Double(segment.minutes) / 60),
                         y: .value("日期", segment.dayLabel)
                     )
                     .foregroundStyle(by: .value("课程", segment.courseID.uuidString))
@@ -1577,18 +1632,12 @@ private struct WeeklyStudyChart: View {
                     }
                 }
                 .frame(height: 190)
-                .animation(.easeOut(duration: 0.7), value: appeared)
 
                 FlowLegend(entries: legend)
             }
         }
         .padding(18)
         .plannerSurface()
-        .onAppear { appeared = true }
-        .onChange(of: selectedDay) { _, _ in
-            appeared = false
-            Task { @MainActor in appeared = true }
-        }
     }
 }
 
