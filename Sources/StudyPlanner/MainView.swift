@@ -80,9 +80,10 @@ struct MainView: View {
             if newLayout.showsInsights { showingInsights = false }
         }
         .background { PlannerGlassBackdrop() }
-        // One transaction keeps the column slots, agenda and header in step.
-        // Geometry still publishes only presentation changes, never animation frames.
+        // Animate sibling placement together, but keep the transaction out of
+        // retained calendar data, charts and material-backed controls.
         .animation(reduceMotion ? nil : PlannerTheme.columnTransition, value: layout)
+        .transaction(value: layout) { $0.plannerColumnTransition = true }
         .animation(reduceMotion ? nil : PlannerTheme.spring, value: page)
         .animation(reduceMotion ? nil : PlannerTheme.spring, value: selectedDay)
         .onChange(of: page) { _, _ in showingNavigation = false; showingInsights = false }
@@ -173,7 +174,7 @@ struct MainView: View {
             PlannerCollapsibleColumn(isExpanded: layout.showsSidebar,
                                      width: PlannerWindowLayout.sidebarWidth, edge: .leading) { sidebar }
             VStack(spacing: 0) {
-                header(layout)
+                header(layout).plannerColumnContent()
                 if store.orderSaveBusy {
                     HStack { ProgressView().controlSize(.small); Text(store.saveStatus); Spacer() }
                         .padding(.horizontal, 24).padding(.vertical, 8)
@@ -214,7 +215,6 @@ struct MainView: View {
                         )
                     } else {
                         pageContent(layout)
-                            .environment(\.plannerCompactContent, layout.compactContent)
                             .id(page)
                             .transition(.opacity.combined(with: .move(edge: .bottom)))
                     }
@@ -229,7 +229,8 @@ struct MainView: View {
         switch page {
         case .calendar:
             HStack(spacing: 0) {
-                agenda.frame(maxWidth: PlannerWindowLayout.preferredAgendaWidth, maxHeight: .infinity)
+                agenda.plannerColumnContent()
+                    .frame(maxWidth: PlannerWindowLayout.preferredAgendaWidth, maxHeight: .infinity)
                     .environment(\.plannerCompactContent, layout.compactAgenda)
                     // Folding a panel must not stretch the cards into its old
                     // slot. Keep their reference width until the window itself
@@ -238,9 +239,12 @@ struct MainView: View {
                 PlannerCollapsibleColumn(isExpanded: layout.showsInsights,
                                          width: PlannerWindowLayout.insightsWidth, edge: .trailing) { insightsPanel }
             }
-        case .courses: courseList
-        case .fixed: fixedList
-        case .settings: SettingsView(store: store)
+        case .courses:
+            courseList.plannerColumnContent().environment(\.plannerCompactContent, layout.compactContent)
+        case .fixed:
+            fixedList.plannerColumnContent().environment(\.plannerCompactContent, layout.compactContent)
+        case .settings:
+            SettingsView(store: store).plannerColumnContent().environment(\.plannerCompactContent, layout.compactContent)
         }
     }
 
@@ -1019,7 +1023,6 @@ private struct CalendarInsightsView: View {
     @Binding var selectedDay: Date
     @Binding var month: Date
     @Binding var sheet: EditorSheet?
-    @AppStorage("dailyStudyLoadWarningMinutes") private var dailyLoadWarningMinutes = 480
 
     var body: some View {
         let courses = store.courses
@@ -1059,9 +1062,7 @@ private struct CalendarInsightsView: View {
                 }
                 .padding(14).plannerSurface()
 
-                if let health = ScheduleHealthAnalyzer().assess(state: store.state, result: store.result, now: Date(), heavyDayMinutes: dailyLoadWarningMinutes) {
-                    ScheduleHealthWarning(health: health, adjustments: store.result.adjustments, showDetails: { sheet = .risks })
-                }
+                CalendarScheduleHealthView(store: store, sheet: $sheet)
 
                 CourseProgressPanel(
                     courses: courses,
@@ -1095,6 +1096,21 @@ private struct CalendarInsightsView: View {
         .environment(\.plannerScrollingContent, true)
     }
 
+}
+
+// AppStorage carries its own changing view inputs. Keep it in the warning's
+// leaf so resizing the shell cannot invalidate the entire insights panel and
+// repeat its course, lesson-progress and chart aggregations on the main thread.
+private struct CalendarScheduleHealthView: View {
+    @Bindable var store: PlannerStore
+    @Binding var sheet: EditorSheet?
+    @AppStorage("dailyStudyLoadWarningMinutes") private var dailyLoadWarningMinutes = 480
+
+    var body: some View {
+        if let health = ScheduleHealthAnalyzer().assess(state: store.state, result: store.result, now: Date(), heavyDayMinutes: dailyLoadWarningMinutes) {
+            ScheduleHealthWarning(health: health, adjustments: store.result.adjustments, showDetails: { sheet = .risks })
+        }
+    }
 }
 
 private struct AddMenuActionRow: View {
@@ -1668,14 +1684,19 @@ private struct FlowLegend: View {
     }
 }
 
-private struct CourseProgressPanel: View {
+struct CourseProgressPanel: View {
     var courses: [Course]
     var demands: [UUID: CourseDemand]
     var completedMinutes: (Course) -> Int
     var edit: (Course) -> Void
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
+        // Button labels and GeometryReader closures can update when their
+        // enabled state or layout changes. Resolve lesson progress outside
+        // those closures, once per course and data update.
+        let completedByID = Dictionary(courses.prefix(5).map { ($0.id, completedMinutes($0)) },
+                                       uniquingKeysWith: { first, _ in first })
+        return VStack(alignment: .leading, spacing: 16) {
             PlannerSectionTitle(title: "课程进度", detail: "\(courses.count) 门")
 
             if courses.isEmpty {
@@ -1685,6 +1706,8 @@ private struct CourseProgressPanel: View {
                     .padding(.vertical, 18)
             } else {
                 ForEach(courses.prefix(5)) { course in
+                    let completed = completedByID[course.id, default: 0]
+                    let progress = min(1, Double(completed) / Double(max(1, course.totalMinutes)))
                     Button { edit(course) } label: {
                         VStack(alignment: .leading, spacing: 8) {
                             HStack(alignment: .firstTextBaseline) {
@@ -1693,12 +1716,12 @@ private struct CourseProgressPanel: View {
                                     .foregroundStyle(.primary)
                                     .fixedSize(horizontal: false, vertical: true)
                                 Spacer()
-                                Text("\(Int(progress(course) * 100))%")
+                                Text("\(Int(progress * 100))%")
                                     .font(.caption.monospacedDigit())
                                     .foregroundStyle(.secondary)
                                     .fixedSize()
                             }
-                            Text("已学 \(hours(completedMinutes(course))) / 共 \(hours(course.totalMinutes))")
+                            Text("已学 \(hours(completed)) / 共 \(hours(course.totalMinutes))")
                                 .font(.caption).foregroundStyle(.secondary)
 
                             GeometryReader { proxy in
@@ -1706,12 +1729,12 @@ private struct CourseProgressPanel: View {
                                     Capsule().fill(Color.primary.opacity(0.07))
                                     Capsule()
                                         .fill(courseColor(course.color).gradient)
-                                        .frame(width: proxy.size.width * progress(course))
+                                        .frame(width: proxy.size.width * progress)
                                 }
                             }
                             .frame(height: 7)
 
-                            Text(dailyRecommendation(course))
+                            Text(dailyRecommendation(course, completedMinutes: completed))
                                 .foregroundStyle(.secondary).font(.caption2)
                         }
                         .contentShape(Rectangle())
@@ -1724,12 +1747,8 @@ private struct CourseProgressPanel: View {
         .plannerSurface()
     }
 
-    private func progress(_ course: Course) -> Double {
-        min(1, Double(completedMinutes(course)) / Double(max(1, course.totalMinutes)))
-    }
-
-    private func dailyRecommendation(_ course: Course) -> String {
-        guard completedMinutes(course) < course.totalMinutes else { return "已完成学习目标" }
+    private func dailyRecommendation(_ course: Course, completedMinutes: Int) -> String {
+        guard completedMinutes < course.totalMinutes else { return "已完成学习目标" }
         guard course.autoScheduleEnabled else { return "已暂停自动排程" }
         guard let demand = demands[course.id] else { return "暂无每日学习建议" }
         guard demand.remainingMinutes > 0 else { return "剩余学习量已安排在进行中的任务" }

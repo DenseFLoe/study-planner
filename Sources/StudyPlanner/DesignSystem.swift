@@ -41,6 +41,27 @@ struct PlannerWindowLayout: Equatable {
     }
 }
 
+private struct PlannerColumnTransitionKey: TransactionKey {
+    static let defaultValue = false
+}
+
+extension Transaction {
+    var plannerColumnTransition: Bool {
+        get { self[PlannerColumnTransitionKey.self] }
+        set { self[PlannerColumnTransitionKey.self] = newValue }
+    }
+}
+
+extension View {
+    /// The shell still moves its siblings together. Stop only that resize
+    /// transaction at the content boundary; date/task animations remain intact.
+    func plannerColumnContent() -> some View {
+        transaction { transaction in
+            if transaction.plannerColumnTransition { transaction.animation = nil }
+        }
+    }
+}
+
 /// Keep the panel at its natural width while its slot opens or closes. Retaining
 /// the content also preserves scroll position and cached summaries on reversal.
 struct PlannerCollapsibleColumn<Content: View>: View {
@@ -52,7 +73,7 @@ struct PlannerCollapsibleColumn<Content: View>: View {
     var body: some View {
         HStack(spacing: 0) {
             if edge == .trailing { divider }
-            content.frame(width: width)
+            content.plannerColumnContent().frame(width: width)
             if edge == .leading { divider }
         }
         .frame(width: width + 1)
