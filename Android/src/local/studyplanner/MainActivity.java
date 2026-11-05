@@ -534,17 +534,17 @@ public class MainActivity extends Activity {
         JSONObject displayed=issue.event;
         LinearLayout form=col();form.setPadding(dp(20),dp(10),dp(20),dp(10));
         form.addView(text("「"+displayed.optString("title")+"」 "+Planner.time(displayed.optInt("startMinute"))+"–"+Planner.time(displayed.optInt("endMinute"))+(Planner.floating(displayed)?" · 浮动占用 "+Planner.occupied(displayed)+" 分钟":""),16,ink));
-        form.addView(text("每个冲突日期可跳过新课程、保留本地安排；或跳过当天冲突的本地固定事项、保留新课程。同一天的多个冲突一起处理，其他日期照常安排。",13,muted));
-        if(displayed.optJSONArray("weekdays")==null||displayed.optJSONArray("weekdays").length()==0)form.addView(text("这是单次事项；选择跳过新课程后，该事项不会产生安排。",13,muted));
+        form.addView(text("请核对时间冲突或尚未确定的排法。每个日期可跳过新事项、保留本地安排；或跳过当天列出的本地固定事项、保留新事项。同一天一起处理，其他日期照常安排。",13,muted));
+        if(displayed.optJSONArray("weekdays")==null||displayed.optJSONArray("weekdays").length()==0)form.addView(text("这是单次事项；选择跳过新事项后，该事项不会产生安排。",13,muted));
         TextView summary=text("",13,muted);form.addView(summary);
         EventConflictReview model=new EventConflictReview(conflicts);int[] page={0};
         PlannerUi.Flow navigation=new PlannerUi.Flow(this);form.addView(navigation);
         LinearLayout rows=col();form.addView(rows);PlannerUi.Flow bulkActions=new PlannerUi.Flow(this);form.addView(bulkActions);
         ScrollView scroll=new ScrollView(this);scroll.addView(form);
-        AlertDialog review=new AlertDialog.Builder(this).setTitle("逐日处理时间冲突").setView(scroll).setNegativeButton("返回修改",null).setNeutralButton("清除选择",null).setPositiveButton("保存选择",null).create();
+        AlertDialog review=new AlertDialog.Builder(this).setTitle("逐日核对事项安排").setView(scroll).setNegativeButton("返回修改",null).setNeutralButton("清除选择",null).setPositiveButton("保存选择",null).create();
         Button[] nav=new Button[3];Runnable[] render=new Runnable[1];
         Runnable refresh=()->{
-            summary.setText(model.conflictCount+" 处冲突 · "+model.dayCount()+" 天 · "+model.remaining()+" 天未确认 · 第 "+(model.pageCount()==0?0:page[0]+1)+" / "+model.pageCount()+" 页");
+            summary.setText(model.conflictCount+" 项待核对 · "+model.dayCount()+" 天 · "+model.remaining()+" 天未确认 · 第 "+(model.pageCount()==0?0:page[0]+1)+" / "+model.pageCount()+" 页");
             review.getButton(AlertDialog.BUTTON_POSITIVE).setEnabled(model.complete());
             nav[0].setEnabled(page[0]>0);nav[1].setEnabled(page[0]+1<model.pageCount());nav[2].setEnabled(model.remaining()>0);
         };
@@ -552,10 +552,10 @@ public class MainActivity extends Activity {
             rows.removeAllViews();
             for(EventConflictReview.Day day:model.page(page[0])){
                 LinearLayout box=card(rows);box.addView(text(day.date.format(java.time.format.DateTimeFormatter.ofPattern("yyyy年M月d日 EEEE",Locale.CHINA)),16,ink));
-                for(Planner.EventConflict conflict:day.conflicts){box.addView(text("与本地「"+conflict.title+"」冲突",15,ink));box.addView(text(conflict.timeDescription()+"\n"+conflict.explanation(),13,muted));}
+                for(Planner.EventConflict conflict:day.conflicts){box.addView(text(conflict.reviewHeading(),15,ink));box.addView(text(conflict.timeDescription()+"\n"+conflict.explanation(),13,muted));}
                 RadioGroup group=new RadioGroup(this);
-                RadioButton skipNew=new RadioButton(this);skipNew.setId(View.generateViewId());skipNew.setText("跳过新课程（不植入），保留本地");group.addView(skipNew);
-                RadioButton skipLocal=new RadioButton(this);skipLocal.setId(View.generateViewId());skipLocal.setText("跳过本地固定事项，保留新课程");skipLocal.setEnabled(day.canSkipLocal);group.addView(skipLocal);
+                RadioButton skipNew=new RadioButton(this);skipNew.setId(View.generateViewId());skipNew.setText("跳过新事项，保留本地");group.addView(skipNew);
+                RadioButton skipLocal=new RadioButton(this);skipLocal.setId(View.generateViewId());skipLocal.setText("跳过本地固定事项，保留新事项");skipLocal.setEnabled(day.canSkipLocal);group.addView(skipLocal);
                 if(model.choice(day.date)==EventConflictReview.Choice.SKIP_NEW)group.check(skipNew.getId());
                 else if(model.choice(day.date)==EventConflictReview.Choice.SKIP_LOCAL)group.check(skipLocal.getId());
                 group.setOnCheckedChangeListener((selected,id)->{model.choose(day.date,id==skipNew.getId()?EventConflictReview.Choice.SKIP_NEW:id==skipLocal.getId()?EventConflictReview.Choice.SKIP_LOCAL:EventConflictReview.Choice.UNRESOLVED);refresh.run();});
@@ -567,7 +567,7 @@ public class MainActivity extends Activity {
         nav[2]=button("首个未确认",()->{int next=model.firstUnresolvedPage();if(next>=0){page[0]=next;render[0].run();}});
         for(Button button:nav)navigation.addView(button);
         Runnable save=()->{if(!model.complete()||busy)return;saveEventResolvingConflicts(event,baseline,editor,review,model.skipped(EventConflictReview.Choice.SKIP_NEW),model.skipped(EventConflictReview.Choice.SKIP_LOCAL),conflicts);};
-        bulkActions.addView(button("全部跳过新课程并保存",()->{if(busy)return;model.chooseAll(EventConflictReview.Choice.SKIP_NEW);render[0].run();save.run();}));
+        bulkActions.addView(button("全部跳过新事项并保存",()->{if(busy)return;model.chooseAll(EventConflictReview.Choice.SKIP_NEW);render[0].run();save.run();}));
         Button allLocal=button("全部跳过本地并保存",()->{if(busy)return;model.chooseAll(EventConflictReview.Choice.SKIP_LOCAL);render[0].run();save.run();});allLocal.setEnabled(model.canSkipAllLocal());bulkActions.addView(allLocal);
         review.setOnShowListener(dialog->{render[0].run();review.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(v->save.run());review.getButton(AlertDialog.BUTTON_NEUTRAL).setOnClickListener(v->{model.chooseAll(EventConflictReview.Choice.UNRESOLVED);page[0]=0;render[0].run();});});review.show();
     }

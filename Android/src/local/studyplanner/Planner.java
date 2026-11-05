@@ -170,37 +170,63 @@ public final class Planner {
     public static double retainedHistoryStart(JSONObject t){return Math.min(planningStart(t),t.optDouble("confirmedAt",planningStart(t)));}
     public static double retainedHistoryEnd(JSONObject t){return Math.min(planningEnd(t),t.optDouble("confirmedAt",planningEnd(t)));}
     public static boolean floatingTask(JSONObject t){return t.has("floatingWindowStart")&&!t.isNull("floatingWindowStart")&&t.has("floatingWindowEnd")&&!t.isNull("floatingWindowEnd");}
+    static final int RESERVATION_ATTEMPT_LIMIT=20000;
+    enum ReservationStatus { FEASIBLE, INFEASIBLE, SEARCH_EXHAUSTED, INVALID_INPUT }
+    static final class ReservationResult {
+        final ReservationStatus status;
+        final Map<String,Integer> placements;
+        final int attempts;
+        ReservationResult(ReservationStatus status,Map<String,Integer> placements,int attempts){
+            this.status=status;this.placements=placements;this.attempts=attempts;
+        }
+    }
     static Map<String,Integer> reserve(List<JSONObject> events){return reserve(events,new boolean[1440]);}
     static Map<String,Integer> reserve(List<JSONObject> events,boolean[] study){
+        return reserveResult(events,study,RESERVATION_ATTEMPT_LIMIT).placements;
+    }
+    static ReservationResult reserveResult(List<JSONObject> events,boolean[] study,int attemptLimit){
+        if(attemptLimit<0)throw new IllegalArgumentException("Search budget cannot be negative");
         boolean[] busy=new boolean[1440];List<JSONObject> floats=new ArrayList<>();
-        for(JSONObject e:events){int a=e.optInt("startMinute"),b=e.optInt("endMinute"),n=occupied(e);if(a<0||b>1440||a>=b||n<=0||n>b-a)return null;
+        for(JSONObject e:events){BackgroundCancellation.check();int a=e.optInt("startMinute"),b=e.optInt("endMinute"),n=occupied(e);if(a<0||b>1440||a>=b||n<=0||n>b-a)return new ReservationResult(ReservationStatus.INVALID_INPUT,null,0);
             if(floating(e))floats.add(e);else for(int m=a;m<b;m++)busy[m]=true;}
         floats.sort((a,b)->{int x=a.optInt("endMinute")-a.optInt("startMinute")-occupied(a),y=b.optInt("endMinute")-b.optInt("startMinute")-occupied(b);return x!=y?Integer.compare(x,y):a.optString("id").compareTo(b.optString("id"));});
-        if(floats.isEmpty())return new HashMap<>();
+        if(floats.isEmpty())return new ReservationResult(ReservationStatus.FEASIBLE,new HashMap<>(),0);
         // Necessary nominal bound: occupied minutes must fit in the union of
         // floating windows outside exact blocks. Passing it does not prove fit.
         int required=0,lowerMinute=1440,upperMinute=0;int[] coverage=new int[1441];
-        for(JSONObject e:floats){int n=occupied(e);if(n>1440-required)return null;required+=n;
+        for(JSONObject e:floats){int n=occupied(e);if(n>1440-required)return new ReservationResult(ReservationStatus.INFEASIBLE,null,0);required+=n;
             int a=e.optInt("startMinute"),b=e.optInt("endMinute");coverage[a]++;coverage[b]--;
             lowerMinute=Math.min(lowerMinute,a);upperMinute=Math.max(upperMinute,b);}
         int available=0,depth=0;
         for(int m=lowerMinute;m<upperMinute;m++){depth+=coverage[m];if(depth>0&&!busy[m])available++;}
-        if(required>available)return null;
+        if(required>available)return new ReservationResult(ReservationStatus.INFEASIBLE,null,0);
         int[] prefix=new int[1441];for(int m=0;m<1440;m++)prefix[m+1]=prefix[m]+(study[m]&&!busy[m]?1:0);
         List<List<int[]>> candidates=new ArrayList<>();
-        for(JSONObject e:floats){List<int[]> choices=new ArrayList<>();int n=occupied(e);
+        for(JSONObject e:floats){BackgroundCancellation.check();List<int[]> choices=new ArrayList<>();int n=occupied(e);
             for(int start=e.optInt("startMinute");start<=e.optInt("endMinute")-n;start++)choices.add(new int[]{start,prefix[start+n]-prefix[start]});
             choices.sort((a,b)->a[1]!=b[1]?Integer.compare(a[1],b[1]):Integer.compare(b[0],a[0]));candidates.add(choices);}
         int[] lower=new int[floats.size()+1];for(int i=floats.size()-1;i>=0;i--)lower[i]=lower[i+1]+candidates.get(i).get(0)[1];
-        PlacementSearch search=new PlacementSearch();
-        reserveSearch(floats,candidates,lower,0,0,busy,new HashMap<>(),search);return search.best;
+        PlacementSearch search=new PlacementSearch(attemptLimit);
+        reserveSearch(floats,candidates,lower,0,0,busy,new HashMap<>(),search);
+        // An existing witness remains feasible even if optimization was cut short.
+        // No witness proves failure only after a bound or a complete traversal.
+        return new ReservationResult(search.best!=null?ReservationStatus.FEASIBLE:
+            search.exhausted?ReservationStatus.SEARCH_EXHAUSTED:ReservationStatus.INFEASIBLE,search.best,search.attempts);
     }
-    static class PlacementSearch {int attempts=0,cost=Integer.MAX_VALUE;Map<String,Integer> best;}
+    static class PlacementSearch {
+        final int limit;int attempts=0,cost=Integer.MAX_VALUE;boolean exhausted;Map<String,Integer> best;
+        PlacementSearch(int limit){this.limit=limit;}
+    }
     static void reserveSearch(List<JSONObject> events,List<List<int[]>> candidates,int[] lower,int index,int cost,boolean[] busy,Map<String,Integer> placements,PlacementSearch search){
-        if(cost+lower[index]>=search.cost||search.attempts>=20000)return;
+        BackgroundCancellation.check();
+        if(cost+lower[index]>=search.cost)return;
+        // The last allowed attempt can itself complete a valid placement.
         if(index==events.size()){search.best=new HashMap<>(placements);search.cost=cost;return;}
         JSONObject e=events.get(index);int n=occupied(e);
-        for(int[] candidate:candidates.get(index)){if(cost+candidate[1]+lower[index+1]>=search.cost||search.attempts>=20000)break;
+        for(int[] candidate:candidates.get(index)){if(cost+candidate[1]+lower[index+1]>=search.cost)break;
+            // Count exhaustion only when an unexamined candidate is abandoned.
+            if(search.attempts>=search.limit){search.exhausted=true;break;}
+            BackgroundCancellation.check();
             search.attempts++;int a=candidate[0];boolean free=true;for(int m=a;m<a+n;m++)if(busy[m]){free=false;break;}if(!free)continue;
             for(int m=a;m<a+n;m++)busy[m]=true;placements.put(e.optString("id"),a);
             reserveSearch(events,candidates,lower,index+1,cost+candidate[1],busy,placements,search);
@@ -403,9 +429,11 @@ public final class Planner {
             this.eventID=id;this.title=title;this.date=date;this.start=start;this.end=end;this.requestedStart=requestedStart;this.requestedEnd=requestedEnd;this.floatingMinutes=minutes;this.reason=reason;
         }
         public String timeDescription(){return time(start)+"–"+time(end)+(floatingMinutes==null?"":" · 浮动占用 "+floatingMinutes+" 分钟");}
+        public String reviewHeading(){return "与本地「"+title+"」"+(reason.equals("searchLimit")?"的排法待确认":"冲突");}
         public String explanation(){
             if(reason.equals("active"))return "该学习任务正在进行或处于已开始的浮动窗口，不能自动移动。";
             if(reason.equals("capacity"))return "这些事项的连续时长无法在重叠窗口内排入；请调整时段或跳过此日。";
+            if(reason.equals("searchLimit"))return "排法待确认：本次搜索达到尝试上限，尚未找到完整安排，未证实容量不足。可返回调整窗口后重新检查，或核对后选择跳过；不会自动跳过事项。";
             int a=Math.max(start,requestedStart),b=Math.min(end,requestedEnd);
             return "重叠 "+time(a)+"–"+time(b)+"（"+Math.max(0,b-a)+" 分钟）";
         }
@@ -443,18 +471,22 @@ public final class Planner {
         LocalDate first=day(event.getDouble("startDate"));if(first.isBefore(boundary))first=boundary;LocalDate last=day(event.getDouble("endDate"));if(last.isBefore(first))throw new IllegalArgumentException("历史事项不可修改，请添加未来事项");if(last.isAfter(today.plusYears(10)))throw new IllegalArgumentException("固定事项最多支持未来十年");event.put("startDate",at(first,0));
         List<EventConflict> conflicts=new ArrayList<>();
         for(LocalDate d=first;!d.isAfter(last);d=d.plusDays(1))if(occurs(event,d)){
+            BackgroundCancellation.check();
             List<JSONObject> others=new ArrayList<>();
             for(JSONObject e:list(events))if(!e.getString("id").equals(event.getString("id"))&&occurs(e,d))others.add(e);
             List<JSONObject> component=new ArrayList<>();int lower=start,upper=end;boolean changed=true;
             while(changed){component.clear();for(JSONObject e:others)if(e.getInt("startMinute")<upper&&e.getInt("endMinute")>lower)component.add(e);
                 int nextLower=lower,nextUpper=upper;for(JSONObject e:component){nextLower=Math.min(nextLower,e.getInt("startMinute"));nextUpper=Math.max(nextUpper,e.getInt("endMinute"));}
                 changed=lower!=nextLower||upper!=nextUpper;lower=nextLower;upper=nextUpper;}
-            List<JSONObject> combined=new ArrayList<>(component);combined.add(event);boolean capacity=reserve(combined)==null;
+            List<JSONObject> combined=new ArrayList<>(component);combined.add(event);
+            ReservationResult reservation=reserveResult(combined,new boolean[1440],RESERVATION_ATTEMPT_LIMIT);
+            boolean unresolved=reservation.placements==null;
+            String reason=reservation.status==ReservationStatus.SEARCH_EXHAUSTED?"searchLimit":"capacity";
             for(JSONObject e:component){
                 boolean exact=!floating(event)&&!floating(e)&&e.getInt("startMinute")<end&&e.getInt("endMinute")>start;
-                if(capacity||exact)conflicts.add(new EventConflict(e.getString("id"),e.getString("title"),d,e.getInt("startMinute"),e.getInt("endMinute"),start,end,floating(e)?occupied(e):null,exact?"overlap":"capacity"));
+                if(unresolved||exact)conflicts.add(new EventConflict(e.getString("id"),e.getString("title"),d,e.getInt("startMinute"),e.getInt("endMinute"),start,end,floating(e)?occupied(e):null,exact?"overlap":reason));
             }
-            if(capacity&&component.isEmpty())throw new IllegalArgumentException("请检查浮动事项的时段和占用时长");
+            if(unresolved&&component.isEmpty())throw new IllegalArgumentException("请检查浮动事项的时段和占用时长");
         }
         if(!conflicts.isEmpty()){conflicts.sort(Comparator.comparing((EventConflict c)->c.date).thenComparingInt(c->c.start).thenComparing(c->c.eventID));throw new EventConflictException(conflicts);}
         if(old!=null&&day(old.getDouble("startDate")).isBefore(boundary)){old.put("endDate",Math.min(old.getDouble("endDate"),at(boundary.minusDays(1),0)));event.put("id",id());}put(events,event);
@@ -783,8 +815,11 @@ public final class Planner {
             boolean[] study=new boolean[1440];
             for(JSONObject a:list(s.getJSONObject("settings").getJSONArray("availability")))if(a.optInt("weekday")==weekday(d))
                 for(int m=Math.max(0,a.optInt("startMinute"));m<Math.min(1440,a.optInt("endMinute"));m++)study[m]=true;
-            Map<String,Integer> placements=reserve(events,study);
-            if(placements==null){warnings.add("浮动事项的连续时长无法排入，或组合过于复杂；请调整时段。");blocks.addAll(regions);}
+            ReservationResult reservation=reserveResult(events,study,RESERVATION_ATTEMPT_LIMIT);
+            Map<String,Integer> placements=reservation.placements;
+            if(placements==null){warnings.add(reservation.status==ReservationStatus.SEARCH_EXHAUSTED?
+                "浮动事项的连续时长排法待确认：搜索达到尝试上限，未证实容量不足；请调整窗口后重新排程。":
+                "浮动事项的连续时长无法排入；请检查窗口和占用时长后重新排程。");blocks.addAll(regions);}
             else for(JSONObject e:events)if(floating(e)){int start=placements.get(e.getString("id"));blocks.add(new Span(at(d,start),at(d,start+occupied(e))));}
             for(JSONObject t:history)if(planningStart(t)<now&&(pending(t)||t.optInt("completedMinutes")>0))blocks.add(buffered(retainedHistoryStart(t),retainedHistoryEnd(t)));
             days.add(new Day(d,subtract(windows,blocks)));
