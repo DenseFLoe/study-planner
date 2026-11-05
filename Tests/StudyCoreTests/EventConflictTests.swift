@@ -72,7 +72,53 @@ extension ScheduleEngineTests {
             XCTAssertEqual(conflicts.first?.reason, .floatingCapacity)
             XCTAssertEqual(conflicts.first?.timeDescription, "14:00–16:00 · 浮动占用 90 分钟")
             XCTAssertEqual(conflicts.first?.requestedStartMinute, 840)
+            XCTAssertTrue(conflicts.first?.explanation.contains("共需 180 分钟") == true)
+            XCTAssertTrue(conflicts.first?.explanation.contains("最多只有 120 分钟") == true)
         }
+    }
+
+    func testUnprovenFloatingPackingFailurePreservesDraftAndCanRecover() throws {
+        var state = PlannerState()
+        let fixed = FixedEvent(title: "固定间隔", startMinute: 540, endMinute: 570, startDate: date(14), endDate: date(14))
+        var first = FixedEvent(title: "浮动 A", startMinute: 480, endMinute: 660, startDate: date(14), endDate: date(14))
+        first.floatingDurationMinutes = 50
+        var second = first; second.id = UUID(); second.title = "浮动 B"
+        state.fixedEvents = [fixed, first, second]
+        var requested = first; requested.id = UUID(); requested.title = "浮动 C"
+        let original = state
+        // 60 + 90 free minutes suffice in total, but cannot hold three 50-minute
+        // continuous events. A failed bounded search alone is not our proof.
+        do {
+            try state.updateFixedEvent(requested, now: date(14, 7), calendar: cal)
+            XCTFail("Incomplete placements must still block saving")
+        } catch let PlannerError.fixedConflict(conflicts) {
+            XCTAssertEqual(conflicts.count, 3)
+            XCTAssertTrue(conflicts.allSatisfy { $0.reason == .floatingUnresolved })
+            XCTAssertTrue(conflicts.allSatisfy { $0.explanation.contains("不能据此认定时间不足") })
+            XCTAssertTrue(conflicts.allSatisfy { $0.capacityExplanation == nil })
+        }
+        XCTAssertEqual(state, original)
+        requested.floatingDurationMinutes = 40
+        try state.updateFixedEvent(requested, now: date(14, 7), calendar: cal)
+        XCTAssertEqual(Array(state.fixedEvents.prefix(3)), original.fixedEvents)
+        XCTAssertEqual(state.fixedEvents.last, requested)
+    }
+
+    func testFixedBlockSplittingFloatingWindowExplainsContinuousShortage() throws {
+        var state = PlannerState()
+        state.fixedEvents = [FixedEvent(title: "会议", startMinute: 540, endMinute: 600, startDate: date(14), endDate: date(14))]
+        var requested = FixedEvent(title: "杂务", startMinute: 480, endMinute: 660, startDate: date(14), endDate: date(14))
+        requested.floatingDurationMinutes = 90
+        let original = state
+        do {
+            try state.updateFixedEvent(requested, now: date(14, 7), calendar: cal)
+            XCTFail("Split free time must not be joined")
+        } catch let PlannerError.fixedConflict(conflicts) {
+            XCTAssertEqual(conflicts.first?.reason, .floatingCapacity)
+            XCTAssertTrue(conflicts.first?.explanation.contains("需要连续 90 分钟") == true)
+            XCTAssertTrue(conflicts.first?.explanation.contains("最长连续空档只有 60 分钟") == true)
+        }
+        XCTAssertEqual(state, original)
     }
 
     /// Selecting local dates clears every local item that blocks the new rule,

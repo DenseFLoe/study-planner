@@ -99,7 +99,9 @@ private struct ConflictDayCard: View {
             Text(day.formatted(.dateTime.year().month().day().weekday())).font(.headline)
             ForEach(conflicts) { conflict in
                 VStack(alignment: .leading, spacing: 5) {
-                    Text("与本地「\(conflict.title)」冲突").fontWeight(.medium)
+                    Text(conflict.reason == .floatingUnresolved
+                         ? "与本地「\(conflict.title)」的组合尚未排好"
+                         : "与本地「\(conflict.title)」冲突").fontWeight(.medium)
                     Text(conflict.timeDescription).monospacedDigit()
                     Text(conflict.explanation).foregroundStyle(.secondary)
                 }.font(.callout).frame(maxWidth: .infinity, alignment: .leading)

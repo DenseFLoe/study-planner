@@ -129,7 +129,7 @@ public struct FixedEvent: Identifiable, Codable, Equatable, Sendable {
 }
 
 public struct FixedEventConflict: Identifiable, Equatable, Sendable {
-    public enum Reason: Equatable, Sendable { case overlap, floatingCapacity, activeTask }
+    public enum Reason: Equatable, Sendable { case overlap, floatingCapacity, floatingUnresolved, activeTask }
     public var id: String { "\(eventID.uuidString)-\(date.timeIntervalSince1970)" }
     public var eventID: UUID
     public var title: String
@@ -142,14 +142,17 @@ public struct FixedEventConflict: Identifiable, Equatable, Sendable {
     public var reason: Reason
     /// Transient conflict detail when clock-window minutes differ from elapsed overlap.
     public var actualOverlapMinutes: Double?
+    public var capacityExplanation: String?
     public init(eventID: UUID, title: String, date: Date, startMinute: Int = 0, endMinute: Int = 0,
                 requestedStartMinute: Int = 0, requestedEndMinute: Int = 0,
-                floatingDurationMinutes: Int? = nil, reason: Reason = .overlap, actualOverlapMinutes: Double? = nil) {
+                floatingDurationMinutes: Int? = nil, reason: Reason = .overlap, actualOverlapMinutes: Double? = nil,
+                capacityExplanation: String? = nil) {
         self.eventID = eventID; self.title = title; self.date = date
         self.startMinute = startMinute; self.endMinute = endMinute
         self.requestedStartMinute = requestedStartMinute; self.requestedEndMinute = requestedEndMinute
         self.floatingDurationMinutes = floatingDurationMinutes; self.reason = reason
         self.actualOverlapMinutes = actualOverlapMinutes
+        self.capacityExplanation = capacityExplanation
     }
     private func time(_ minute: Int) -> String { String(format: "%02d:%02d", minute / 60, minute % 60) }
     public var timeDescription: String {
@@ -164,7 +167,9 @@ public struct FixedEventConflict: Identifiable, Equatable, Sendable {
             let start = max(startMinute, requestedStartMinute), end = min(endMinute, requestedEndMinute)
             return "重叠 " + time(start) + "–" + time(end) + "（\(max(0, end - start)) 分钟）"
         case .floatingCapacity:
-            return "这些事项的连续时长无法在重叠窗口内排入；请缩短占用时长、调整窗口或跳过此日。"
+            return (capacityExplanation ?? "这些事项的连续时长无法在重叠窗口内排入。") + "请缩短占用时长、调整窗口或跳过此日。"
+        case .floatingUnresolved:
+            return "本次尚未找到这些事项都能放入的完整排法，不能据此认定时间不足；未保存任何更改。请调整窗口或占用时长，也可选择跳过此日。"
         case .activeTask:
             return "该学习任务正在进行或处于已开始的浮动窗口，不能自动移动。"
         }
@@ -378,7 +383,9 @@ public struct PlannerState: Codable, Equatable, Sendable {
                     }
                 }
                 let component = candidates.indices.dropFirst().filter { included.contains($0) }
-                let capacityConflict = !fixedEventCapacityAvailable(component.map { candidates[$0] } + [updated], on: candidate, calendar: calendar)
+                let capacityEvents = component.map { candidates[$0] } + [updated]
+                let capacityConflict = !fixedEventCapacityAvailable(capacityEvents, on: candidate, calendar: calendar)
+                let capacityIssue = capacityConflict ? FloatingScheduleIssue.diagnose(events: capacityEvents, on: candidate, calendar: calendar) : nil
                 let involved = capacityConflict ? component : candidates.indices.dropFirst().filter { exactConflicts.contains($0) }
                 for index in involved {
                     let other = candidates[index], seconds = actualOverlap(0, index)
@@ -392,7 +399,8 @@ public struct PlannerState: Codable, Equatable, Sendable {
                         startMinute: other.startMinute, endMinute: other.endMinute,
                         requestedStartMinute: updated.startMinute, requestedEndMinute: updated.endMinute,
                         floatingDurationMinutes: other.floatingDurationMinutes,
-                        reason: exactConflicts.contains(index) ? .overlap : .floatingCapacity, actualOverlapMinutes: actualMinutes))
+                        reason: exactConflicts.contains(index) ? .overlap : (capacityIssue?.isProvenConflict == true ? .floatingCapacity : .floatingUnresolved),
+                        actualOverlapMinutes: actualMinutes, capacityExplanation: capacityIssue?.isProvenConflict == true ? capacityIssue?.explanation : nil))
                 }
                 if capacityConflict && involved.isEmpty { throw PlannerError.invalidFixedEvent }
             }
