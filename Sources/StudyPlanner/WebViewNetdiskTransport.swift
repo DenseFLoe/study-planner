@@ -45,10 +45,10 @@ final class WebViewNetdiskTransport: NSObject, NetdiskTransport, WKScriptMessage
     }
 
     func get(path: String, query: [String: String]) async throws -> Data {
-        try await call(path: path, query: query, body: nil)
+        try Self.payload(fromPage: await call(path: path, query: query, body: nil))
     }
     func post(path: String, query: [String: String], body: [String: NetdiskJSON]) async throws -> Data {
-        try await call(path: path, query: query, body: body)
+        try Self.payload(fromPage: await call(path: path, query: query, body: body))
     }
     /// The page bridge answers with an envelope; unwrap it and hand the provider payload on.
     nonisolated static func payload(fromPage data: Data) throws -> Data {

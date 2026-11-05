@@ -447,15 +447,43 @@ final class QuarkCrawlerScriptTests: XCTestCase {
             };
             """, arguments: [:], in: nil, contentWorld: .page)
         let passcode = "synthetic-'\"\\测试"
-        _ = try await transport.post(path: "/1/clouddrive/share/sharepage/token", query: [:],
-                                     body: ["pwd_id": .string("abc123"), "passcode": .string(passcode),
-                                            "support_visit_limit_private_share": .bool(true)])
+        let response = try await transport.post(path: "/1/clouddrive/share/sharepage/token", query: [:],
+                                                body: ["pwd_id": .string("abc123"), "passcode": .string(passcode),
+                                                       "support_visit_limit_private_share": .bool(true)])
+        let provider = try XCTUnwrap(try JSONSerialization.jsonObject(with: response) as? [String: Any])
+        XCTAssertEqual(provider["code"] as? Int, 0)
+        XCTAssertNil(provider["ok"], "网页传输返回网盘原始响应，不把外层包装交给目录解析器")
         let captured = try await view.evaluateJavaScript("window.studyCapturedTokenBody") as? String
         let body = try XCTUnwrap(captured?.data(using: .utf8))
         let json = try XCTUnwrap(try JSONSerialization.jsonObject(with: body) as? [String: Any])
         XCTAssertEqual(json["pwd_id"] as? String, "abc123")
         XCTAssertEqual(json["passcode"] as? String, passcode)
         XCTAssertEqual(json["support_visit_limit_private_share"] as? Bool, true)
+    }
+
+    @MainActor
+    func testNativePageTransportFeedsProviderJSONDirectlyToCrawler() async throws {
+        let transport = WebViewNetdiskTransport()
+        defer { transport.stop() }
+        try await ready(transport.webView)
+        _ = try await transport.webView.callAsyncJavaScript("""
+            window.fetch = async (url, init) => {
+              const data = String(url).includes('/sharepage/token')
+                ? {stoken:'synthetic',title:'测试课程',passcode:'0'}
+                : {list:[{fid:'video1',file_name:'第1讲.mp4',dir:false,category:1,
+                          format_type:'video/mp4',size:1000,duration:600,status:1}]};
+              return new Response(JSON.stringify({status:200,code:0,data,metadata:{_count:1,_page:1}}),
+                                  {status:200});
+            };
+            """, arguments: [:], in: nil, contentWorld: .page)
+        let link = try XCTUnwrap(NetdiskLink.parse("https://pan.quark.cn/s/abc123"))
+        let result = try await NetdiskCrawler(transport: transport).crawl(
+            link: link, passcode: nil, sourceURL: "https://pan.quark.cn/s/abc123",
+            existingCourses: [], now: Date(timeIntervalSince1970: 1_790_497_416))
+        XCTAssertEqual(result.scan.totalVideoCount, 1)
+        XCTAssertEqual(result.courses.first?.snapshot.lessons.first?.durationSeconds, 600)
+        XCTAssertNil(result.courses.first?.refusal)
+        XCTAssertEqual(result.scan.unreadFolders, 0)
     }
 
     @MainActor

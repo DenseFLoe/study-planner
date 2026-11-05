@@ -4,6 +4,7 @@ import StudyCore
 /// How the crawler talks to the netdisk. Public shares use the plain transport; shares that
 /// require a signed-in session can fall back to requests from the embedded WebView.
 protocol NetdiskTransport: Sendable {
+    /// Returns the provider JSON; transports unwrap their own browser/HTTP envelopes.
     func get(path: String, query: [String: String]) async throws -> Data
     func post(path: String, query: [String: String], body: [String: NetdiskJSON]) async throws -> Data
 }
@@ -52,11 +53,6 @@ struct QuarkShareAPI: Sendable {
         var stoken: String
         var title: String
         var needsPasscode: Bool
-    }
-
-    /// Unwraps the envelope the in-page bridge returns into the provider's own JSON.
-    static func payload(fromPage data: Data) throws -> Data {
-        try WebViewNetdiskTransport.payload(fromPage: data)
     }
 
     /// One entry as the provider reports it.

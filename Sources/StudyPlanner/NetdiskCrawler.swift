@@ -54,17 +54,13 @@ actor NetdiskCrawler {
     private let transport: NetdiskTransport
     private let limits: Limits
     private let onProgress: (@Sendable (Progress) -> Void)?
-    /// True when the transport answers with the in-page `{ok, status, text}` envelope.
-    private let unwrapsPageEnvelope: Bool
-    /// Reads through this actor's own conformance, so page envelopes are unwrapped in one place.
-    private var api: QuarkShareAPI { QuarkShareAPI(transport: self) }
+    private var api: QuarkShareAPI { QuarkShareAPI(transport: transport) }
 
-    init(transport: NetdiskTransport, limits: Limits = .standard, unwrapsPageEnvelope: Bool = false,
+    init(transport: NetdiskTransport, limits: Limits = .standard,
          onProgress: (@Sendable (Progress) -> Void)? = nil) {
         self.transport = transport
         self.limits = limits
         self.onProgress = onProgress
-        self.unwrapsPageEnvelope = unwrapsPageEnvelope
     }
 
     func crawl(link: NetdiskLink, passcode: String?, sourceURL: String,
@@ -185,23 +181,5 @@ actor NetdiskCrawler {
                      childCount: item.includeItems, riskType: item.riskType ?? 0,
                      banned: item.ban ?? false, badContent: item.badContent ?? false,
                      status: item.status ?? 1, parentPath: parentPath)
-    }
-}
-
-extension NetdiskCrawler: NetdiskTransport {
-    nonisolated func get(path: String, query: [String: String]) async throws -> Data {
-        try await call(path: path, query: query, body: nil)
-    }
-    nonisolated func post(path: String, query: [String: String], body: [String: NetdiskJSON]) async throws -> Data {
-        try await call(path: path, query: query, body: body)
-    }
-    private func call(path: String, query: [String: String], body: [String: NetdiskJSON]?) async throws -> Data {
-        let data: Data
-        if let body {
-            data = try await transport.post(path: path, query: query, body: body)
-        } else {
-            data = try await transport.get(path: path, query: query)
-        }
-        return unwrapsPageEnvelope ? try QuarkShareAPI.payload(fromPage: data) : data
     }
 }
