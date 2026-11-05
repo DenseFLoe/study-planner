@@ -43,8 +43,9 @@ public final class PlannerDatabase extends SQLiteOpenHelper implements StateMuta
     synchronized boolean commitCloud(SyncLedger candidate,JSONObject checkpoint,boolean replace)throws Exception{
         if(!SyncLedger.equivalent(checkpoint,metadata()))return false;
         candidate.materialize();
-        if(replace){
-            try{backups.save(ledger().materialize(),Planner.now(),"云端较新课表覆盖前的手机日程",null);}
+        JSONObject before=ledger().materialize();
+        if(replace||!SyncLedger.equivalent(PlannerBackupFile.businessState(before),PlannerBackupFile.businessState(candidate.materialize()))){
+            try{backups.save(before,Planner.now(),replace?"云端较新课表覆盖前的手机日程":"云同步合并前的手机日程",null);}
             catch(Exception error){throw new IllegalStateException("覆盖前的本机备份未完成，已保留手机课表。请检查可用存储空间后重试。",error);}
         }
         commit(candidate,false,replace);

@@ -18,6 +18,13 @@ final class CloudOutbox {
             if(!temporary.renameTo(destination))throw new IOException("无法保存待上传文件");
         }finally{temporary.delete();}
     }
+    static File prepare(File directory,SyncLedger ledger)throws Exception {
+        if(!directory.isDirectory()&&!directory.mkdirs())throw new IOException("无法创建待上传目录");
+        File file=File.createTempFile(ledger.value.getString("device")+"-"+ledger.sequence()+".prepared-",".json.gz",directory);
+        org.json.JSONObject header=CloudSnapshot.header(ledger).put("archiveID",java.util.UUID.randomUUID().toString().toUpperCase(java.util.Locale.ROOT));
+        try(FileOutputStream out=new FileOutputStream(file)){CloudSnapshot.write(new FilterOutputStream(out){public void close()throws IOException{flush();}},ledger,header);out.getFD().sync();}
+        return file;
+    }
     static File[] queued(File directory)throws IOException {
         if(!directory.exists())return new File[0];
         File[] files=directory.listFiles((dir,name)->name.endsWith(".json.gz"));
@@ -34,7 +41,7 @@ final class CloudOutbox {
         for(File file:queued(directory)){
             String name=file.getName();if(!name.startsWith(prefix))continue;
             long sequence;
-            try{sequence=Long.parseLong(name.substring(prefix.length(),name.length()-suffix.length()));}
+            try{String number=name.substring(prefix.length(),name.length()-suffix.length());int marker=number.indexOf(".prepared-");if(marker>=0)number=number.substring(0,marker);sequence=Long.parseLong(number);}
             catch(NumberFormatException error){continue;}
             if(sequence>=0&&sequence<=through)remove(new File[]{file});
         }

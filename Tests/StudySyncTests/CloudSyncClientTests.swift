@@ -53,7 +53,7 @@ final class CloudSyncClientTests: XCTestCase, @unchecked Sendable {
         phone.courses = [Course(name: "Phone", totalMinutes: 60, startDate: Date(), deadline: Date())]; try remote.capture(phone)
         let server = ArchiveServer(remote); await server.fail(true)
         do { _ = try await CloudSyncClient.run(endpoint: "https://fixture.test", databaseURL: database, outbox: outbox, transport: server); XCTFail("upload should fail") } catch {}
-        XCTAssertEqual(try CloudOutbox.files(in: outbox).count, 1)
+        XCTAssertFalse(try CloudOutbox.files(in: outbox).isEmpty)
         let unchanged = try await SyncDatabase.snapshot(url: database)
         XCTAssertEqual(unchanged.0.courses.count, 1)
         await server.fail(false)
@@ -88,6 +88,22 @@ final class CloudSyncClientTests: XCTestCase, @unchecked Sendable {
         _ = try await CloudSyncClient.run(endpoint: "https://fixture.test", databaseURL: database, outbox: outbox, transport: server)
         let count = await server.uploadCount(); XCTAssertEqual(count, 2)
     }
+    func testHistoricalOutboxIsNotReplayedAgainstCurrentDatabase() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let database = root.appendingPathComponent("local.store"), outbox = root.appendingPathComponent("outbox")
+        let empty = PlannerState()
+        try LocalRepository(url: database).save(empty)
+        var old = empty, obsolete = SyncLedger(), current = SyncLedger()
+        old.courses = [Course(name: "Obsolete queued course", totalMinutes: 60, startDate: Date(), deadline: Date())]
+        try obsolete.capture(old); try CloudOutbox.enqueue(obsolete, directory: outbox)
+        try current.capture(empty); let server = ArchiveServer(current)
+        let result = try await CloudSyncClient.run(endpoint: "https://fixture.test", databaseURL: database, outbox: outbox, transport: server)
+        XCTAssertTrue(result.state.courses.isEmpty)
+        let uploads = await server.uploadCount(); XCTAssertEqual(uploads, 1)
+        XCTAssertTrue(try CloudOutbox.files(in: outbox).isEmpty)
+    }
     func testCorruptDownloadPreservesLocalDataAndOutbox() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true); defer { try? FileManager.default.removeItem(at: root) }
@@ -95,7 +111,7 @@ final class CloudSyncClientTests: XCTestCase, @unchecked Sendable {
         try await Task.detached { try LocalRepository(url: database).save(PlannerState()) }.value
         var ledger = SyncLedger(); try ledger.capture(PlannerState()); let server = ArchiveServer(ledger); await server.corruptDownload()
         do { _ = try await CloudSyncClient.run(endpoint: "https://fixture.test", databaseURL: database, outbox: outbox, transport: server); XCTFail("corrupt download should fail") } catch {}
-        XCTAssertEqual(try CloudOutbox.files(in: outbox).count, 1)
+        XCTAssertFalse(try CloudOutbox.files(in: outbox).isEmpty)
         let retained = try await SyncDatabase.snapshot(url: database); XCTAssertNil(retained.1.cloudProgress)
     }
 }
@@ -126,13 +142,13 @@ extension CloudSyncClientTests {
         let outcome = try await CloudSyncClient.run(endpoint: "https://fixture.test", databaseURL: database, outbox: outbox, transport: server)
         XCTAssertEqual(outcome.state.tasks.reduce(0) { $0 + $1.durationMinutes }, 120)
         XCTAssertTrue(outcome.state.tasks.allSatisfy { calendar.component(.hour, from: $0.start) >= 13 })
-        XCTAssertEqual(outcome.ledger.cloudProgress?.uploadedSequence, -1, "Repairs must be sent back to peers")
+        XCTAssertEqual(outcome.ledger.cloudProgress?.uploadedSequence, outcome.ledger.sequence, "Repairs are uploaded together with the current snapshot")
         let persisted = try await SyncDatabase.snapshot(url: database)
         XCTAssertEqual(persisted.0.tasks, outcome.state.tasks)
         XCTAssertEqual(try persisted.1.materialize().tasks, outcome.state.tasks)
         _ = try await CloudSyncClient.run(endpoint: "https://fixture.test", databaseURL: database, outbox: outbox, transport: server)
         _ = try await CloudSyncClient.run(endpoint: "https://fixture.test", databaseURL: database, outbox: outbox, transport: server)
         let count = await server.uploadCount()
-        XCTAssertEqual(count, 2)
+        XCTAssertEqual(count, 1)
     }
 }

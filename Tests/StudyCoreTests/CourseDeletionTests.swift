@@ -78,6 +78,7 @@ final class CourseDeletionTests: XCTestCase {
         var archived = try XCTUnwrap(ledger.records["courses/" + id.uuidString])
         archived.payload = try JSONEncoder().encode(course)
         archived.version += 1
+        archived.fieldVersions = nil // Legacy records predate field-level revisions.
         try ledger.merge([archived])
         let cleaned = try ledger.materialize()
         XCTAssertFalse(cleaned.courses.contains { $0.id == id })

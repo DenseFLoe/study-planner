@@ -24,6 +24,7 @@ public final class SyncTests {
         SyncLedger legacy=new SyncLedger();legacy.capture(state);
         JSONObject archived=clone(legacy.records().getJSONObject("courses/"+id));JSONObject payload=SyncLedger.payload(archived);payload.put("isArchived",true);
         archived.put("payload",Base64.getEncoder().encodeToString(payload.toString().getBytes("UTF-8"))).put("version",archived.getLong("version")+1);
+        archived.remove("fieldVersions"); // Legacy clients predate field-level revisions.
         legacy.merge(new JSONArray().put(archived));JSONObject cleaned=legacy.materialize();
         check(cleaned.getJSONArray("courses").length()==1&&cleaned.getJSONArray("tasks").length()==3&&cleaned.getJSONArray("completions").length()==2,"Legacy archive must remove history");
         legacy.capture(cleaned);check(legacy.records().getJSONObject("courses/"+id).getBoolean("deleted"),"Legacy cleanup must sync deletion");

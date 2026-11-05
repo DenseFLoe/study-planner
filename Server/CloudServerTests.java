@@ -311,6 +311,18 @@ public final class CloudServerTests {
             check(completion.equals(SyncLedger.canonical(normalized.getJSONArray("completions").getJSONObject(0))),"cloud rest repair changed confirmed progress");
         }finally{Files.deleteIfExists(archive);}
     }
+    static void independentCourseFields(Path parent)throws Exception{
+        Path directory=Files.createDirectory(parent.resolve("field-regression"));
+        try(CloudSyncServer server=new CloudSyncServer(directory,"127.0.0.1",0,UUID.randomUUID().toString())){
+            double now=Planner.now();long time=System.currentTimeMillis();JSONObject base=SyncExchangeTests.fixture(now);base.put("tasks",new JSONArray());
+            SyncLedger common=new SyncLedger();common.capture(base,time-100000);SyncLedger mac=copy(common),phone=copy(common);
+            JSONObject local=mac.materialize(),old=phone.materialize();local.getJSONArray("courses").getJSONObject(0).put("totalMinutes",60);mac.capture(local,time-50000);
+            old.getJSONArray("courses").getJSONObject(0).put("deadline",now+10*86400);phone.capture(old,time-1000);
+            server.accept(snapshot(mac));server.accept(snapshot(phone));JSONObject course=server.loadLedger().materialize().getJSONArray("courses").getJSONObject(0);
+            check(course.getInt("totalMinutes")==60,"server restored stale lesson structure");check(course.getDouble("deadline")==now+10*86400,"server lost actual deadline edit");
+            long revision=server.revision;server.accept(snapshot(phone));server.accept(snapshot(mac));check(server.revision==revision,"field merge retries create server versions");
+        }
+    }
     public static void main(String[] args)throws Exception{
         Path directory=Files.createTempDirectory("planner-cloud-server-");String token=UUID.randomUUID().toString()+UUID.randomUUID();
         CloudSyncServer server=new CloudSyncServer(directory,"127.0.0.1",0,token);server.start();
@@ -320,6 +332,7 @@ public final class CloudServerTests {
             try{request(server,token,"/cloud/snapshot",packed(initial()),503);}finally{server.uploadLock.unlock();}
             diskRegression(server,token,directory);
             mergedHistoryRestRegression(directory);
+            independentCourseFields(directory);
             SyncLedger base=initial(),mac=copy(base),phone=copy(base);server.accept(snapshot(base));long first=server.revision;
             server.accept(snapshot(base));check(server.revision==first,"retry created a version");
             JSONObject left=mac.materialize(),right=phone.materialize();

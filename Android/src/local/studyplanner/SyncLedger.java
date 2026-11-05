@@ -80,7 +80,7 @@ public final class SyncLedger {
         }
         Iterator<String> it=records.keys();while(it.hasNext()){String k=it.next();JSONObject old=records.getJSONObject(k);if(!desired.contains(k)&&!old.getBoolean("deleted"))changes.add(shallowCopy(old).put("deleted",true));}
         if(changes.isEmpty())return;long clock=value.getLong("clock")+1;value.put("clock",clock);changes.sort(Comparator.comparing(r->r.optString("kind")+"/"+r.optString("id")));
-        for(JSONObject r:changes){long seq=sequence()+1;value.put("sequence",seq);r.put("version",clock).put("device",value.getString("device")).put("sequence",seq);JSONObject old=records.optJSONObject(key(r));r.put("modifiedAt",Math.max(nowMillis,(old==null?0:old.optLong("modifiedAt"))+1));records.put(key(r),r);}
+        for(JSONObject r:changes){long seq=sequence()+1;value.put("sequence",seq);r.put("version",clock).put("device",value.getString("device")).put("sequence",seq);JSONObject old=records.optJSONObject(key(r));r.put("modifiedAt",Math.max(nowMillis,(old==null?0:old.optLong("modifiedAt"))+1));captureCourseFields(r,old);records.put(key(r),r);}
     }
     public JSONArray changes(long after)throws Exception{if(after<0||after>sequence())throw new IllegalArgumentException("游标无效，请重新配对");List<JSONObject> out=new ArrayList<>();Iterator<String> it=records().keys();while(it.hasNext()){JSONObject r=records().getJSONObject(it.next());if(r.getLong("sequence")>after)out.add(CourseSourcePrivacy.record(r));}out.sort(Comparator.comparingLong(r->r.optLong("sequence")));return new JSONArray(out);}
     public void merge(JSONArray incoming)throws Exception{for(int i=0;i<incoming.length();i++)mergeRecord(incoming.getJSONObject(i));}
@@ -102,8 +102,92 @@ public final class SyncLedger {
         // Swift decodes every payload as Data, even for unrelated historical tombstones.
         // Java's decoder alone also accepts missing padding, which Swift rejects.
         if(encoded.length()%4!=0||Base64.getDecoder().decode(encoded).length>1_000_000)throw new IllegalArgumentException("同步负载编码或大小无效");
-        value.put("clock",Math.max(value.getLong("clock"),v));JSONObject old=records().optJSONObject(key(r));if(old!=null&&!wins(r,old))return;long seq=sequence()+1;value.put("sequence",seq);r.put("sequence",seq);records().put(key(r),r);
+        validateFieldVersions(r);value.put("clock",Math.max(value.getLong("clock"),v));JSONObject old=records().optJSONObject(key(r));if(old!=null){if(kind.equals("courses")&&!r.getBoolean("deleted")&&!old.getBoolean("deleted")&&(r.optJSONObject("fieldVersions")!=null||old.optJSONObject("fieldVersions")!=null)){r=mergeCourseFields(r,old);if(equivalent(payload(r),payload(old))&&equivalent(r.opt("fieldVersions"),old.opt("fieldVersions"))&&!wins(r,old))return;}else if(!wins(r,old))return;}value.put("clock",Math.max(value.getLong("clock"),r.getLong("version")));long seq=sequence()+1;value.put("sequence",seq);r.put("sequence",seq);records().put(key(r),r);
     }
+
+    static JSONObject fieldVersion(JSONObject row)throws Exception {
+        return new JSONObject().put("modifiedAt",row.optLong("modifiedAt")).put("version",row.getLong("version")).put("device",row.getString("device"));
+    }
+    static String fieldGroup(String key){
+        return Arrays.asList("totalMinutes","initialCompletedMinutes","webCourse","webCompletionOverlaps","netdisk","netdiskLessons","manualLessons","lessonOrder","lessonOrderCustomized","deletedLessonIDs","mergedSources","type").contains(key)?"$lessons":key;
+    }
+    static Map<String,JSONObject> fieldGroups(JSONObject object)throws Exception {
+        Map<String,JSONObject> result=new TreeMap<>();Iterator<String> keys=object.keys();
+        while(keys.hasNext()){String key=keys.next();if(!key.equals("id"))result.computeIfAbsent(fieldGroup(key),k->new JSONObject()).put(key,object.get(key));}return result;
+    }
+    static JSONObject fieldStamp(JSONObject row,String key)throws Exception {
+        JSONObject fields=row.optJSONObject("fieldVersions");return fields!=null&&fields.has(key)?fields.getJSONObject(key):fieldVersion(row);
+    }
+    static void validateFieldVersions(JSONObject row)throws Exception {
+        if(!row.has("fieldVersions")||row.isNull("fieldVersions"))return;
+        JSONObject fields=row.getJSONObject("fieldVersions");
+        if(!row.getString("kind").equals("courses")||fields.length()>128)throw new IllegalArgumentException("课程字段版本无效");
+        Iterator<String> keys=fields.keys();while(keys.hasNext()){
+            String key=keys.next();JSONObject stamp=fields.getJSONObject(key);long modified=wireInteger(stamp,"modifiedAt"),version=wireInteger(stamp,"version");
+            if(key.isEmpty()||key.length()>128||modified<0||modified>row.optLong("modifiedAt")||version<=0||version>row.getLong("version")||!(stamp.get("device") instanceof String)||stamp.getString("device").isEmpty()||stamp.getString("device").length()>64)throw new IllegalArgumentException("课程字段版本无效");
+        }
+    }
+    static void captureCourseFields(JSONObject row,JSONObject previous)throws Exception {
+        if(!row.getString("kind").equals("courses")||row.getBoolean("deleted")){row.remove("fieldVersions");return;}
+        Map<String,JSONObject> current=fieldGroups(payload(row));JSONObject stamps=new JSONObject();
+        if(previous==null||previous.getBoolean("deleted")){for(String key:current.keySet())stamps.put(key,fieldVersion(row));}
+        else {
+            Map<String,JSONObject> old=fieldGroups(payload(previous));JSONObject prior=previous.optJSONObject("fieldVersions");
+            if(prior!=null)stamps=shallowCopy(prior);
+            Set<String> keys=new TreeSet<>(current.keySet());keys.addAll(old.keySet());
+            for(String key:keys)stamps.put(key,equivalent(current.get(key),old.get(key))?fieldStamp(previous,key):fieldVersion(row));
+        }
+        row.put("fieldVersions",stamps);
+    }
+    static JSONObject mergeCourseFields(JSONObject a,JSONObject b)throws Exception {
+        JSONObject winner=wins(a,b)?a:b;
+        if(!a.getString("kind").equals("courses")||a.getBoolean("deleted")||b.getBoolean("deleted")||(a.optJSONObject("fieldVersions")==null&&b.optJSONObject("fieldVersions")==null))return shallowCopy(winner);
+        JSONObject ap=payload(a),bp=payload(b);if(!a.getString("id").equals(ap.opt("id"))||!b.getString("id").equals(bp.opt("id")))throw new IllegalArgumentException("课程记录 ID 不匹配");
+        Map<String,JSONObject> ag=fieldGroups(ap),bg=fieldGroups(bp);Set<String> keys=new TreeSet<>(ag.keySet());keys.addAll(bg.keySet());
+        for(JSONObject row:new JSONObject[]{a,b}){JSONObject stamps=row.optJSONObject("fieldVersions");if(stamps!=null)stamps.keys().forEachRemaining(keys::add);}
+        JSONObject object=new JSONObject().put("id",a.getString("id")),stamps=new JSONObject();
+        for(String key:keys){JSONObject av=fieldStamp(a,key),bv=fieldStamp(b,key);if(equivalent(av,bv)&&!equivalent(ag.get(key),bg.get(key)))throw new IllegalArgumentException("同一课程字段版本对应不同内容");boolean useA=wins(av,bv);stamps.put(key,useA?av:bv);JSONObject selected=(useA?ag:bg).get(key);if(selected!=null){Iterator<String> names=selected.keys();while(names.hasNext()){String name=names.next();object.put(name,selected.get(name));}}}
+        if(equivalent(object,payload(winner))&&equivalent(stamps,winner.opt("fieldVersions")))return shallowCopy(winner);
+        JSONObject result=shallowCopy(winner).put("payload",Base64.getEncoder().encodeToString(object.toString().getBytes(StandardCharsets.UTF_8))).put("fieldVersions",stamps);
+        result.put("version",Math.max(a.getLong("version"),b.getLong("version"))+1).put("modifiedAt",Math.max(a.optLong("modifiedAt"),b.optLong("modifiedAt"))+1);
+        return result;
+    }
+
+
+    void mergeCloudSnapshot(SyncLedger remote,double now)throws Exception {
+        JSONObject localState=materialize(),remoteState=remote.materialize();
+        Set<String> localCourses=new HashSet<>(),remoteCourses=new HashSet<>();
+        for(JSONObject c:Planner.list(localState.getJSONArray("courses")))localCourses.add(c.getString("id"));
+        for(JSONObject c:Planner.list(remoteState.getJSONArray("courses")))remoteCourses.add(c.getString("id"));
+        Map<String,Set<String>> a=pendingPlans(localState),b=pendingPlans(remoteState);
+        Set<String> shared=new HashSet<>(localCourses);shared.retainAll(remoteCourses);
+        Set<String> differing=new HashSet<>();for(String course:shared)if(!a.getOrDefault(course,Collections.emptySet()).equals(b.getOrDefault(course,Collections.emptySet())))differing.add(course);
+        Map<String,JSONObject> av=planVersions(differing),bv=remote.planVersions(differing);Set<String> keep=new HashSet<>();
+        for(JSONObject task:Planner.list(localState.getJSONArray("tasks")))if(!remoteCourses.contains(task.getString("courseID")))keep.add(task.getString("id"));
+        for(JSONObject task:Planner.list(remoteState.getJSONArray("tasks")))if(!localCourses.contains(task.getString("courseID")))keep.add(task.getString("id"));
+        for(String course:shared){
+            boolean useRemote=false;
+            if(differing.contains(course)){
+                JSONObject left=av.get(course),right=bv.get(course);
+                if(left!=null&&right!=null){if(equivalent(left,right)||!((left.optLong("modifiedAt")>0&&right.optLong("modifiedAt")>0)||(left.optLong("modifiedAt")>0&&left.getLong("version")>right.getLong("version"))||(right.optLong("modifiedAt")>0&&right.getLong("version")>left.getLong("version"))))throw new IllegalStateException("两端旧课表缺少修改时间，未上传或覆盖；请从备份核对日程。");useRemote=wins(right,left);}
+                else useRemote=left==null;
+            }
+            keep.addAll((useRemote?b:a).getOrDefault(course,Collections.emptySet()));
+        }
+        merge(remote.changes(0));JSONObject state=materialize();JSONArray tasks=new JSONArray();
+        for(JSONObject task:Planner.list(state.getJSONArray("tasks")))if(!Planner.pending(task)||keep.contains(task.getString("id")))tasks.put(task);
+        state.put("tasks",tasks);if(SyncExchange.invalidPending(state,now))Planner.replan(state,now);capture(state);
+    }
+    static Map<String,Set<String>> pendingPlans(JSONObject state)throws Exception{
+        Map<String,Set<String>> result=new HashMap<>();for(JSONObject task:Planner.list(state.getJSONArray("tasks")))if(Planner.pending(task))result.computeIfAbsent(task.getString("courseID"),k->new HashSet<>()).add(task.getString("id"));return result;
+    }
+    Map<String,JSONObject> planVersions(Set<String> courses)throws Exception{
+        Map<String,JSONObject> result=new HashMap<>();if(courses.isEmpty())return result;
+        List<JSONObject> tasks=new ArrayList<>();Iterator<String> keys=records().keys();while(keys.hasNext()){JSONObject row=records().getJSONObject(keys.next());if(row.getString("kind").equals("tasks"))tasks.add(row);}
+        tasks.sort((a,b)->{try{return wins(a,b)?-1:wins(b,a)?1:0;}catch(Exception error){throw new IllegalArgumentException(error);}});
+        for(JSONObject row:tasks){try{JSONObject task=payload(row);String course=task.getString("courseID");if(Planner.pending(task)&&courses.contains(course)&&!result.containsKey(course))result.put(course,fieldVersion(row));}catch(Exception error){if(!row.getBoolean("deleted"))throw error;}if(result.size()==courses.size())break;}return result;
+    }
+
     public JSONObject materialize()throws Exception{
         JSONObject s=new JSONObject().put("schemaVersion",1);for(String kind:KINDS)if(!kind.equals("settings"))s.put(kind,new JSONArray());
         List<String> keys=new ArrayList<>();Iterator<String> it=records().keys();while(it.hasNext())keys.add(it.next());Collections.sort(keys);

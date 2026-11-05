@@ -73,25 +73,27 @@ final class CloudSyncEngine {
         // upload or replacement based on the earlier local snapshot.
         if(!SyncLedger.equivalent(initial.metadata(),store.read().metadata()))return new Result(revision,false,true,false);
         if(localDirty)CloudOutbox.enqueue(outbox,initial);
-        queued=CloudOutbox.queued(outbox);
-        for(File file:queued){
-            status.accept("正在上传手机课表…");CloudSnapshot.sanitizeSourceURLs(file);
-            JSONObject reply=remote.upload(file);checkStatus(reply);
+        File[] obsolete=CloudOutbox.queued(outbox);
+        SyncLedger outgoing=new SyncLedger(SyncLedger.shallowCopy(initial.metadata()).put("records",SyncLedger.shallowCopy(initial.records())));
+        if(archive!=null)outgoing.mergeCloudSnapshot(archive.ledger,now.getAsDouble());
+        File prepared=null;
+        if(obsolete.length>0||outgoing.sequence()!=initial.sequence()){
+            prepared=CloudOutbox.prepare(outbox,outgoing);
+            status.accept("正在上传已核对的手机课表…");CloudSnapshot.sanitizeSourceURLs(prepared);
+            JSONObject reply=remote.upload(prepared);checkStatus(reply);
             if(!identity.equals(reply.getString("serverID"))||reply.getLong("revision")<revision)throw new IOException("云端身份或版本变化");
-            revision=reply.getLong("revision");
+            revision=reply.getLong("revision");archive=download(identity,revision);revision=archive.header.getLong("revision");
         }
-        if(queued.length>0){archive=download(identity,revision);revision=archive.header.getLong("revision");}
         boolean dirty,changed;
         status.accept("正在保存同步结果…");
         while(true){
             SyncLedger current=store.read();JSONObject checkpoint=current.metadata();dirty=current.sequence()!=sequence;
-            if(archive!=null)current.merge(archive.ledger.changes(0));
-            long beforeRepair=current.sequence();SyncExchange.repairMergedSchedule(current,now.getAsDouble());
-            dirty|=current.sequence()!=beforeRepair;changed=current.sequence()!=checkpoint.optLong("sequence");
+            if(archive!=null)current.mergeCloudSnapshot(archive.ledger,now.getAsDouble());
+            if(archive!=null){java.util.Iterator<String> keys=current.records().keys();while(keys.hasNext()){String key=keys.next();JSONObject row=current.records().getJSONObject(key),peer=archive.ledger.records().optJSONObject(key);if(peer==null||SyncLedger.wins(row,peer)){dirty=true;break;}}}changed=current.sequence()!=checkpoint.optLong("sequence");
             progress(current,identity,revision,dirty);
             if(store.commit(current,checkpoint,false))break;
         }
-        CloudOutbox.remove(queued);
+        CloudOutbox.remove(obsolete);if(prepared!=null)CloudOutbox.remove(new File[]{prepared});
         return new Result(revision,changed,dirty,false);
     }
 }

@@ -6,17 +6,18 @@ import java.util.*;
 /** Compare business edits, never archive creation/download time. */
 final class CloudReplacement {
     static long modifiedAt(SyncLedger ledger)throws Exception {
-        long latest=0;
+        long latest=0,datedVersion=0,legacyVersion=0;
         Iterator<String> keys=ledger.records().keys();
         while(keys.hasNext()){
             JSONObject row=ledger.records().getJSONObject(keys.next());
-            // Legacy records without dates cannot safely authorize whole-state replacement.
-            if(!row.has("modifiedAt")||row.isNull("modifiedAt"))return -1;
+            // Older legacy rows do not invalidate a later dated ledger revision.
+            // Undated edits beyond every dated revision remain ambiguous.
+            if(!row.has("modifiedAt")||row.isNull("modifiedAt")||row.optLong("modifiedAt")==0){legacyVersion=Math.max(legacyVersion,row.getLong("version"));continue;}
             long time=SyncLedger.wireInteger(row,"modifiedAt");
             if(time<=0)return -1;
-            latest=Math.max(latest,time);
+            latest=Math.max(latest,time);datedVersion=Math.max(datedVersion,row.getLong("version"));
         }
-        return latest==0?-1:latest;
+        return latest==0||legacyVersion>datedVersion?-1:latest;
     }
     static boolean serverNewer(SyncLedger local,SyncLedger remote)throws Exception {
         long localTime=modifiedAt(local),remoteTime=modifiedAt(remote);

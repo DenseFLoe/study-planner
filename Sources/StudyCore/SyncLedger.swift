@@ -16,6 +16,8 @@ public struct SyncRecord: Codable, Equatable, Sendable {
     public var sequence: Int64
     /// Unix milliseconds of the local edit, independent of unrelated ledger revisions.
     public var modifiedAt: Int64? = nil
+    /// Independent course edits retain the revision of fields they did not change.
+    public var fieldVersions: [String: SyncFieldVersion]? = nil
     public var key: String { kind + "/" + id }
     public func wins(over other: SyncRecord) -> Bool {
         if (modifiedAt ?? 0) != (other.modifiedAt ?? 0) { return (modifiedAt ?? 0) > (other.modifiedAt ?? 0) }
@@ -140,6 +142,7 @@ public struct SyncLedger: Codable, Sendable {
             sequence += 1
             row.sequence = sequence; row.version = clock; row.device = device
             row.modifiedAt = max(Int64(now.timeIntervalSince1970 * 1000), (records[row.key]?.modifiedAt ?? 0) + 1)
+            try row.captureCourseFields(previous: records[row.key])
             records[row.key] = row
         }
     }
@@ -208,6 +211,7 @@ public struct SyncLedger: Codable, Sendable {
         for var row in changed.sorted(by: { $0.key < $1.key }) {
             sequence += 1; row.sequence = sequence; row.version = clock; row.device = device
             row.modifiedAt = max(Int64(now.timeIntervalSince1970 * 1000), (records[row.key]?.modifiedAt ?? 0) + 1)
+            try row.captureCourseFields(previous: records[row.key])
             records[row.key] = row
         }
     }
@@ -227,7 +231,14 @@ public struct SyncLedger: Codable, Sendable {
                   (row.kind == "settings" ? row.id == "settings" : UUID(uuidString: row.id)?.uuidString == row.id),
                   row.payload.count <= 1_000_000 else { throw SyncFailure.invalidData }
             clock = max(clock, row.version)
-            if let old = records[row.key], !row.wins(over: old) { continue }
+            try row.validateFieldVersions()
+            if let old = records[row.key] {
+                if row.kind == "courses", !row.deleted, !old.deleted, row.fieldVersions != nil || old.fieldVersions != nil {
+                    row = try row.mergingCourseFields(with: old)
+                    if try Self.equivalent(row.payload, old.payload) && row.fieldVersions == old.fieldVersions && !row.wins(over: old) { continue }
+                } else if !row.wins(over: old) { continue }
+            }
+            clock = max(clock, row.version)
             sequence += 1; row.sequence = sequence; records[row.key] = row
         }
     }

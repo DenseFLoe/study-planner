@@ -1,6 +1,7 @@
 import Foundation
 import Security
 import StudyCore
+import StudyPersistence
 
 public struct CloudCredentials: Codable, Sendable {
     public var endpoint: String
@@ -142,35 +143,66 @@ public enum CloudSyncClient {
         if progress == nil || progress!.uploadedSequence != initial.sequence {
             try CloudOutbox.enqueue(initial, directory: outbox)
         }
-        let pending = try CloudOutbox.files(in: outbox)
-        for file in pending {
+        let obsolete = try CloudOutbox.files(in: outbox)
+        var archive: CloudArchive?
+        func download() async throws -> CloudArchive {
+            let value = try JSONDecoder().decode(CloudArchive.self, from: CloudCompression.gunzip(try await transport.latest())).validated()
+            guard value.serverID == remote.serverID, let revision = value.revision, revision >= remote.revision else { throw SyncFailure.invalidData }
+            return value
+        }
+        // Reconcile with the latest server before sending anything. Historical
+        // outbox files are recovery copies, never independent edits to replay.
+        if remote.revision > 0 && (!obsolete.isEmpty || progress == nil || remote.revision != progress!.revision) {
+            archive = try await download()
+            remote.revision = archive!.revision!
+        }
+        var outgoing = initial
+        if let archive {
+            var server = SyncLedger(); try server.merge(archive.records)
+            try outgoing.mergeCloudSnapshot(server)
+        }
+        var uploaded: URL?
+        if !obsolete.isEmpty || outgoing.sequence != initial.sequence {
+            var prepared = CloudArchive(ledger: outgoing)
+            prepared.archiveID = UUID().uuidString
+            let file = outbox.appendingPathComponent("prepared-" + prepared.archiveID + ".json.gz")
+            try FileManager.default.createDirectory(at: outbox, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+            try CloudCompression.gzip(JSONEncoder().encode(prepared)).write(to: file, options: .atomic)
+            try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: file.path)
             try CloudOutbox.sanitizeSourceURLsBeforeUpload(file)
             let reply = try await transport.upload(file); try reply.validate()
             guard reply.serverID == remote.serverID, reply.revision >= remote.revision else { throw SyncFailure.invalidData }
-            remote = reply
+            uploaded = file; remote = reply
+            archive = try await download(); remote.revision = archive!.revision!
         }
         guard remote.revision > 0 else { throw ClientError.message("云端尚无课表，请先上传本机数据。") }
-        var archive: CloudArchive?
-        if !pending.isEmpty || progress == nil || remote.revision != progress!.revision {
-            let downloaded = try await transport.latest()
-            archive = try JSONDecoder().decode(CloudArchive.self, from: CloudCompression.gunzip(downloaded)).validated()
-            guard archive?.serverID == remote.serverID, let revision = archive?.revision, revision >= remote.revision else { throw SyncFailure.invalidData }
-            remote.revision = revision
-        }
         let records = archive?.records ?? [], revision = remote.revision, identity = remote.serverID
         let initialSequence = initial.sequence
+        // The recovery point is durable before any downloaded business data is committed.
+        if archive != nil {
+            let backups = PlannerBackupRepository(directory: databaseURL.map { $0.deletingLastPathComponent().appendingPathComponent("SyncBackups") })
+            let (latest, _) = try await SyncDatabase.snapshot(url: databaseURL)
+            _ = try await backups.save(PlannerBackup(state: latest, reason: "云同步合并前自动备份"))
+        }
+        let didUpload = uploaded != nil
         let outcome = try await SyncDatabase.update(url: databaseURL, enqueueCloud: false) { state, ledger in
             let locallyChangedDuringUpload = ledger.sequence != initialSequence
-            try ledger.merge(records); state = try ledger.materialize()
-            let beforeRepair = ledger.sequence
-            state.reconcileSavedSchedule(now: Date())
-            try ledger.capture(state)
-            let repaired = ledger.sequence != beforeRepair
+            var server = SyncLedger()
+            if !records.isEmpty {
+                try server.merge(records)
+                try ledger.mergeCloudSnapshot(server)
+            }
+            state = try ledger.materialize()
+            let repaired = !records.isEmpty && ledger.records.values.contains { row in
+                guard let peer = server.records[row.key] else { return true }
+                return row.wins(over: peer)
+            }
             ledger.cloudProgress = CloudProgress(endpoint: endpoint, serverID: identity, revision: revision,
                 uploadedSequence: locallyChangedDuringUpload || repaired ? -1 : ledger.sequence, lastSuccess: Date().timeIntervalSince1970)
-            return SyncOutcome(state: state, ledger: ledger, sent: pending.count, received: records.count)
+            return SyncOutcome(state: state, ledger: ledger, sent: didUpload ? 1 : 0, received: records.count)
         }
-        for file in pending { try? FileManager.default.removeItem(at: file) }
+        for file in obsolete + (uploaded.map { [$0] } ?? []) { try? FileManager.default.removeItem(at: file) }
+
         return outcome
     }
 }

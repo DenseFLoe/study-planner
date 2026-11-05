@@ -98,7 +98,10 @@ final class DiskSnapshot implements AutoCloseable {
                 else if(order>0){out.write(b.encoded);b.advance();changed=true;}
                 else {
                     if(rejectDuplicates)throw new IOException("重复同步记录");
-                    boolean wins=SyncLedger.wins(b.row(),a.row());out.write(wins?b.encoded:a.encoded);changed|=wins;a.advance();b.advance();
+                    JSONObject merged=SyncLedger.mergeCourseFields(b.row(),a.row());
+                    boolean edited=!SyncLedger.equivalent(merged,a.row());
+                    out.write(edited?a.key+"\t"+(merged.getBoolean("deleted")?"1":"0")+"\t"+merged.toString():a.encoded);
+                    changed|=edited;a.advance();b.advance();
                 }
                 out.write('\n');
             }
