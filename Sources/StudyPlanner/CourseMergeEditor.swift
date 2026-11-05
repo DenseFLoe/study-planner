@@ -16,6 +16,7 @@ struct CourseMergeEditor: View {
     @State private var matchedSources: [Course] = []
     @State private var displayedSourcesInput: SourcesInput?
     @State private var selectionNotice = ""
+    @State private var showSchedule = false
 
     private struct SourcesInput: Equatable, Sendable {
         let courses: [Course]
@@ -76,7 +77,10 @@ struct CourseMergeEditor: View {
                 }.frame(width: 270)
                 Divider()
                 VStack(alignment: .leading) {
-                    Text("课节顺序预览 · 智能排序").font(.headline)
+                    Picker("合并预览", selection: $showSchedule) {
+                        Text("课节顺序").tag(false)
+                        Text("合并后试排").tag(true)
+                    }.pickerStyle(.segmented)
                     if !input.canPreview {
                         Text("填写合并名称并选择至少两门课程。").font(.caption).foregroundStyle(.secondary)
                     } else if displayedInput != input {
@@ -84,12 +88,17 @@ struct CourseMergeEditor: View {
                     } else if !previewError.isEmpty {
                         Text(previewError).font(.caption).foregroundStyle(.red)
                     }
-                    ScrollView {
-                        LazyVStack(alignment: .leading, spacing: 10) {
-                            ForEach(Array((current?.lessons ?? []).enumerated()), id: \.element.id) { index, lesson in
-                                Text("\(index + 1). \(lesson.name)")
-                            }
-                        }.frame(maxWidth: .infinity, alignment: .leading)
+                    if showSchedule, let current {
+                        LessonSchedulePreview(state: current.state, course: current.course)
+                        Spacer(minLength: 0)
+                    } else {
+                        ScrollView {
+                            LazyVStack(alignment: .leading, spacing: 10) {
+                                ForEach(Array((current?.lessons ?? []).enumerated()), id: \.element.id) { index, lesson in
+                                    Text("\(index + 1). \(lesson.name)")
+                                }
+                            }.frame(maxWidth: .infinity, alignment: .leading)
+                        }
                     }
                 }.frame(maxWidth: .infinity)
             }
@@ -99,8 +108,16 @@ struct CourseMergeEditor: View {
             if let current {
                 Text("合计 \(hours(current.course.totalMinutes)) · 截止 \(current.course.deadline.formatted(date: .abbreviated, time: .omitted))")
                     .font(.callout)
+                let pausedCount = current.course.mergedSources?.filter { !$0.autoScheduleEnabled }.count ?? 0
+                if !current.course.autoScheduleEnabled {
+                    Text("所选课程均已暂停；合并后仍暂停自动排程。")
+                        .font(.caption).foregroundStyle(.secondary)
+                } else if pausedCount > 0 {
+                    Text("合并后全部参与自动排程，其中包括原先暂停的 \(pausedCount) 门来源课程。")
+                        .font(.caption).foregroundStyle(.orange)
+                }
             }
-            Text("原课程将归档，进度与完成记录保留。采用最早的截止日期；未分课节的课程作为一节。合并后可在“调整课节顺序”中自定义，并在编辑课程中修改日期。")
+            Text("原课程将归档，进度与完成记录保留。统一采用最早的开始日期和截止日期；未分课节的课程作为一节。合并后可在“调整课节顺序”中自定义，并在编辑课程中修改日期。")
                 .font(.caption).foregroundStyle(.secondary)
             if !message.isEmpty { Text(message).foregroundStyle(.red).font(.caption) }
             HStack {

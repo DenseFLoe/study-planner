@@ -25,6 +25,35 @@ final class CourseMergePreviewTests: XCTestCase {
         XCTAssertEqual(preview.lessons.map(\.id), [first.id.uuidString + "/first", second.id.uuidString + "/second"])
         XCTAssertEqual(preview.lessons.map(\.remainingMinutes), [30, 90])
         XCTAssertEqual(Set(preview.course.mergedSources!.map(\.id)), [first.id, second.id])
+        XCTAssertEqual(preview.state.courses.filter(\.isArchived).count, 2)
+        XCTAssertEqual(preview.state.tasks.first?.courseID, preview.course.id)
+        XCTAssertEqual(preview.state.completions.first?.courseID, preview.course.id)
+        XCTAssertEqual(preview.state.remainingMinutes(for: preview.course), 120)
+    }
+
+    func testSchedulingPreviewUsesMergedCourseAndPreservesOtherConstraints() throws {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(secondsFromGMT: 0)!
+        let day = calendar.date(from: DateComponents(year: 2026, month: 1, day: 5))!
+        let now = day.addingTimeInterval(9 * 3600)
+        let first = Course(name: "来源一", totalMinutes: 20, startDate: day, deadline: day)
+        let second = Course(name: "来源二", totalMinutes: 20, startDate: day, deadline: day)
+        let other = Course(name: "其他课程", totalMinutes: 20, startDate: day, deadline: day)
+        var state = PlannerState(); state.courses = [first, second, other]
+        state.settings.availability = [.init(weekday: 2, startMinute: 9 * 60, endMinute: 12 * 60)]
+        let event = FixedEvent(title: "保留事项", startMinute: 9 * 60, endMinute: 9 * 60 + 30,
+                               startDate: day, endDate: day)
+        state.fixedEvents = [event]
+        let before = state
+        let preview = try CourseMergePreview(state: state, selected: [first.id, second.id], name: "试排合并")
+        let result = ScheduleEngine(calendar: calendar).generate(state: preview.state, now: now)
+        XCTAssertEqual(state, before)
+        XCTAssertEqual(preview.state.fixedEvents, [event])
+        XCTAssertEqual(Set(result.demands.keys), [preview.course.id, other.id])
+        XCTAssertFalse(result.tasks.isEmpty)
+        XCTAssertTrue(result.tasks.allSatisfy { $0.courseID == preview.course.id || $0.courseID == other.id })
+        XCTAssertTrue(result.tasks.allSatisfy { $0.start >= day.addingTimeInterval(9.5 * 3600) })
+        XCTAssertEqual(result.tasks.filter { $0.courseID == preview.course.id }.reduce(0) { $0 + $1.durationMinutes }, 40)
     }
 
     func testPreviewReportsInvalidSelectionAndDurationWithoutMutation() throws {

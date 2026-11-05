@@ -4,6 +4,7 @@ import StudyCore
 /// Compute the merged course and its lessons together from one read-only snapshot.
 struct CourseMergePreview: Sendable {
     let draft: CourseMergeDraft
+    let state: PlannerState
     let course: Course
     let lessons: [LessonWorkItem]
 
@@ -12,5 +13,6 @@ struct CourseMergePreview: Sendable {
         var preview = state
         course = try draft.apply(to: &preview)
         lessons = preview.lessonWorkItems(for: course)
+        self.state = preview
     }
 }
