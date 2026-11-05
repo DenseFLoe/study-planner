@@ -134,7 +134,7 @@ struct QuarkShareAPI: Sendable {
 
     struct Page: Sendable {
         var items: [Item]
-        var total: Int
+        var total: Int?
         var page: Int
         var size: Int
         var hasMore: Bool
@@ -162,14 +162,15 @@ struct QuarkShareAPI: Sendable {
         do { envelope = try decoder.decode(DetailEnvelope.self, from: data) }
         catch { throw NetdiskAPIError.malformed("目录响应（\(String(describing: error))）") }
         try Self.check(status: envelope.status, code: envelope.code, message: envelope.message)
-        let items = envelope.data?.list ?? []
-        // The provider reports how many entries the folder holds. Its `_size` cannot be trusted for
-        // pagination because it shrinks when the provider de-duplicates a page, which would stop the
-        // crawl early and silently drop lessons. The requested page size is the honest signal, and
-        // the accumulated count decides when the folder is complete.
+        guard let items = envelope.data?.list else { throw NetdiskAPIError.malformed("缺少目录列表") }
+        // Page lengths and the provider's `_size` can shrink during de-duplication.
+        // Retain an absent total so the crawler continues to an explicit empty page.
         let metadata = envelope.metadata
-        let total = metadata?.count ?? metadata?.total ?? items.count
-        return Page(items: items, total: total, page: max(1, metadata?.page ?? page),
+        guard metadata?.page == nil || metadata?.page == page else {
+            throw NetdiskAPIError.malformed("返回的目录页码不匹配")
+        }
+        let total = metadata?.count ?? metadata?.total
+        return Page(items: items, total: total, page: page,
                     size: max(1, size), hasMore: !items.isEmpty)
     }
 

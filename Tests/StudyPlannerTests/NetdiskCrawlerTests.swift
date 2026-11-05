@@ -12,12 +12,14 @@ private actor StubTransport: NetdiskTransport {
     /// Largest page the stub will hand out, mirroring a provider that caps `_size`.
     private let maximumPageSize: Int
     private let declaredCounts: [String: Int]
+    private let omitsCounts: Bool
 
     init(pages: [String: [String]], maximumPageSize: Int = 200,
-         declaredCounts: [String: Int] = [:]) {
+         declaredCounts: [String: Int] = [:], omitsCounts: Bool = false) {
         self.pages = pages
         self.maximumPageSize = maximumPageSize
         self.declaredCounts = declaredCounts
+        self.omitsCounts = omitsCounts
     }
     func recorded() -> [(path: String, query: [String: String])] { calls }
     func fail(_ fid: String) { failing.insert(fid) }
@@ -38,12 +40,15 @@ private actor StubTransport: NetdiskTransport {
             (try? JSONSerialization.jsonObject(with: Data(text.utf8))) ?? [:]
         }
         // `_count` is the folder total, never the size of this page: that is what paging relies on.
+        var metadata: [String: Int] = ["_page": page, "_size": size]
+        if !omitsCounts {
+            metadata["_count"] = declaredCounts[fid] ?? items.count
+            metadata["_total"] = declaredCounts[fid] ?? items.count
+        }
         let body: [String: Any] = [
             "status": 200, "code": 0, "message": "ok",
             "data": ["list": slice, "is_owner": 0],
-            "metadata": ["_page": page, "_size": size,
-                         "_count": declaredCounts[fid] ?? items.count,
-                         "_total": declaredCounts[fid] ?? items.count]
+            "metadata": metadata
         ]
         return try JSONSerialization.data(withJSONObject: body)
     }
@@ -166,8 +171,46 @@ final class NetdiskCrawlerTests: XCTestCase {
         let transport = StubTransport(pages: ["0": [folder("c0ffee01", "高数强化", items: 99)],
                                               "c0ffee01": items], maximumPageSize: 3,
                                       declaredCounts: ["c0ffee01": 99])
-        let result = try await crawl(transport, limits: NetdiskCrawler.Limits(pageSize: 3))
-        XCTAssertGreaterThan(result.scan.unreadFolders, 0, "少读到的分页必须计入未读完")
+        do {
+            _ = try await crawl(transport, limits: NetdiskCrawler.Limits(pageSize: 3))
+            XCTFail("少读到的分页必须阻止形成完整课程结果")
+        } catch let error as NetdiskPaginationError {
+            XCTAssertEqual(error, .incomplete)
+        }
+    }
+
+    func testOverlappingPagesStillReadEveryDistinctVideo() async throws {
+        let items = (1...4).map { video("v\($0)", "第\($0)讲.mp4", duration: 600, size: 1_000) }
+        let transport = StubTransport(pages: ["0": [folder("course", "高数课程", items: 4)],
+                                              "course": [items[0], items[1], items[1], items[2], items[3]]],
+                                      maximumPageSize: 2, declaredCounts: ["course": 4])
+        let result = try await crawl(transport, limits: NetdiskCrawler.Limits(pageSize: 2))
+        XCTAssertEqual(result.scan.totalVideoCount, 4)
+        XCTAssertEqual(result.courses.first?.snapshot.lessons.count, 4)
+        let calls = await transport.recorded().filter { $0.query["pdir_fid"] == "course" }
+        XCTAssertEqual(calls.map { $0.query["_page"] }, ["1", "2", "3"])
+    }
+
+    func testMissingCountsReadThroughEmptyPageInsteadOfStoppingAfterFirstPage() async throws {
+        let items = (1...5).map { video("v\($0)", "第\($0)讲.mp4", duration: 600, size: 1_000) }
+        let transport = StubTransport(pages: ["0": items], maximumPageSize: 2, omitsCounts: true)
+        let result = try await crawl(transport, limits: NetdiskCrawler.Limits(pageSize: 2))
+        XCTAssertEqual(result.scan.totalVideoCount, 5)
+        XCTAssertEqual(result.scan.unreadFolders, 0)
+        let calls = await transport.recorded().filter { $0.query["pdir_fid"] == "0" }
+        XCTAssertEqual(calls.map { $0.query["_page"] }, ["1", "2", "3", "4"])
+    }
+
+    func testSameFileMovingAcrossFoldersRequiresFreshCrawl() async throws {
+        let item = video("shared", "第1讲.mp4", duration: 600, size: 1_000)
+        let transport = StubTransport(pages: ["0": [folder("a", "高数", items: 1), folder("b", "线代", items: 1)],
+                                              "a": [item], "b": [item]])
+        do {
+            _ = try await crawl(transport)
+            XCTFail("跨目录移动的文件不能静默漏掉")
+        } catch let error as NetdiskPaginationError {
+            XCTAssertEqual(error, .changedDirectory)
+        }
     }
 
     func testDirectoryErrorsStopTheCrawlWithAReason() async throws {

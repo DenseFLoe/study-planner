@@ -106,8 +106,8 @@ actor NetdiskCrawler {
             let next = queue.removeFirst()
             foldersRead += 1
             var page = 1
-            var expected = 0
-            var seen = 0
+            var pageProgress = NetdiskPageProgress()
+            var complete = false
             var pagesInFolder = 0
             while true {
                 try Task.checkCancellation()
@@ -119,12 +119,12 @@ actor NetdiskCrawler {
                                                  directoryFID: next.fid, page: page, size: limits.pageSize,
                                                  passcode: passcode)
                 pagesInFolder += 1
-                expected = listing.total
-                seen += listing.items.count
+                var accepted = try pageProgress.append(ids: listing.items.map(\.fid), total: listing.total)
                 for item in listing.items {
-                    // A moving share can repeat an item on adjacent pages. Keep one copy and
-                    // still count the provider's raw page length when deciding where to stop.
-                    guard seenFIDs.insert(item.fid).inserted else { continue }
+                    // Adjacent pages may overlap; a file appearing in different folders means
+                    // this crawl no longer represents one consistent directory listing.
+                    guard accepted.newIDs.remove(item.fid) != nil else { continue }
+                    guard seenFIDs.insert(item.fid).inserted else { throw NetdiskPaginationError.changedDirectory }
                     let isDirectory = item.dir == true
                     let entry = Self.entry(item, parentPath: next.path)
                     entries.append(entry)
@@ -142,10 +142,11 @@ actor NetdiskCrawler {
                 if entries.count > limits.maxFiles {
                     throw CrawlError.tooLarge("这个分享包含超过 \(limits.maxFiles) 个文件，单次导入太大。请改用子目录链接。")
                 }
-                if !listing.hasMore || seen >= listing.total { break }
+                complete = accepted.isComplete
+                if complete { break }
                 page += 1
             }
-            if expected > seen { unread += 1 }
+            if !complete { unread += 1 }
         }
 
         report("目录读取完成，正在识别课程…")
