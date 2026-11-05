@@ -50,6 +50,13 @@ public final class FixedEventEditing {
         Planner.removeEvent(state, latest.getString("id"), now);
     }
 
+    public static void removeAll(JSONObject state,JSONObject baseline) throws Exception {
+        JSONObject latest=current(state,baseline);
+        if(!SyncLedger.canonical(latest).equals(SyncLedger.canonical(baseline)))throw conflict();
+        JSONArray rows=state.getJSONArray("fixedEvents");
+        for(int i=rows.length()-1;i>=0;i--)if(rows.getJSONObject(i).getString("id").equals(latest.getString("id")))rows.remove(i);
+    }
+
     private static String occurrence(JSONObject event, LocalDate date) throws Exception {
         return SyncLedger.canonical(new JSONArray().put(event.getString("id")).put(event.optString("title"))
             .put(event.getInt("startMinute")).put(event.getInt("endMinute"))

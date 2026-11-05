@@ -10,18 +10,30 @@ import java.util.*;
 /** Protect raw course/event form input; successful saves still dismiss directly. */
 final class DraftEditorDialog extends AlertDialog {
     private final MainActivity app;
-    private final LinearLayout form;
+    private LinearLayout form;
+    private final ScrollView scroll;
+    private DialogInterface.OnShowListener showListener;
+    static volatile int openCount;
+    private static final Set<DraftEditorDialog> open=new HashSet<>();
+    private boolean counted;
     private List<String> baseline;
     private AlertDialog discard;
 
     DraftEditorDialog(MainActivity app,String title,LinearLayout form){
         super(app);this.app=app;this.form=form;
-        ScrollView scroll=new ScrollView(app);form.setPadding(app.dp(22),app.dp(8),app.dp(22),app.dp(24));scroll.addView(form);
+        scroll=new ScrollView(app);form.setPadding(app.dp(22),app.dp(8),app.dp(22),app.dp(24));scroll.addView(form);
         setTitle(title);setView(scroll);
         setButton(BUTTON_NEGATIVE,"取消",(DialogInterface.OnClickListener)null);
         setButton(BUTTON_POSITIVE,"保存",(DialogInterface.OnClickListener)null);
         setCanceledOnTouchOutside(false);
     }
+    static DraftEditorDialog obtain(MainActivity app,String title,LinearLayout form,DraftEditorDialog existing){
+        if(existing==null)return new DraftEditorDialog(app,title,form);
+        existing.scroll.removeAllViews();existing.form=form;form.setPadding(app.dp(22),app.dp(8),app.dp(22),app.dp(24));existing.scroll.addView(form);existing.baseline=null;existing.setTitle(title);return existing;
+    }
+    @Override public void setOnShowListener(DialogInterface.OnShowListener listener){showListener=listener;super.setOnShowListener(listener);}
+    @Override public void show(){boolean showing=isShowing();super.show();if(!counted){counted=true;open.add(this);openCount=open.size();}if(showing&&showListener!=null)showListener.onShow(this);baseline=snapshot();}
+    static void closeFor(MainActivity app){for(DraftEditorDialog dialog:new ArrayList<>(open))if(dialog.app==app)dialog.dismiss();}
     @Override protected void onStart(){
         super.onStart();
         if(baseline==null)baseline=snapshot();
@@ -45,6 +57,7 @@ final class DraftEditorDialog extends AlertDialog {
     }
     @Override public void dismiss(){
         if(discard!=null){AlertDialog prompt=discard;discard=null;prompt.dismiss();}
+        if(counted){counted=false;open.remove(this);openCount=open.size();}
         super.dismiss();
     }
     private List<String> snapshot(){

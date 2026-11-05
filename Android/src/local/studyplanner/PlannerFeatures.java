@@ -42,22 +42,24 @@ final class PlannerFeatures {
   app.selected=date;app.month=date.withDayOfMonth(1);app.render();
  }
  void weekly(){
-  WeeklyStudyStats stats=WeeklyStudyStats.calculate(app.state,app.selected);long max=1;
-  for(int day=0;day<7;day++)max=Math.max(max,stats.studied(day));
+  WeeklyStudyStats stats=WeeklyStudyStats.calculate(app.state,app.selected);long max=1;final boolean actual=app.weeklyActual;
+  for(int day=0;day<7;day++)max=Math.max(max,actual?stats.studied(day):stats.planned(day));
   LinearLayout box=app.card(app.body);box.addView(app.title("周学习统计"));
+
   LocalDate selected=app.selected;PlannerUi.Flow actions=new PlannerUi.Flow(app);box.addView(actions);
   actions.addView(app.pill("上一周",()->showStatisticsWeek(selected.minusWeeks(1))));
   actions.addView(app.pill("本周",()->showStatisticsWeek(LocalDate.now(Planner.ZONE))));
   actions.addView(app.pill("下一周",()->showStatisticsWeek(selected.plusWeeks(1))));
+  actions.addView(app.pill(actual?"查看课表计划图":"查看实际已学图",()->{app.weeklyActual=!app.weeklyActual;app.render();}));
   String range=stats.monday+" 至 "+stats.monday.plusDays(6);
   actions.addView(app.pill("复制本周统计",()->app.copyPlainText("学习日程 · 周统计 · "+range,"正在整理周统计…","已复制 "+range+" 的周统计",()->WeeklyStudyText.make(stats))));
   box.addView(app.text(stats.monday+" 至 "+stats.monday.plusDays(6)+"\n实际已学 "+app.hours(stats.studiedMinutes)+" · 课表计划 "+app.hours(stats.plannedMinutes),14,app.ink));
-  box.addView(app.text("色条表示实际已学，按确认时填写的学习日期统计；计划按当前课表的原定日期统计。",12,app.muted));
+  box.addView(app.text(actual?"色条表示实际已学，按实际学习日期统计。":"色条表示课表计划，按当前课表的原定日期统计。",12,app.muted));
   for(int day=0;day<7;day++){
    LinearLayout row=app.row();row.addView(app.text("周"+"一二三四五六日".charAt(day),12,app.muted),new LinearLayout.LayoutParams(app.dp(32),-2));
    LinearLayout detail=app.col();detail.addView(app.text("已学 "+app.hours(stats.studied(day))+" / 计划 "+app.hours(stats.planned(day)),12,app.muted));
-   LinearLayout bar=app.row();for(WeeklyStudyStats.Course course:stats.courses){long n=course.studied(day);if(n>0){View segment=new View(app);segment.setBackgroundColor(app.color(course.color));bar.addView(segment,new LinearLayout.LayoutParams(0,app.dp(8),(float)n));}}
-   View spacer=new View(app);bar.addView(spacer,new LinearLayout.LayoutParams(0,app.dp(8),(float)Math.max(1,max-stats.studied(day))));detail.addView(bar);
+   LinearLayout bar=app.row();for(WeeklyStudyStats.Course course:stats.courses){long n=actual?course.studied(day):course.planned(day);if(n>0){View segment=new View(app);segment.setBackgroundColor(app.color(course.color));bar.addView(segment,new LinearLayout.LayoutParams(0,app.dp(8),(float)n));}}
+   View spacer=new View(app);bar.addView(spacer,new LinearLayout.LayoutParams(0,app.dp(8),(float)Math.max(1,max-(actual?stats.studied(day):stats.planned(day)))));detail.addView(bar);
    row.addView(detail,new LinearLayout.LayoutParams(0,-2,1));box.addView(row);
   }
   StringBuilder legend=new StringBuilder();for(WeeklyStudyStats.Course course:stats.courses){if(legend.length()>0)legend.append(" · ");legend.append(course.name);}box.addView(app.text(legend.toString(),12,app.muted));
@@ -108,7 +110,7 @@ final class PlannerFeatures {
   });
   dialog.setOnDismissListener(d->{controller.close();if(pending[0]!=null)app.handler.removeCallbacks(pending[0]);});dialog.show();
  }
- void coursesHeader(PlannerUi.Flow actions){actions.addView(app.button("继续未完成导入",app::pendingCourseImports));actions.addView(app.button("合并课程",this::merge));actions.addView(app.button("从网站抓取全部课程",()->app.startActivityForResult(new Intent(app,CourseImportActivity.class).putExtra("mode","website"),MainActivity.IMPORT_COURSES)));actions.addView(app.button("从夸克网盘分享导入",()->app.startActivityForResult(new Intent(app,CourseImportActivity.class).putExtra("mode","netdisk"),MainActivity.IMPORT_COURSES)));}
+ void coursesHeader(PlannerUi.Flow actions){actions.addView(app.button("继续未完成导入",app::pendingCourseImports));actions.addView(app.button("合并课程",this::merge));actions.addView(app.button("从网站抓取全部课程",()->app.startActivityForResult(new Intent(app,android.os.Build.VERSION.SDK_INT>=28?CourseImportActivity.class:LegacyCourseImportActivity.class).putExtra("mode","website"),MainActivity.IMPORT_COURSES)));actions.addView(app.button("从夸克网盘分享导入",()->app.startActivityForResult(new Intent(app,android.os.Build.VERSION.SDK_INT>=28?CourseImportActivity.class:LegacyCourseImportActivity.class).putExtra("mode","netdisk"),MainActivity.IMPORT_COURSES)));}
  void courseCatalog(LinearLayout parent){
   JSONObject snapshot=app.state;EditText query=app.field(parent,"搜索名称、备注或截止日期（可组合关键词）",app.courseQuery,false);
   CourseCatalog.Scope[] scopes=CourseCatalog.Scope.values();Spinner scope=app.spinner(parent,"排程状态",new String[]{scopes[0].title,scopes[1].title,scopes[2].title},app.courseScope.ordinal());

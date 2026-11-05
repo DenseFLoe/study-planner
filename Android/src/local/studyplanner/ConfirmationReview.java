@@ -18,6 +18,7 @@ final class ConfirmationReview {
         private final String taskSignature;
         private final String searchText;
         boolean needsReview;
+        boolean selected=true;
         String minutes = "", studyDate;
         Row(int index, JSONObject task, String course, double now) throws Exception {
             this.index = index; this.course = course; id = task.optString("id"); lesson = task.optString("lessonName");
@@ -66,11 +67,16 @@ final class ConfirmationReview {
             int first = index * PAGE_SIZE; return rows.subList(first, Math.min(rows.size(), first + PAGE_SIZE));
         }
         int filledCount() { return filled(rows); }
+        int selectedCount(){return selected(rows);}
+        void select(boolean value){for(Row row:rows)row.selected=value;}
     }
     private static int filled(List<Row> rows) {
         int count = 0; for (Row row : rows) if (!row.minutes.trim().isEmpty()) count++; return count;
     }
     int filledCount() { return filled(rows); }
+        int selectedCount(){return selected(rows);}
+        void select(boolean value){for(Row row:rows)row.selected=value;}
+    private static int selected(List<Row> rows){int count=0;for(Row row:rows)if(row.selected&&!row.minutes.trim().isEmpty())count++;return count;}
     /** Filtering reads immutable labels; input fields remain owned by the UI thread. */
     Filtered filter(String query) {
         String term = TaskSearch.normalize(query);
@@ -97,7 +103,7 @@ final class ConfirmationReview {
         for (Row row : next.rows) {
             Row previous = old.get(row.id);
             if (previous == null) { added++; continue; }
-            retained++; row.minutes = previous.minutes; row.studyDate = previous.studyDate;
+            retained++; row.selected=previous.selected; row.minutes = previous.minutes; row.studyDate = previous.studyDate;
             boolean updated = !row.taskSignature.equals(previous.taskSignature);
             if (updated) changed++;
             row.needsReview = previous.needsReview || updated;
@@ -107,7 +113,7 @@ final class ConfirmationReview {
     Submission submission(double now) {
         Map<String, Integer> minutes = new LinkedHashMap<>(); Map<String, LocalDate> dates = new LinkedHashMap<>();
         for (Row row : rows) {
-            if (row.minutes.trim().isEmpty()) continue;
+            if (!row.selected || row.minutes.trim().isEmpty()) continue;
             if (row.needsReview) throw new InputError(row, "安排已更新，请先核对并勾选本项；留空可暂不确认。");
             int value;
             try { value = Integer.parseInt(row.minutes.trim()); }
@@ -119,7 +125,7 @@ final class ConfirmationReview {
             if (date.isAfter(Planner.day(now))) throw new InputError(row, "实际学习日期不能晚于今天。");
             minutes.put(row.id, value); dates.put(row.id, date);
         }
-        if (minutes.isEmpty()) throw new IllegalArgumentException("请至少填写一项。");
+        if (minutes.isEmpty()) throw new IllegalArgumentException("请至少填写并选择一项。");
         return new Submission(minutes, dates);
     }
 }

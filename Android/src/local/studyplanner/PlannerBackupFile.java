@@ -61,6 +61,15 @@ public final class PlannerBackupFile {
     }
 
     public JSONObject state() throws Exception { return CourseTools.copy(envelope.getJSONObject("state")); }
+    String id() { return envelope.optString("id"); }
+    double createdAt() { return envelope.optDouble("createdAt"); }
+    String deletedCourseID() { return envelope.optString("deletedCourseID", ""); }
+    void markDeletedCourse(String id) throws Exception {
+        if(id!=null&&!id.isEmpty()){
+            if(Planner.course(envelope.getJSONObject("state"),id)==null)throw new IllegalArgumentException("备份中没有待删除课程。");
+            envelope.put("deletedCourseID",id);
+        }
+    }
     public String summary() throws Exception {
         JSONObject state = envelope.getJSONObject("state");
         String time = legacy ? "旧版 Android 备份" : "备份时间：" + Planner.date(envelope.getDouble("createdAt")) + " " + Planner.clock(envelope.getDouble("createdAt"));

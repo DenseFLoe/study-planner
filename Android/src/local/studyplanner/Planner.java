@@ -8,7 +8,7 @@ import java.util.*;
 /** Compatible with the desktop Codable data (seconds since 2001-01-01 UTC). */
 public final class Planner {
     public static final long EPOCH = 978307200L;
-    public static final ZoneId ZONE = ZoneId.of("Asia/Shanghai");
+    public static volatile ZoneId ZONE = ZoneId.of("Asia/Shanghai");
     public static List<JSONObject> list(JSONArray a) { List<JSONObject> r=new ArrayList<>(); for(int i=0;i<a.length();i++)r.add(a.optJSONObject(i)); return r; }
     public static JSONArray array(Collection<JSONObject> a){return new JSONArray(a);}
     public static String stableID(String text) {
@@ -638,6 +638,7 @@ public final class Planner {
     public static void updateStudySettings(JSONObject s,JSONObject updated,double now)throws Exception{
         JSONObject previous=s.getJSONObject("settings"),next=new JSONObject(updated.toString());
         boolean changedWindows=!studyWindows(previous).equals(studyWindows(next));
+        for(String key:new String[]{"immediateStudy","compressedSchedulePreview"}){if(previous.has(key))next.put(key,previous.get(key));else next.remove(key);}
         if(previous.has("actualStudyStart"))next.put("actualStudyStart",previous.get("actualStudyStart"));
         else next.remove("actualStudyStart");
         if(changedWindows&&actualStudyStart(s,now)==null)next.put("actualStudyStart",now);
@@ -775,12 +776,23 @@ public final class Planner {
             }
         }
     }
-    public static List<String> replan(JSONObject s,double now)throws Exception{
+    public static List<String> replan(JSONObject state,double now)throws Exception{
+        if(ImmediateStudy.request(state)==null)return replanCore(state,now,null,null);
+        JSONObject working=CourseTools.copy(state),pin=ImmediateStudy.valid(working,now),continuation=ImmediateStudy.continuation(working,now);
+        ImmediateStudy.prioritize(working,continuation);
+        List<String> warnings=replanCore(working,now,pin,continuation);
+        for(String key:new String[]{"tasks","androidMissing","androidRisks","androidWarnings","androidConflicts","androidDayPlans","androidAdjustments"})if(working.has(key))state.put(key,working.get(key));
+        if(pin==null&&continuation==null)state.getJSONObject("settings").remove("immediateStudy");
+        return warnings;
+    }
+    private static List<String> replanCore(JSONObject s,double now,JSONObject pin,JSONObject continuation)throws Exception{
         BackgroundCancellation.check();
         List<String> warnings=new ArrayList<>();LocalDate today=day(now),horizon=today;
         final SchedulePriorities priorities=new SchedulePriorities(s.getJSONObject("settings"));
         final boolean defaultOrder=priorities.usesDefaultOrder();
         Double actualStart=actualStudyStart(s,now);double scheduleStart=actualStart==null?now:actualStart;
+        if(ImmediateStudy.request(s)!=null)scheduleStart=Math.max(scheduleStart,now);
+        if(pin!=null)scheduleStart=Math.max(scheduleStart,end(pin)+BREAK_SECONDS);
         // Keep remaining work after today's saved review, even for zero-minute
         // confirmations. Persisted history also preserves this floor on reopen/sync.
         for(JSONObject task:list(s.getJSONArray("tasks")))if(hasConfirmationTime(task)){
@@ -804,6 +816,7 @@ public final class Planner {
                 events.add(e);Span span=new Span(at(d,e.getInt("startMinute")),at(d,e.getInt("endMinute")));
                 if(floating(e))regions.add(span);else blocks.add(span);
             }
+            if(pin!=null&&day(pin.getDouble("start")).equals(d)){JSONObject nominal=ImmediateStudy.reservation(pin);if(nominal!=null)events.add(nominal);blocks.add(new Span(pin.getDouble("start"),end(pin)));}
             regions=merge(regions);
             List<Span> hardBlocks=new ArrayList<>(blocks);
             for(JSONObject t:history)if(planningStart(t)<now&&(pending(t)||t.optInt("completedMinutes")>0))hardBlocks.add(buffered(retainedHistoryStart(t),retainedHistoryEnd(t)));
@@ -820,7 +833,7 @@ public final class Planner {
             if(placements==null){warnings.add(reservation.status==ReservationStatus.SEARCH_EXHAUSTED?
                 "浮动事项的连续时长排法待确认：搜索达到尝试上限，未证实容量不足；请调整窗口后重新排程。":
                 "浮动事项的连续时长无法排入；请检查窗口和占用时长后重新排程。");blocks.addAll(regions);}
-            else for(JSONObject e:events)if(floating(e)){int start=placements.get(e.getString("id"));blocks.add(new Span(at(d,start),at(d,start+occupied(e))));}
+            else for(JSONObject e:events)if(floating(e)){int start=placements.get(e.getString("id"));blocks.add(new Span(at(d,start),at(d,start)+occupied(e)*60.0));}
             for(JSONObject t:history)if(planningStart(t)<now&&(pending(t)||t.optInt("completedMinutes")>0))blocks.add(buffered(retainedHistoryStart(t),retainedHistoryEnd(t)));
             days.add(new Day(d,subtract(windows,blocks)));
         }
@@ -828,6 +841,9 @@ public final class Planner {
         for(JSONObject c:courses){BackgroundCancellation.check();String id=c.getString("id");int r=remaining(s,c);r=Math.max(0,r);required.put(id,r);
             List<Work> work=lessonWork(s,c);
             work.removeIf(w->w.minutes<=0);int workTotal=0;for(Work w:work)workTotal+=w.minutes;if(workTotal!=r){work.clear();if("不定时录播课程".equals(c.optString("type")))warnings.add(c.optString("name")+"：课节进度与总进度不一致，请重新抓取或检查课节。");}
+            int reserved=pin!=null&&pin.getString("courseID").equals(id)?pin.getInt("durationMinutes"):0;
+            if(reserved>0){int left=reserved;for(Work w:work)if(w.lessonID.equals(pin.optString("lessonID"))&&left>0){int amount=Math.min(left,w.minutes);w.minutes-=amount;left-=amount;}work.removeIf(w->w.minutes<=0);}
+            r=Math.max(0,r-reserved);required.put(id,r);
             if(work.isEmpty()){int left=r;while(left>0){int size=Math.min(unit(s,c),left);work.add(new Work(size,null,null));left-=size;}}
             pendingWork.put(id,work);int shortest=Integer.MAX_VALUE;for(Work w:work)shortest=Math.min(shortest,w.minutes);
             int count=0;for(Day d:days)if(eligible(c,d.d))for(Span f:d.free)if(shortest!=Integer.MAX_VALUE&&f.minutes()>=shortest){count++;break;}demand.put(id,count>0?(double)r/count:0);}
@@ -967,12 +983,14 @@ public final class Planner {
             if(affected)t.put("floatingWindowStart",a).put("floatingWindowEnd",b);
         }
         BackgroundCancellation.check();
+        ImmediateStudy.removeOrders(s,packed,pin,continuation);
         packed=DailyTaskOrdering.apply(s,packed,history);
         for(JSONObject t:packed){BackgroundCancellation.check();String base="task|"+t.getString("courseID")+"|"+(long)t.getDouble("start")+"|"+t.getInt("durationMinutes")+(hasLessonID(t)?"|"+t.optString("lessonID"):"");String stable=stableID(base);
             List<String> confirmed=new ArrayList<>();boolean collision=false;for(JSONObject old:list(s.getJSONArray("tasks")))if(!pending(old)&&old.getString("courseID").equals(t.getString("courseID"))){confirmed.add(old.getString("id"));if(old.getString("id").equals(stable)||(old.getDouble("start")==t.getDouble("start")&&old.getInt("durationMinutes")==t.getInt("durationMinutes")&&old.optString("lessonID").equals(t.optString("lessonID"))))collision=true;}Collections.sort(confirmed);if(collision){stable=stableID(base+"|confirmed|"+String.join(",",confirmed));t.put("replacesConfirmedBlock",true);}
             for(JSONObject old:list(s.getJSONArray("tasks")))if(pending(old)&&old.getString("courseID").equals(t.getString("courseID"))&&old.getDouble("start")==t.getDouble("start")&&old.getInt("durationMinutes")==t.getInt("durationMinutes")&&old.optString("lessonID").equals(t.optString("lessonID"))){stable=old.getString("id");if(old.has("replacesConfirmedBlock")&&!old.isNull("replacesConfirmedBlock"))t.put("replacesConfirmedBlock",old.getBoolean("replacesConfirmedBlock"));break;}
             t.put("id",stable);
         }
+        if(pin!=null){packed.add(pin);packed.sort(Comparator.comparingDouble(t->t.optDouble("start")));}
         JSONArray risks=new JSONArray();Set<LocalDate> cutoffs=new TreeSet<>();for(JSONObject c:courses)cutoffs.add(day(c.getDouble("deadline")));for(LocalDate cutoff:cutoffs){List<JSONObject> group=new ArrayList<>();JSONArray names=new JSONArray();int requiredMinutes=0,absent=0,capacity=0;for(JSONObject c:courses)if(!day(c.getDouble("deadline")).isAfter(cutoff)){group.add(c);requiredMinutes+=required.get(c.getString("id"));absent+=missing.get(c.getString("id"));if(missing.get(c.getString("id"))>0)names.put(c.getString("name"));}if(absent==0)continue;for(Day d:original)if(!d.d.isAfter(cutoff)){boolean learnable=false;for(JSONObject c:group)if(eligible(c,d.d))learnable=true;if(learnable)for(Span span:d.free)capacity+=span.minutes();}risks.put(new JSONObject().put("deadline",at(cutoff,0)).put("requiredMinutes",requiredMinutes).put("availableMinutes",capacity).put("unscheduledMinutes",absent).put("courseNames",names));}s.put("androidRisks",risks);
         ScheduleHealth.record(s,courses,required,missing,allWork,hardDays,original,packed,today,horizon,adjustments);
         BackgroundCancellation.check();

@@ -18,6 +18,19 @@ final class AndroidParityTests: XCTestCase {
         XCTAssertEqual(try analyzer.confirmed(on: actualDay, state: state), 30)
         XCTAssertEqual(try analyzer.confirmed(on: recordedDay, state: state), 0)
     }
+    func testAndroidImmediateRequestSurvivesMacReplanning() throws {
+        let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+        let url = root.appendingPathComponent("Android/build/tests/immediate-parity.json")
+        guard FileManager.default.fileExists(atPath: url.path) else { throw XCTSkip("Run Android parity additions first") }
+        var state = try JSONDecoder().decode(PlannerState.self, from: Data(contentsOf: url))
+        let request = try XCTUnwrap(state.settings.immediateStudy)
+        let now = request.task.start.addingTimeInterval(-8)
+        _ = state.replan(now: now, calendar: calendar)
+        XCTAssertTrue(state.tasks.contains { $0.id == request.task.id && $0.start == request.task.start && $0.lessonID == "B" })
+        XCTAssertEqual(state.tasks.filter(\.isUnconfirmed).reduce(0) { $0 + $1.durationMinutes }, 120)
+        XCTAssertTrue(state.completions.isEmpty)
+        try JSONEncoder().encode(state).write(to: root.appendingPathComponent("Android/build/tests/immediate-mac-roundtrip.json"))
+    }
     private func fixture() throws -> PlannerState {
         let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
         return try JSONDecoder().decode(PlannerState.self, from: Data(contentsOf: root.appendingPathComponent("Android/tests/fixtures/desktop-parity.json")))

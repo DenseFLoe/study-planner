@@ -8,8 +8,10 @@ import org.json.*;
 /** Business rows, tombstones and sync cursors commit together. Legacy JSON stays as backup. */
 public final class PlannerDatabase extends SQLiteOpenHelper implements StateMutation.Store<JSONObject> {
     private final Context context;
+    final PlannerBackupRepository backups;
+    volatile String lastDeletedBackup;
     public PlannerDatabase(Context context){this(context,"planner-sync-v1.db");}
-    PlannerDatabase(Context context,String name){super(context,name,null,1);this.context=context.getApplicationContext();setWriteAheadLoggingEnabled(true);}
+    PlannerDatabase(Context context,String name){super(context,name,null,1);this.context=context.getApplicationContext();backups=new PlannerBackupRepository(new java.io.File(context.getFilesDir(),name+"-backups"));setWriteAheadLoggingEnabled(true);}
     public void onCreate(SQLiteDatabase db){db.execSQL("CREATE TABLE records (id TEXT PRIMARY KEY, body TEXT NOT NULL)");db.execSQL("CREATE TABLE metadata (id TEXT PRIMARY KEY, body TEXT NOT NULL)");}
     public void onUpgrade(SQLiteDatabase db,int old,int next){throw new IllegalStateException("不支持此数据库版本");}
     public synchronized boolean initialized(){try(Cursor c=getReadableDatabase().rawQuery("SELECT id FROM metadata WHERE id='sync'",null)){return c.moveToFirst();}}
@@ -21,7 +23,16 @@ public final class PlannerDatabase extends SQLiteOpenHelper implements StateMuta
     public synchronized JSONObject load()throws Exception{
         SyncLedger l=ledger();long before=l.sequence();JSONObject state=l.materialize();l.capture(state);if(l.sequence()!=before)commit(l);return state;
     }
-    public synchronized void save(JSONObject state)throws Exception{Planner.validate(state);SyncLedger l=ledger();l.capture(state);commit(l);}
+    public synchronized void save(JSONObject state)throws Exception{
+        Planner.validate(state);SyncLedger l=ledger();JSONObject before=initialized()?l.materialize():null;
+        if(before!=null&&!SyncLedger.canonical(PlannerBackupFile.businessState(before)).equals(SyncLedger.canonical(PlannerBackupFile.businessState(state)))){
+            java.util.List<String> deleted=new java.util.ArrayList<>();
+            for(JSONObject course:Planner.list(before.getJSONArray("courses")))if(Planner.course(state,course.getString("id"))==null)deleted.add(course.getString("id"));
+            PlannerBackupRepository.Entry entry=backups.save(before,Planner.now(),deleted.size()==1?"删除课程前":"修改前的日程",deleted.size()==1?deleted.get(0):null);
+            l.capture(state);commit(l);
+            if(!entry.deletedCourseID.isEmpty())lastDeletedBackup=entry.id;
+        }else{l.capture(state);commit(l);}
+    }
     public JSONObject update(StateMutation.Change<JSONObject> change)throws Exception{return StateMutation.apply(this,change);}
     public synchronized void commit(SyncLedger l)throws Exception{
         commit(l,true);

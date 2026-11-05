@@ -90,6 +90,7 @@ public final class DailyTaskOrdering {
     }
     static boolean inWindow(int minute,boolean[] study,List<JSONObject> events){if(minute<0||minute>=1440||!study[minute])return false;for(JSONObject e:events)if(!Planner.floating(e)&&minute>=e.optInt("startMinute")&&minute<e.optInt("endMinute"))return false;return true;}
     public static void swap(JSONObject state,String sourceID,String targetID,double now)throws Exception {
+        JSONObject pin=ImmediateStudy.valid(state,now);if(pin!=null&&(pin.optString("id").equals(sourceID)||pin.optString("id").equals(targetID)))throw new IllegalArgumentException("这节课正从现在开始学习，暂不交换；可选择继续上课或另一课节重新排课。");
         JSONObject source=null,target=null;for(JSONObject t:Planner.list(state.getJSONArray("tasks"))){if(t.getString("id").equals(sourceID))source=t;if(t.getString("id").equals(targetID))target=t;}
         if(source==null||target==null||sourceID.equals(targetID)||!Planner.pending(source)||!Planner.pending(target)||!Planner.day(source.getDouble("start")).equals(Planner.day(target.getDouble("start")))||Planner.day(source.getDouble("start")).isBefore(Planner.day(now)))throw new IllegalArgumentException("只能交换同一天的两个不同未确认学习板块，请刷新后重试。");
         LocalDate day=Planner.day(source.getDouble("start"));List<JSONObject> original=new ArrayList<>();for(JSONObject t:Planner.list(state.getJSONArray("tasks")))if(Planner.pending(t)&&Planner.day(t.getDouble("start")).equals(day))original.add(t);

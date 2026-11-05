@@ -21,6 +21,7 @@ import java.util.function.Consumer;
 
 /** Isolated, temporary login session. Native code receives metadata by polling, without a JS bridge. */
 public class CourseImportActivity extends Activity {
+    static int active;
     private static boolean webKitInitialized;
     boolean previewing,delivering;
     WebView browser, replay;
@@ -63,7 +64,8 @@ public class CourseImportActivity extends Activity {
     }};
 
     @Override public void onCreate(Bundle saved) {
-        super.onCreate(saved);
+        super.onCreate(saved);active++;
+        if(Build.VERSION.SDK_INT<28&&WebsiteUpdateRunner.current!=null)WebsiteUpdateRunner.current.close();
         // The manifest places this activity in its own process; do this before any WebKit API.
         if (!webKitInitialized) { if (Build.VERSION.SDK_INT >= 28) WebView.setDataDirectorySuffix("course-import"); webKitInitialized=true; }
         netdisk = "netdisk".equals(getIntent().getStringExtra("mode"));
@@ -380,5 +382,5 @@ public class CourseImportActivity extends Activity {
     Button button(String title,Runnable action){return PlannerUi.compactButton(this,title,action);}
     EditText field(LinearLayout parent,String hint,String value,boolean numeric){EditText input=new EditText(this);input.setHint(hint);input.setText(value);input.setTextSize(13);input.setSingleLine();if(numeric)input.setInputType(android.text.InputType.TYPE_CLASS_NUMBER);parent.addView(input,new LinearLayout.LayoutParams(parent.getOrientation()==LinearLayout.HORIZONTAL?0:-1,-2,parent.getOrientation()==LinearLayout.HORIZONTAL?1:0));return input;}
     @Override protected void onStop(){cancelPreview();super.onStop();}
-    @Override protected void onDestroy(){generation++;cancelPreview();if(previewWork!=null)previewWork.close();if(searchWork!=null)searchWork.close();if(popup!=null)popup.dismiss();handler.removeCallbacksAndMessages(null);worker.shutdownNow();if(browser!=null){browser.stopLoading();browser.clearCache(true);browser.destroy();}if(replay!=null){replay.stopLoading();replay.destroy();}CookieManager.getInstance().removeAllCookies(null);WebStorage.getInstance().deleteAllData();super.onDestroy();}
+    @Override protected void onDestroy(){active--;generation++;cancelPreview();if(previewWork!=null)previewWork.close();if(searchWork!=null)searchWork.close();if(popup!=null)popup.dismiss();handler.removeCallbacksAndMessages(null);worker.shutdownNow();if(browser!=null){browser.stopLoading();browser.clearCache(true);browser.destroy();}if(replay!=null){replay.stopLoading();replay.destroy();}CookieManager.getInstance().removeAllCookies(null);WebStorage.getInstance().deleteAllData();super.onDestroy();}
 }
