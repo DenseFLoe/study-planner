@@ -97,7 +97,7 @@ final class CloudSync {
         if(progress==null||progress.optLong("uploadedSequence",-1)!=sequence)enqueue(context,initial);
         File[] queued=outbox(context).listFiles((dir,name)->name.endsWith(".json.gz"));if(queued==null)queued=new File[0];
         Arrays.sort(queued,Comparator.comparingLong(File::lastModified).thenComparing(File::getName));
-        for(File file:queued){JSONObject reply=json(endpoint,token,"snapshot",file);checkStatus(reply);
+        for(File file:queued){CloudSnapshot.sanitizeSourceURLs(file);JSONObject reply=json(endpoint,token,"snapshot",file);checkStatus(reply);
             if(!identity.equals(reply.getString("serverID"))||reply.getLong("revision")<remote.getLong("revision"))throw new IOException("云端身份或版本变化");remote=reply;}
         CloudSnapshot archive=null;
         if(queued.length>0||progress==null||progress.optLong("revision")!=remote.getLong("revision")){

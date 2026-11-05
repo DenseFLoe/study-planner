@@ -69,7 +69,7 @@ public final class SyncLedger {
                 }
                 // Detect conflicts before canonical IDs collapse rows or mutate the ledger.
                 if(kind.equals("completions")&&!confirmationTasks.add(source.getString("taskID")))throw new IllegalArgumentException("同一任务存在多条完成记录");
-                JSONObject data=shallowCopy(source);
+                JSONObject data=shallowCopy(kind.equals("courses")?CourseSourcePrivacy.course(source):source);
                 if(kind.equals("completions"))data.put("id",Planner.stableID("completion|"+data.getString("taskID")));
                 if(kind.equals("fixedEvents"))for(String field:new String[]{"weekdays","excludedDates"}){JSONArray a=data.optJSONArray(field);if(a!=null){List<Double> items=new ArrayList<>();for(int i=0;i<a.length();i++)items.add(a.getDouble(i));Collections.sort(items);data.put(field,new JSONArray(items));}}
                 String id=kind.equals("settings")?"settings":data.getString("id"),k=kind+"/"+id;desired.add(k);
@@ -82,7 +82,7 @@ public final class SyncLedger {
         if(changes.isEmpty())return;long clock=value.getLong("clock")+1;value.put("clock",clock);changes.sort(Comparator.comparing(r->r.optString("kind")+"/"+r.optString("id")));
         for(JSONObject r:changes){long seq=sequence()+1;value.put("sequence",seq);r.put("version",clock).put("device",value.getString("device")).put("sequence",seq);JSONObject old=records.optJSONObject(key(r));r.put("modifiedAt",Math.max(nowMillis,(old==null?0:old.optLong("modifiedAt"))+1));records.put(key(r),r);}
     }
-    public JSONArray changes(long after)throws Exception{if(after<0||after>sequence())throw new IllegalArgumentException("游标无效，请重新配对");List<JSONObject> out=new ArrayList<>();Iterator<String> it=records().keys();while(it.hasNext()){JSONObject r=records().getJSONObject(it.next());if(r.getLong("sequence")>after)out.add(r);}out.sort(Comparator.comparingLong(r->r.optLong("sequence")));return new JSONArray(out);}
+    public JSONArray changes(long after)throws Exception{if(after<0||after>sequence())throw new IllegalArgumentException("游标无效，请重新配对");List<JSONObject> out=new ArrayList<>();Iterator<String> it=records().keys();while(it.hasNext()){JSONObject r=records().getJSONObject(it.next());if(r.getLong("sequence")>after)out.add(CourseSourcePrivacy.record(r));}out.sort(Comparator.comparingLong(r->r.optLong("sequence")));return new JSONArray(out);}
     public void merge(JSONArray incoming)throws Exception{for(int i=0;i<incoming.length();i++)mergeRecord(incoming.getJSONObject(i));}
     static long wireInteger(JSONObject row,String key)throws Exception{
         Object number=row.get(key);
@@ -107,7 +107,7 @@ public final class SyncLedger {
     public JSONObject materialize()throws Exception{
         JSONObject s=new JSONObject().put("schemaVersion",1);for(String kind:KINDS)if(!kind.equals("settings"))s.put(kind,new JSONArray());
         List<String> keys=new ArrayList<>();Iterator<String> it=records().keys();while(it.hasNext())keys.add(it.next());Collections.sort(keys);
-        for(String k:keys){JSONObject r=records().getJSONObject(k);if(r.getBoolean("deleted"))continue;String kind=r.getString("kind");JSONObject p=payload(r);if(kind.equals("settings"))s.put(kind,p);else{if(!r.getString("id").equals(p.getString("id")))throw new IllegalArgumentException("记录 ID 不匹配");s.getJSONArray(kind).put(p);}}
+        for(String k:keys){JSONObject r=records().getJSONObject(k);if(r.getBoolean("deleted"))continue;String kind=r.getString("kind");JSONObject p=payload(r);if(kind.equals("settings"))s.put(kind,p);else{if(!r.getString("id").equals(p.getString("id")))throw new IllegalArgumentException("记录 ID 不匹配");s.getJSONArray(kind).put(kind.equals("courses")?CourseSourcePrivacy.course(p):p);}}
         for(JSONObject task:Planner.list(s.getJSONArray("tasks")))Planner.validateTaskData(task);
         Planner.validateSettingsNumbers(s.getJSONObject("settings"));
         for(JSONObject event:Planner.list(s.getJSONArray("fixedEvents")))Planner.validateEventWindow(event);

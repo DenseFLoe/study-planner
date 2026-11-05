@@ -17,6 +17,7 @@ public final class PlannerBackupFile {
     static JSONObject businessState(JSONObject source) throws Exception {
         JSONObject result = new JSONObject();
         for (String key : FIELDS) result.put(key, CourseTools.copyValue(source.get(key)));
+        result = CourseSourcePrivacy.state(result);
         Planner.validate(result);
         return result;
     }
@@ -48,7 +49,7 @@ public final class PlannerBackupFile {
     static JSONObject readLegacyState(InputStream input, long maximum) throws Exception {
         JSONObject value = BoundedJSONFile.read(input, maximum, "备份文件");
         Planner.validate(value);
-        return value;
+        return CourseSourcePrivacy.state(value);
     }
 
     public void write(OutputStream output) throws Exception {

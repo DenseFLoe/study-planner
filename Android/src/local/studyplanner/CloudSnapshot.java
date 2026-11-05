@@ -3,6 +3,8 @@ package local.studyplanner;
 import org.json.*;
 import java.io.*;
 import java.nio.charset.*;
+import java.nio.channels.FileChannel;
+import java.nio.file.*;
 import java.util.*;
 import java.util.zip.*;
 
@@ -45,6 +47,32 @@ public final class CloudSnapshot {
     public static void write(OutputStream output,SyncLedger ledger,JSONObject header)throws Exception{
         JSONObject envelope=SyncLedger.shallowCopy(header).put("records",ledger.changes(0));
         try(Writer writer=new BufferedWriter(new OutputStreamWriter(new LimitedOutput(new GZIPOutputStream(new LimitedOutput(output,MAX_GZIP)),MAX_RAW),StandardCharsets.UTF_8))){SyncJSON.write(writer,envelope);}
+    }
+    /** Clean old queued archives one record at a time; preserve identities, versions and retries. */
+    public static void sanitizeSourceURLs(File file)throws Exception{
+        long length=file.length(),modified=file.lastModified();boolean[] changed={false};JSONObject header;
+        try(InputStream input=new FileInputStream(file)){
+            header=readRecords(input,row->{if(CourseSourcePrivacy.record(row)!=row)changed[0]=true;});
+        }
+        if(!changed[0])return;
+        File temporary=File.createTempFile(".source-clean-",".tmp",file.getAbsoluteFile().getParentFile());
+        try{
+            try(Writer out=new BufferedWriter(new OutputStreamWriter(new LimitedOutput(
+                    new GZIPOutputStream(new LimitedOutput(new FileOutputStream(temporary),MAX_GZIP)),MAX_RAW),StandardCharsets.UTF_8))){
+                out.write('{');List<String> names=new ArrayList<>();Iterator<String> keys=header.keys();
+                while(keys.hasNext())names.add(keys.next());Collections.sort(names);
+                for(String key:names){SyncJSON.write(out,key);out.write(':');SyncJSON.write(out,header.get(key));out.write(',');}
+                out.write("\"records\":[");boolean[] first={true};JSONObject verified;
+                try(InputStream input=new FileInputStream(file)){
+                    verified=readRecords(input,row->{if(!first[0])out.write(',');first[0]=false;SyncJSON.write(out,CourseSourcePrivacy.record(row));});
+                }
+                if(!SyncLedger.equivalent(header,verified)||length!=file.length()||modified!=file.lastModified())
+                    throw new IOException("待上传文件在检查期间发生变化，请重试。");
+                out.write("]}");
+            }
+            try(FileChannel channel=FileChannel.open(temporary.toPath(),StandardOpenOption.WRITE)){channel.force(true);}
+            Files.move(temporary.toPath(),file.toPath(),StandardCopyOption.ATOMIC_MOVE,StandardCopyOption.REPLACE_EXISTING);
+        }finally{temporary.delete();}
     }
     static boolean validID(String value){try{return UUID.fromString(value).toString().equalsIgnoreCase(value);}catch(Exception e){return false;}}
     static final class LimitedInput extends FilterInputStream {

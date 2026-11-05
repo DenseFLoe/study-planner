@@ -29,7 +29,7 @@ public final class PlannerDatabase extends SQLiteOpenHelper implements StateMuta
     public synchronized void commit(SyncLedger l,boolean enqueueCloud)throws Exception{
         long previous=metadata().optLong("sequence");
         l.materialize();SQLiteDatabase db=getWritableDatabase();db.beginTransaction();try{
-            JSONObject rows=l.value.getJSONObject("records");java.util.Iterator<String> it=rows.keys();while(it.hasNext()){String key=it.next();ContentValues v=new ContentValues();v.put("id",key);v.put("body",rows.getJSONObject(key).toString());if(db.insertWithOnConflict("records",null,v,SQLiteDatabase.CONFLICT_REPLACE)<0)throw new android.database.SQLException("记录保存失败");}
+            JSONObject rows=l.value.getJSONObject("records");java.util.Iterator<String> it=rows.keys();while(it.hasNext()){String key=it.next();ContentValues v=new ContentValues();v.put("id",key);v.put("body",CourseSourcePrivacy.record(rows.getJSONObject(key)).toString());if(db.insertWithOnConflict("records",null,v,SQLiteDatabase.CONFLICT_REPLACE)<0)throw new android.database.SQLException("记录保存失败");}
             JSONObject meta=l.metadata();ContentValues v=new ContentValues();v.put("id","sync");v.put("body",meta.toString());if(db.insertWithOnConflict("metadata",null,v,SQLiteDatabase.CONFLICT_REPLACE)<0)throw new android.database.SQLException("同步状态保存失败");db.setTransactionSuccessful();
         }finally{db.endTransaction();}
         if(enqueueCloud&&l.sequence()!=previous&&CloudSettings.enabled(context)){
