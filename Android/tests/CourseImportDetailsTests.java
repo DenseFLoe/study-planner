@@ -40,6 +40,15 @@ public final class CourseImportDetailsTests {
         JSONArray large=new JSONArray();for(int i=0;i<5001;i++)large.put(new JSONObject().put("name","大目录课节"+i));
         CourseImportDetails many=new CourseImportDetails(new JSONObject().put("lessons",large));
         check(many.pageCount()==201&&many.page(200).size()==1&&many.page(200).get(0).contains("大目录课节5000"),"Large directory was truncated");
+        CourseImportDetails found=many.find("大目录课节５０００");
+        check(found.count()==1&&found.totalCount==5001&&found.page(0).get(0).startsWith("5001."),"Full-width search lost original lesson numbering");
+        check(details.find("数学/01.mp4 估算").count()==1,"Combined file path search did not find the original source");
+        check(details.find("数学二 第三章").count()==53&&details.find("数学二 冲刺").count()==0,"Lesson metadata search used OR matching");
+        check(details.find("版本 不同").count()==1,"Recognition notice was not searchable");
+        check(details.find("SYNTHETIC").count()==0,"Private URL components entered the detail search");
+        check(details.find("　 \t ")==details&&details.count()==55,"Blank search did not restore the complete directory");
+        CourseImportDetails accents=new CourseImportDetails(new JSONObject().put("lessons",new JSONArray().put(new JSONObject().put("name","Résumé ALgebra"))));
+        check(accents.find("ＲＥＳＵＭＥ algebra").count()==1,"Case, accent or width normalization changed between import searches");
         System.out.println("Course import details: "+checks+" checks passed");
     }
 }

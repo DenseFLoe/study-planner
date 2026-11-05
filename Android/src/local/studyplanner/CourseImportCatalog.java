@@ -19,7 +19,7 @@ public final class CourseImportCatalog {
     }
     private static final java.util.regex.Pattern MARKS=java.util.regex.Pattern.compile("\\p{M}+");
     private static final java.util.regex.Pattern WORDS=java.util.regex.Pattern.compile("\\s+");
-    private static String normalized(String value) {
+    static String normalized(String value) {
         return MARKS.matcher(Normalizer.normalize(value,Normalizer.Form.NFKD)).replaceAll("").toLowerCase(Locale.ROOT);
     }
     public static String website(JSONObject snapshot) {

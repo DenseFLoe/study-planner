@@ -7,8 +7,8 @@ import java.util.*;
 public final class CourseImportDetails {
     public static final int PAGE_SIZE=25;
     public final String title, summary;
-    public final int lessonCount, noticeCount;
-    private final List<String> entries;
+    public final int lessonCount, noticeCount, totalCount;
+    private final List<String> entries, searchable;
 
     public CourseImportDetails(JSONObject snapshot) {
         title=snapshot.optString("name","未命名课程");
@@ -47,7 +47,23 @@ public final class CourseImportDetails {
             rows.add(line.toString());
         }
         append(header,"共 "+lessonCount+" 节课 · "+noticeCount+" 条识别提示");
-        summary=header.toString();entries=Collections.unmodifiableList(rows);
+        summary=header.toString();entries=Collections.unmodifiableList(rows);totalCount=rows.size();
+        List<String> index=new ArrayList<>();for(String row:rows)index.add(CourseImportCatalog.normalized(row));
+        searchable=Collections.unmodifiableList(index);
+    }
+    private CourseImportDetails(CourseImportDetails source,List<String> rows,List<String> index){
+        title=source.title;summary=source.summary;lessonCount=source.lessonCount;noticeCount=source.noticeCount;totalCount=source.totalCount;
+        entries=Collections.unmodifiableList(rows);searchable=Collections.unmodifiableList(index);
+    }
+    public CourseImportDetails find(String query){
+        String normalized=CourseImportCatalog.normalized(query).trim();if(normalized.isEmpty())return this;
+        String[] terms=normalized.split("\\s+");List<String> rows=new ArrayList<>(),index=new ArrayList<>();
+        for(int i=0;i<entries.size();i++){
+            String text=searchable.get(i);boolean match=true;
+            for(String term:terms)if(!text.contains(term)){match=false;break;}
+            if(match){rows.add(entries.get(i));index.add(text);}
+        }
+        return new CourseImportDetails(this,rows,index);
     }
     private static void append(StringBuilder text,String line){if(line.isEmpty())return;if(text.length()>0)text.append('\n');text.append(line);}
     public int count(){return entries.size();}

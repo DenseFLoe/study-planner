@@ -213,15 +213,17 @@ public class CourseImportActivity extends Activity {
     }
     void details(JSONObject snapshot){
         LinearLayout form=column(),rows=column();form.setPadding(dp(16),dp(8),dp(16),dp(8));
+        EditText search=field(form,"搜索课节、章节、文件路径或识别提示","",false);
         TextView summary=label("正在整理课程信息…",13),position=label("",12);form.addView(summary);form.addView(position);
         ScrollView scroll=new ScrollView(this);scroll.addView(rows);form.addView(scroll,new LinearLayout.LayoutParams(-1,dp(360)));
         PlannerUi.Flow navigation=new PlannerUi.Flow(this);form.addView(navigation);
         AlertDialog dialog=new AlertDialog.Builder(this).setTitle(snapshot.optString("name","课程详情")).setView(form).setPositiveButton("关闭",null).create();
-        CourseImportDetails[] details={null};int[] page={0};Button[] buttons=new Button[2];
+        CourseImportDetails[] catalog={null},details={null};int[] page={0};Button[] buttons=new Button[2];
         Runnable render=()->{
             rows.removeAllViews();CourseImportDetails current=details[0];if(current==null)return;
             summary.setText(current.summary);page[0]=current.pageIndex(page[0]);
-            position.setText(current.count()==0?"尚无课节信息，请返回后重新读取目录。":"第 "+(page[0]+1)+" / "+current.pageCount()+" 页 · 每页最多 "+CourseImportDetails.PAGE_SIZE+" 条");
+            position.setText(current.count()==0?(current.totalCount==0?"尚无课节信息，请返回后重新读取目录。":"没有匹配内容，可缩短搜索词或清除筛选。")
+                :"匹配 "+current.count()+" / "+current.totalCount+" 条 · 第 "+(page[0]+1)+" / "+current.pageCount()+" 页");
             for(String line:current.page(page[0])){TextView row=label(line,14);row.setPadding(0,dp(8),0,dp(8));row.setTextIsSelectable(true);rows.addView(row);}
             buttons[0].setEnabled(page[0]>0);buttons[1].setEnabled(page[0]+1<current.pageCount());scroll.scrollTo(0,0);
         };
@@ -230,7 +232,22 @@ public class CourseImportActivity extends Activity {
         LatestWork<CourseImportDetails> work=new LatestWork<>(worker,this::runOnUiThread,value->{
             if(isDestroyed()||!dialog.isShowing())return;details[0]=value;render.run();
         },error->{if(!isDestroyed()&&dialog.isShowing())summary.setText("课程详情暂未读取成功，可关闭后重试；原选择仍保留。");});
-        dialog.setOnDismissListener(value->work.close());dialog.show();work.submit(()->new CourseImportDetails(snapshot));
+        Runnable[] pending={null};
+        Runnable load=()->{
+            work.clear();if(pending[0]!=null)handler.removeCallbacks(pending[0]);
+            details[0]=null;page[0]=0;rows.removeAllViews();position.setText("正在筛选课节与来源…");
+            for(Button button:buttons)button.setEnabled(false);
+            final String term=search.getText().toString();
+            pending[0]=()->work.submit(()->{if(catalog[0]==null)catalog[0]=new CourseImportDetails(snapshot);return catalog[0].find(term);});
+            handler.postDelayed(pending[0],150);
+        };
+        search.addTextChangedListener(new TextWatcher(){
+            public void beforeTextChanged(CharSequence value,int start,int count,int after){}
+            public void onTextChanged(CharSequence value,int start,int before,int count){load.run();}
+            public void afterTextChanged(Editable value){}
+        });
+        navigation.addView(button("清除筛选",()->search.setText("")));
+        dialog.setOnDismissListener(value->{work.close();if(pending[0]!=null)handler.removeCallbacks(pending[0]);});dialog.show();load.run();
     }
     List<JSONObject> chosen()throws Exception{List<JSONObject> data=new ArrayList<>();for(JSONObject capture:captures)if(selected.contains(WebCourseImport.identity(capture))){if(capture.has("refusal")||WebCourseImport.problem(capture)!=null)throw new IllegalArgumentException("请选择完整课程。");data.add(capture);}if(data.isEmpty())throw new IllegalArgumentException("请先选择课程。");if(netdisk&&mergeSelected.isChecked())return Collections.singletonList(NetdiskImport.merge(data,mergedName.getText().toString()));return data;}
     double importDeadline(){return Planner.at(LocalDate.parse(deadline.getText().toString()),0);}
