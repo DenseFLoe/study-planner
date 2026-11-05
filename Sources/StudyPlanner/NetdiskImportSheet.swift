@@ -15,12 +15,16 @@ final class NetdiskImportReader: NSObject, WKNavigationDelegate {
     let transport = WebViewNetdiskTransport()
     private var currentLink: NetdiskLink?
     private var pendingRead = false
+    private var pendingNavigation: WKNavigation?
     private var generation = UUID()
     private var crawlTask: Task<Void, Never>?
     private let directTransport: any NetdiskTransport
+    private let pageLoader: (@MainActor (URL) -> WKNavigation?)?
 
-    init(directTransport: any NetdiskTransport = PlainNetdiskTransport()) {
+    init(directTransport: any NetdiskTransport = PlainNetdiskTransport(),
+         pageLoader: (@MainActor (URL) -> WKNavigation?)? = nil) {
         self.directTransport = directTransport
+        self.pageLoader = pageLoader
         super.init()
         transport.webView.navigationDelegate = self
     }
@@ -37,36 +41,48 @@ final class NetdiskImportReader: NSObject, WKNavigationDelegate {
         pendingRead = true
         busy = true
         status = "正在打开分享页面…"
-        let supplied = address.trimmingCharacters(in: .whitespacesAndNewlines)
-        let normalized = supplied.hasPrefix("https://") ? supplied : "https://" + supplied
-        var components = URLComponents(string: normalized)
-        components?.scheme = "https"
-        components?.host = "pan.quark.cn"
-        guard let url = components?.url else {
-            busy = false
+        guard let url = URL(string: NetdiskLink.publicURL(address)) else {
+            stop()
             status = NetdiskAPIError.badLink.localizedDescription
             return
         }
-        transport.loadShare(url)
+        let navigation: WKNavigation?
+        if let pageLoader { navigation = pageLoader(url) }
+        else { navigation = transport.loadShare(url) }
+        guard let navigation else {
+            stop()
+            status = "分享页面未能开始加载，请重新打开分享链接。"
+            return
+        }
+        pendingNavigation = navigation
+    }
+
+    private func consumeNavigation(_ navigation: WKNavigation?) -> Bool {
+        guard pendingRead, let navigation, navigation === pendingNavigation else { return false }
+        pendingRead = false
+        pendingNavigation = nil
+        return true
     }
 
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
-        guard pendingRead, webView.url?.host?.lowercased() == "pan.quark.cn" else { return }
-        pendingRead = false
+        guard consumeNavigation(navigation) else { return }
+        guard WebViewNetdiskTransport.allowsPage(webView.url) else {
+            busy = false
+            status = "页面已离开夸克分享地址，请完成登录后重新打开分享链接。"
+            return
+        }
         refresh()
     }
 
     func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
-        guard pendingRead else { return }
-        pendingRead = false
+        guard consumeNavigation(navigation) else { return }
         busy = false
         status = "分享页面未能打开：\(error.localizedDescription)"
     }
 
     func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!,
                  withError error: Error) {
-        guard pendingRead else { return }
-        pendingRead = false
+        guard consumeNavigation(navigation) else { return }
         busy = false
         status = "分享页面未能打开：\(error.localizedDescription)"
     }
@@ -79,6 +95,7 @@ final class NetdiskImportReader: NSObject, WKNavigationDelegate {
     func startRead(_ link: NetdiskLink) {
         currentLink = link
         pendingRead = false
+        pendingNavigation = nil
         generation = UUID()
         let current = generation
         crawlTask?.cancel()
@@ -132,11 +149,12 @@ final class NetdiskImportReader: NSObject, WKNavigationDelegate {
     func stop() {
         generation = UUID()
         crawlTask?.cancel()
-        transport.stop()
         pendingRead = false
+        pendingNavigation = nil
         currentLink = nil
         result = nil
         busy = false
+        transport.stop()
     }
 }
 

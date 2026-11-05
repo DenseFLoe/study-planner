@@ -1,4 +1,5 @@
 import XCTest
+import WebKit
 import StudyCore
 @testable import StudyPlanner
 
@@ -103,5 +104,66 @@ final class NetdiskImportReaderTests: XCTestCase {
         XCTAssertTrue(reader.status.contains("读取完成"))
         reader.stop()
         XCTAssertNil(reader.result)
+    }
+
+    @MainActor
+    func testOldPageFailuresCannotCancelANewNavigation() async throws {
+        let page = WKWebView()
+        var navigations: [WKNavigation] = []
+        let reader = NetdiskImportReader(directTransport: ReaderTransport(), pageLoader: { url in
+            let navigation = page.loadHTMLString("<html></html>", baseURL: url)
+            if let navigation { navigations.append(navigation) }
+            return navigation
+        })
+        defer { reader.stop(); page.stopLoading() }
+        reader.address = "https://pan.quark.cn/s/abc123"; reader.load()
+        reader.address = "https://pan.quark.cn/s/def456"; reader.load()
+        XCTAssertEqual(navigations.count, 2)
+        let old = try XCTUnwrap(navigations.first), current = try XCTUnwrap(navigations.last)
+        XCTAssertFalse(old === current)
+        reader.webView(page, didFail: old, withError: URLError(.cancelled))
+        reader.webView(page, didFailProvisionalNavigation: old, withError: URLError(.cancelled))
+        reader.webView(page, didFinish: old)
+        XCTAssertTrue(reader.busy)
+        XCTAssertNil(reader.result)
+        XCTAssertEqual(reader.status, "正在打开分享页面…")
+        reader.webView(page, didFail: current, withError: URLError(.timedOut))
+        XCTAssertFalse(reader.busy)
+        XCTAssertTrue(reader.status.contains("分享页面未能打开"))
+    }
+
+    @MainActor
+    func testCanonicalPageAddressAndForeignRedirectRecovery() async throws {
+        let page = WKWebView()
+        var requested: URL?, navigation: WKNavigation?
+        let reader = NetdiskImportReader(directTransport: ReaderTransport(), pageLoader: { url in
+            requested = url
+            navigation = page.loadHTMLString("<html>Login</html>", baseURL: URL(string: "https://example.test/login"))
+            return navigation
+        })
+        defer { reader.stop(); page.stopLoading() }
+        reader.address = "HTTPS://pan.quark.cn/s/abc123?pwd=synthetic&token=private#/list/share/aaaa0001"
+        reader.load()
+        XCTAssertEqual(requested?.absoluteString, "https://pan.quark.cn/s/abc123#/list/share/aaaa0001")
+        for _ in 0..<600 {
+            if page.url?.host == "example.test" { break }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        XCTAssertEqual(page.url?.host, "example.test")
+        reader.webView(page, didFinish: try XCTUnwrap(navigation))
+        XCTAssertFalse(reader.busy)
+        XCTAssertNil(reader.result)
+        XCTAssertTrue(reader.status.contains("页面已离开夸克"))
+    }
+
+    @MainActor
+    func testPageThatCannotStartDoesNotLeaveReaderBusy() async {
+        let reader = NetdiskImportReader(directTransport: ReaderTransport(), pageLoader: { _ in nil })
+        defer { reader.stop() }
+        reader.address = "https://pan.quark.cn/s/abc123"
+        reader.load()
+        XCTAssertFalse(reader.busy)
+        XCTAssertNil(reader.result)
+        XCTAssertTrue(reader.status.contains("未能开始加载"))
     }
 }

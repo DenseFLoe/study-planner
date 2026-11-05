@@ -344,6 +344,17 @@ final class NetdiskCrawlerTests: XCTestCase {
 /// Drives the real injected script inside WebKit, the same way the app runs it.
 final class QuarkCrawlerScriptTests: XCTestCase {
     @MainActor
+    func testClosedTransportDoesNotRetainItsBrowserSession() {
+        weak var closed: WebViewNetdiskTransport?
+        autoreleasepool {
+            let transport = WebViewNetdiskTransport()
+            closed = transport
+            transport.stop()
+        }
+        XCTAssertNil(closed, "An unused script-message bridge must not keep the browser session alive")
+    }
+
+    @MainActor
     private func ready(_ webView: WKWebView, baseURL: String = "https://pan.quark.cn/s/48d8818e6cc0") async throws {
         webView.loadHTMLString("<html><body>夸克抓取器测试</body></html>",
                                baseURL: URL(string: baseURL)!)

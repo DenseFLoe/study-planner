@@ -5,11 +5,9 @@ import StudyCore
 /// Talks to the netdisk from inside the built-in browser, so private shares and passcode-protected
 /// shares use the session the user already has. Tokens never leave this window.
 @MainActor
-final class WebViewNetdiskTransport: NSObject, NetdiskTransport, WKScriptMessageHandler {
-    private static let handlerName = "quarkCrawler"
+final class WebViewNetdiskTransport: NSObject, NetdiskTransport {
     let webView: WKWebView
     private var pending: [String: CheckedContinuation<Data, Error>] = [:]
-    private var requestCounter = 0
 
     override init() {
         let configuration = WKWebViewConfiguration()
@@ -22,7 +20,6 @@ final class WebViewNetdiskTransport: NSObject, NetdiskTransport, WKScriptMessage
         }
         webView = WKWebView(frame: .zero, configuration: configuration)
         super.init()
-        configuration.userContentController.add(self, name: Self.handlerName)
     }
 
     static var script: String { resource() }
@@ -33,7 +30,8 @@ final class WebViewNetdiskTransport: NSObject, NetdiskTransport, WKScriptMessage
     }
 
     /// Points the browser at the share so the injected reader is running on the right origin.
-    func loadShare(_ url: URL) {
+    @discardableResult
+    func loadShare(_ url: URL) -> WKNavigation? {
         webView.load(URLRequest(url: url))
     }
     func stop() {
@@ -122,9 +120,6 @@ final class WebViewNetdiskTransport: NSObject, NetdiskTransport, WKScriptMessage
         var text: String?
         var error: String?
     }
-
-    nonisolated func userContentController(_ userContentController: WKUserContentController,
-                                           didReceive message: WKScriptMessage) {}
 
     /// JSON literals are built by encoding, never by string interpolation.
     private static func literal(_ value: Any) -> String {
