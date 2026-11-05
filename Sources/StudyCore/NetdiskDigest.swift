@@ -114,6 +114,7 @@ public enum NetdiskDigest {
 
     /// Builds the tree and picks course packages. Pure: the same listing always digests the same way.
     public static func digest(entries: [NetdiskEntry], rootTitle: String, pwdID: String,
+                              rootFID: String = "",
                               unreadFolders: Int = 0, issues: [String] = [],
                               limits: Limits = .standard) -> Outcome {
         var nodes: [String: Node] = [:]
@@ -121,7 +122,7 @@ public enum NetdiskDigest {
         func node(path: String) -> Node {
             if let existing = nodes[path] { return existing }
             let name = path.isEmpty ? (rootTitle.isEmpty ? pwdID : rootTitle) : (path.split(separator: "/").last.map(String.init) ?? path)
-            let created = Node(entry: nil, path: path, name: name, fid: "", shareToken: "",
+            let created = Node(entry: nil, path: path, name: name, fid: path.isEmpty ? rootFID : "", shareToken: "",
                                depth: path.isEmpty ? 0 : path.split(separator: "/").count)
             nodes[path] = created
             order.append(path)

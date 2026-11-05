@@ -120,7 +120,7 @@ struct StudyPlannerApp: App {
                 .data(using: .utf8)!)
         })
         do {
-            let result = try await crawler.crawl(link: parsed, passcode: passcode, sourceURL: link,
+            let result = try await crawler.crawl(link: parsed, passcode: passcode,
                                                  existingCourses: [], now: Date())
             if let path = ProcessInfo.processInfo.environment["STUDY_NETDISK_DUMP"] {
                 var safeEntries = result.entries

@@ -78,7 +78,6 @@ final class NetdiskImportReader: NSObject, WKNavigationDelegate {
         crawlTask?.cancel()
         busy = true
         status = "正在读取分享目录…"
-        let sourceURL = address.trimmingCharacters(in: .whitespacesAndNewlines)
         let code = passcode.isEmpty ? link.inAppPasscode : passcode
         crawlTask = Task { [weak self] in
             guard let self else { return }
@@ -94,14 +93,14 @@ final class NetdiskImportReader: NSObject, WKNavigationDelegate {
                     // Public shares can be read directly. This also avoids waiting for the
                     // embedded page's login overlay before starting a large directory scan.
                     value = try await NetdiskCrawler(transport: PlainNetdiskTransport(), onProgress: progress)
-                        .crawl(link: link, passcode: code, sourceURL: sourceURL,
+                        .crawl(link: link, passcode: code,
                                existingCourses: existingCourses, now: Date())
                 } catch let error as NetdiskAPIError {
                     switch error {
                     case .notLoggedIn, .http(401, _), .http(403, _):
                         status = "此分享需要登录，正在使用右侧页面的会话重试…"
                         value = try await NetdiskCrawler(transport: transport, onProgress: progress)
-                            .crawl(link: link, passcode: code, sourceURL: sourceURL,
+                            .crawl(link: link, passcode: code,
                                    existingCourses: existingCourses, now: Date())
                     default: throw error
                     }

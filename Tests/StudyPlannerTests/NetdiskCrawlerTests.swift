@@ -105,7 +105,7 @@ final class NetdiskCrawlerTests: XCTestCase {
                        passcode: String? = nil) async throws -> NetdiskCrawler.Result {
         let crawler = NetdiskCrawler(transport: transport, limits: limits)
         let parsed = try XCTUnwrap(NetdiskLink.parse(link))
-        return try await crawler.crawl(link: parsed, passcode: passcode, sourceURL: link,
+        return try await crawler.crawl(link: parsed, passcode: passcode,
                                        existingCourses: [], now: Date(timeIntervalSince1970: 1_790_497_416))
     }
 
@@ -317,6 +317,9 @@ final class NetdiskCrawlerTests: XCTestCase {
         // The linked chapter is one course: its own three lessons plus the one in its section folder.
         XCTAssertEqual(result.scan.packages.map(\.path), [""])
         XCTAssertEqual(result.scan.packages.first?.videoCount, 6)
+        XCTAssertEqual(result.scan.root.fid, "c0ffee02")
+        XCTAssertEqual(result.scan.packages.first?.packageID, "quark:48d8818e6cc0:c0ffee02")
+        XCTAssertEqual(result.scan.sourceURL, "https://pan.quark.cn/s/48d8818e6cc0#/list/share/c0ffee02")
         XCTAssertEqual(result.scan.packages.first?.name, "01.【测试】高等数学强化班")
         XCTAssertTrue(result.scan.issues.contains { $0.contains("子目录") })
         let listed = Set(await transport.recorded().map { $0.query["pdir_fid"] ?? "" })
@@ -478,7 +481,7 @@ final class QuarkCrawlerScriptTests: XCTestCase {
             """, arguments: [:], in: nil, contentWorld: .page)
         let link = try XCTUnwrap(NetdiskLink.parse("https://pan.quark.cn/s/abc123"))
         let result = try await NetdiskCrawler(transport: transport).crawl(
-            link: link, passcode: nil, sourceURL: "https://pan.quark.cn/s/abc123",
+            link: link, passcode: nil,
             existingCourses: [], now: Date(timeIntervalSince1970: 1_790_497_416))
         XCTAssertEqual(result.scan.totalVideoCount, 1)
         XCTAssertEqual(result.courses.first?.snapshot.lessons.first?.durationSeconds, 600)

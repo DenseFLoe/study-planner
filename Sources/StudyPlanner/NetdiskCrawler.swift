@@ -63,7 +63,7 @@ actor NetdiskCrawler {
         self.onProgress = onProgress
     }
 
-    func crawl(link: NetdiskLink, passcode: String?, sourceURL: String,
+    func crawl(link: NetdiskLink, passcode: String?,
                existingCourses: [Course], now: Date) async throws -> Result {
         var progress = Progress(title: "", foldersRead: 0, foldersQueued: 0, filesSeen: 0, videosSeen: 0,
                                 unreadFolders: 0, detail: "正在读取分享信息…", isFinished: false)
@@ -147,9 +147,13 @@ actor NetdiskCrawler {
 
         report("目录读取完成，正在识别课程…")
         let outcome = NetdiskDigest.digest(entries: entries, rootTitle: token.title, pwdID: link.pwdID,
+                                           rootFID: link.fragmentFID ?? "",
                                            unreadFolders: unread, issues: issues, limits: limits.digest)
+        // The editable address field may have changed while this link was being read.
+        let sourceURL = "https://pan.quark.cn/s/" + link.pwdID
+            + (link.fragmentFID.map { "#/list/share/" + $0 } ?? "")
         let scan = NetdiskScan(pwdID: link.pwdID, passcodeProtected: token.needsPasscode, title: token.title,
-                               sourceURL: sourceURL.isEmpty ? "https://pan.quark.cn/s/" + link.pwdID : sourceURL,
+                               sourceURL: sourceURL,
                                fetchedAt: now, root: outcome.root, packages: outcome.packages,
                                totalVideoCount: outcome.totalVideoCount, totalBytes: outcome.totalBytes,
                                totalSeconds: outcome.totalSeconds, unreadFolders: outcome.unreadFolders,

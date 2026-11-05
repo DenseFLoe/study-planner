@@ -290,20 +290,23 @@ extension PlannerState {
                 throw WebCourseImportError.invalid(candidate.name + "：来源目录不完整，请重新读取分享。")
             }
         }
-        try importWebCourses(candidates.map(\.snapshot), deadline: deadline, now: now)
+        var next = self
+        next.courses = try NetdiskImportIdentity.reconcile(courses, candidates: candidates, scan: scan)
+        try next.importWebCourses(candidates.map(\.snapshot), deadline: deadline, now: now)
         for candidate in candidates {
-            guard let index = courses.firstIndex(where: { $0.webCourse?.packageID == candidate.packageID }) else { continue }
+            guard let index = next.courses.firstIndex(where: { $0.webCourse?.packageID == candidate.packageID }) else { continue }
             let sourceIDs = candidate.sourcePackageIDs.isEmpty ? [candidate.packageID] : candidate.sourcePackageIDs
             let paths = sourceIDs.compactMap { id in scan.packages.first(where: { $0.packageID == id })?.path }
             let folderPath = paths.count == 1 ? paths[0] : "合并自 \(paths.count) 个目录"
-            courses[index].netdisk = NetdiskSnapshot(
+            next.courses[index].netdisk = NetdiskSnapshot(
                 pwdID: scan.pwdID, shareTitle: scan.title, folderPath: folderPath,
                 sourceURL: scan.sourceURL, fetchedAt: scan.fetchedAt,
                 videoCount: candidate.videoCount, totalBytes: candidate.totalBytes,
                 unknownDurations: candidate.estimatedLessons, detection: candidate.detection,
                 duplicates: NetdiskDuplicateSummary.compact(duplicates, packageID: candidate.packageID),
                 sourcePackageIDs: candidate.sourcePackageIDs.isEmpty ? nil : sourceIDs)
-            courses[index].netdiskLessons = candidate.lessons
+            next.courses[index].netdiskLessons = candidate.lessons
         }
+        self = next
     }
 }
