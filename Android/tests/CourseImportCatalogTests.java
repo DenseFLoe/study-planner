@@ -12,6 +12,49 @@ public final class CourseImportCatalogTests {
         value.getJSONArray("lessons").getJSONObject(0).put("name","Résumé 极限").put("subject","数学二").put("stage","强化").put("chapter","第三章");
         return value;
     }
+    static final class GuardedCapture extends JSONObject {
+        boolean blocked;
+        GuardedCapture(JSONObject value)throws Exception{super(value.toString());}
+        @Override public Object opt(String key){if(blocked)throw new AssertionError("UI re-read capture metadata: "+key);return super.opt(key);}
+        @Override public Object get(String key){if(blocked)throw new AssertionError("UI re-read capture metadata: "+key);return super.get(key);}
+    }
+    static void preparedRows()throws Exception{
+        JSONObject first=course("alpha.test").put("existingCourses",new JSONArray()
+            .put(new JSONObject().put("id","saved-course").put("name","已有数学"))
+            .put(JSONObject.NULL).put(new JSONObject().put("name","missing ID")));
+        GuardedCapture guarded=new GuardedCapture(first);
+        JSONObject second=course("beta.test");
+        List<JSONObject> captures=Arrays.asList(guarded,second);
+        CourseImportCatalog.SearchResult result=new CourseImportCatalog.SearchResult(captures,"alpha.test");
+        String id=WebCourseImport.identity(guarded),otherID=WebCourseImport.identity(second);
+        guarded.blocked=true;
+        CourseImportCatalog.Row row=result.row(CourseImportCatalog.page(result.matches,0).get(0));
+        check(row.name.equals("数学 Algebra")&&row.lessonCount==2&&row.website.equals("alpha.test"),"Prepared card lost display fields");
+        check(row.problem==null&&row.id.equals(id),"Prepared card changed selection identity or validity");
+        check(row.existing.size()==1&&row.existing.get(0).id.equals("saved-course")&&row.existing.get(0).name.equals("已有数学"),"Prepared existing-plan navigation lost or retained malformed targets");
+        Set<String> selected=new HashSet<>(Arrays.asList(id,otherID,"missing"));
+        check(result.summary(selected).contains("显示 1 / 2 门 · 已选 2 门")&&result.summary(selected).contains("其中 1 门在筛选之外"),"Cached summary lost hidden selections");
+        selected.remove(otherID);check(!result.summary(selected).contains("筛选之外"),"Cached summary did not follow new selection");
+        check(selected.contains("missing"),"Cached summary mutated selection");
+        try{row.existing.clear();throw new AssertionError("Prepared row navigation can be mutated");}catch(UnsupportedOperationException expected){checks++;}
+        for(Object lessons:new Object[]{null,JSONObject.NULL,"broken",new JSONArray().put(JSONObject.NULL).put(42)}){
+            JSONObject invalid=course("alpha.test");if(lessons==null)invalid.remove("lessons");else invalid.put("lessons",lessons);
+            CourseImportCatalog.SearchResult review=new CourseImportCatalog.SearchResult(Collections.singletonList(invalid),"algebra");
+            check(review.matches.size()==1&&review.row(invalid).problem!=null,"Incomplete course disappeared from search or looked complete");
+            check(review.selectableIDs.isEmpty()&&review.groups.isEmpty(),"Malformed lessons entered batch selection");
+        }
+        JSONObject refused=course("alpha.test").put("refusal",JSONObject.NULL);
+        CourseImportCatalog.SearchResult review=new CourseImportCatalog.SearchResult(Collections.singletonList(refused),"");
+        check(review.row(refused).problem!=null&&!review.row(refused).problem.isEmpty()&&review.selectableIDs.isEmpty(),"Null refusal accidentally enabled import");
+        java.util.concurrent.atomic.AtomicInteger polls=new java.util.concurrent.atomic.AtomicInteger();
+        JSONObject many=course("alpha.test");JSONArray lessons=new JSONArray();
+        for(int i=0;i<500;i++)lessons.put(new JSONObject().put("id","lesson"+i).put("name","数学"));
+        many.put("lessons",lessons);
+        try{
+            BackgroundCancellation.call(()->polls.incrementAndGet()>=10,()->new CourseImportCatalog.SearchResult(Collections.singletonList(many),"数学"));
+            throw new AssertionError("Obsolete lesson search did not stop");
+        }catch(java.util.concurrent.CancellationException expected){check(polls.get()==10,"Search cancellation was delayed until all lessons finished");}
+    }
     public static void main(String[] args)throws Exception {
         JSONObject a=course("alpha.test"),b=course("beta.test:8443");List<JSONObject> courses=Arrays.asList(a,b);
         for(String query:new String[]{"", " \t ", "ＡＬＧＥＢＲＡ　数学二", "resume 强化 第三章", "alpha.test 极限"})
@@ -84,6 +127,7 @@ public final class CourseImportCatalogTests {
         JSONObject nested=course("pan.quark.cn").put("netdisk",new JSONObject().put("folderPath","/资料//高数/基础班"));
         List<CourseImportCatalog.Group> ancestors=CourseImportCatalog.groups(Collections.singletonList(nested));
         check(ancestors.size()==3&&ancestors.get(2).path.equals("资料/高数"),"Nested directory ancestors or redundant separators were mishandled");
+        preparedRows();
         System.out.println("Course import catalog: "+checks+" checks passed");
     }
 }

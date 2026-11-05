@@ -155,7 +155,7 @@ public class CourseImportActivity extends Activity {
     boolean matches(JSONObject snapshot,String term){return CourseImportCatalog.matches(snapshot,term);}
     void selectMatches(boolean select){if(capturing||previewing||delivering||!filterReady())return;Set<String> ids=searchResult.selectableIDs;if(select)selected.addAll(ids);else selected.removeAll(ids);renderResults();}
     boolean importable(JSONObject snapshot){return CourseImportCatalog.importable(snapshot);}
-    void updateSelectionSummary(){if(selectionSummary!=null)selectionSummary.setText(CourseImportCatalog.summary(captures,selected,filteredCaptures));}
+    void updateSelectionSummary(){if(selectionSummary!=null)selectionSummary.setText(searchResult.summary(selected));}
     void groupChoices(){
         if(!netdisk)return;
         List<CourseImportCatalog.Group> groups=searchResult.groups;if(groups.isEmpty())return;
@@ -277,14 +277,14 @@ public class CourseImportActivity extends Activity {
         if(selectionActions!=null)for(int i=0;i<selectionActions.getChildCount();i++)selectionActions.getChildAt(i).setEnabled(!capturing&&!previewing&&!delivering);
         updateSelectionSummary();groupChoices();
         for(JSONObject snapshot:CourseImportCatalog.page(filteredCaptures,resultPage)){
-            String problem=snapshot.optString("refusal",WebCourseImport.problem(snapshot));
-            CheckBox choice=new CheckBox(this);String id=WebCourseImport.identity(snapshot),website=CourseImportCatalog.website(snapshot);
-            choice.setText(snapshot.optString("name")+" · "+snapshot.optJSONArray("lessons").length()+" 课节"+(website.isEmpty()?"":"\n"+website)+(problem==null?"":"\n"+problem));
+            CourseImportCatalog.Row row=searchResult.row(snapshot);
+            String problem=row.problem;
+            CheckBox choice=new CheckBox(this);String id=row.id,website=row.website;
+            choice.setText(row.name+" · "+row.lessonCount+" 课节"+(website.isEmpty()?"":"\n"+website)+(problem==null?"":"\n"+problem));
             choice.setEnabled(problem==null&&!capturing&&!previewing&&!delivering);choice.setChecked(selected.contains(id));
             choice.setOnCheckedChangeListener((button,checked)->{if(checked)selected.add(id);else selected.remove(id);handler.post(this::renderResults);});
             results.addView(choice);results.addView(button("查看课节与来源",()->details(snapshot)));
-            JSONArray existing=snapshot.optJSONArray("existingCourses");
-            if(existing!=null)for(JSONObject course:Planner.list(existing))results.addView(button("查看已有计划 · "+course.optString("name"),()->{setResult(RESULT_OK,new Intent().putExtra("courseID",course.optString("id")));finish();}));
+            for(CourseImportCatalog.ExistingCourse course:row.existing)results.addView(button("查看已有计划 · "+course.name,()->{setResult(RESULT_OK,new Intent().putExtra("courseID",course.id));finish();}));
         }
         if(resultPosition!=null)resultPosition.setText((filteredCaptures.isEmpty()?"没有匹配的课程。":"第 "+(resultPage+1)+" / "+pages+" 页 · 每页最多 "+CourseImportCatalog.PAGE_SIZE+" 门。")+" 批选作用于全部搜索结果，选择跨页保留。");
         if(previousResultPage!=null)previousResultPage.setEnabled(resultPage>0);
