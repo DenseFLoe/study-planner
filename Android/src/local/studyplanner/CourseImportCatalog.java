@@ -1,0 +1,50 @@
+package local.studyplanner;
+
+import org.json.*;
+import java.net.URI;
+import java.text.Normalizer;
+import java.util.*;
+
+/** Public import catalog fields and selection counts; URL credentials never enter search text. */
+public final class CourseImportCatalog {
+    private static final java.util.regex.Pattern MARKS=java.util.regex.Pattern.compile("\\p{M}+");
+    private static final java.util.regex.Pattern WORDS=java.util.regex.Pattern.compile("\\s+");
+    private static String normalized(String value) {
+        return MARKS.matcher(Normalizer.normalize(value,Normalizer.Form.NFKD)).replaceAll("").toLowerCase(Locale.ROOT);
+    }
+    public static String website(JSONObject snapshot) {
+        try {
+            URI url=new URI(WebCourseImport.safeURL(snapshot.optString("sourceURL")));
+            if(url.getHost()==null)return "";
+            return url.getHost()+(url.getPort()<0||url.getPort()==443?"":":"+url.getPort());
+        } catch(Exception invalid) { return ""; }
+    }
+    public static boolean matches(JSONObject snapshot,String query) {
+        String term=normalized(query).trim();if(term.isEmpty())return true;
+        StringBuilder text=new StringBuilder(snapshot.optString("name")).append(' ').append(website(snapshot));
+        JSONObject netdisk=snapshot.optJSONObject("netdisk");if(netdisk!=null)text.append(' ').append(netdisk.optString("folderPath"));
+        for(JSONObject lesson:Planner.list(snapshot.optJSONArray("lessons")))
+            for(String key:new String[]{"name","subject","stage","chapter"})text.append(' ').append(lesson.optString(key));
+        String haystack=normalized(text.toString());
+        for(String word:WORDS.split(term))if(!haystack.contains(word))return false;
+        return true;
+    }
+    public static boolean importable(JSONObject snapshot) {
+        return !snapshot.has("refusal")&&WebCourseImport.problem(snapshot)==null;
+    }
+    public static Set<String> matchingSelectableIDs(List<JSONObject> captures,String query) {
+        Set<String> ids=new HashSet<>();
+        for(JSONObject snapshot:captures)if(importable(snapshot)&&matches(snapshot,query))ids.add(WebCourseImport.identity(snapshot));
+        return ids;
+    }
+    public static Set<String> retainedSelection(List<JSONObject> captures,Set<String> selected) {
+        Set<String> ids=matchingSelectableIDs(captures,"");ids.retainAll(selected);return ids;
+    }
+    public static String summary(List<JSONObject> captures,Set<String> selected,String query) {
+        Set<String> known=new HashSet<>(),visible=new HashSet<>();
+        for(JSONObject snapshot:captures){String id=WebCourseImport.identity(snapshot);known.add(id);if(matches(snapshot,query))visible.add(id);}
+        known.retainAll(selected);Set<String> hidden=new HashSet<>(known);hidden.removeAll(visible);
+        return "显示 "+visible.size()+" / "+captures.size()+" 门 · 已选 "+known.size()+" 门"
+            +(hidden.isEmpty()?"":"\n其中 "+hidden.size()+" 门在筛选之外，导入时会一并保存；可清除筛选查看，或点“只选搜索结果”。");
+    }
+}
