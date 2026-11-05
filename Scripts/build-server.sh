@@ -14,7 +14,7 @@ rm -rf -- "$classes" "$stage"
 mkdir -p "$classes" "$stage/lib" dist
 json_source="$PWD/Android/tools/json.jar"
 sources=()
-for name in Planner BackgroundCancellation SchedulePreferenceOptimizer SchedulePriorities ScheduleExplanation DailyTaskOrdering CourseTools StudyLoad ScheduleFeasibilitySearch ScheduleHealth SavedScheduleAssessment WebCourseImport CourseSourcePrivacy NetdiskImportIdentity SyncLedger SyncJSON SyncExchange CloudSnapshot; do
+for name in Planner BackgroundCancellation SchedulePreferenceOptimizer SchedulePriorities ScheduleExplanation DailyTaskOrdering CourseTools StudyLoad ScheduleFeasibilitySearch ScheduleRestConflict ScheduleHealth SavedScheduleAssessment WebCourseImport CourseSourcePrivacy NetdiskImportIdentity SyncLedger SyncJSON SyncExchange CloudSnapshot; do
   sources+=("Android/src/local/studyplanner/$name.java")
 done
 "$JDK/bin/javac" --release 11 -encoding UTF-8 -cp "$json_source" -d "$classes" "${sources[@]}" Server/src/local/studyplanner/*.java
