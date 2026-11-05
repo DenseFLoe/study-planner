@@ -15,20 +15,29 @@ enum PlannerTheme {
     static let spring = Animation.spring(response: 0.42, dampingFraction: 0.86)
 }
 
-/// Keep the desktop layout intact in narrow windows. Give scrolling content the
-/// inverse-scaled height so it still fills the viewport and remains scrollable.
-struct PlannerWindowContent<Content: View>: View {
-    @ViewBuilder var content: Content
+/// Keep the agenda readable by giving up secondary columns before text space.
+struct PlannerWindowLayout {
+    static let minimumWidth: CGFloat = 680
+    static let sidebarWidth: CGFloat = 232
+    static let insightsWidth: CGFloat = 330
+    var width: CGFloat
 
-    var body: some View {
-        GeometryReader { proxy in
-            let width = max(proxy.size.width, 1)
-            let scale = min(1, width / PlannerTheme.referenceWindowWidth)
-            content
-                .frame(width: width / scale, height: proxy.size.height / scale)
-                .scaleEffect(scale, anchor: .topLeading)
-                .frame(width: proxy.size.width, height: proxy.size.height, alignment: .topLeading)
-        }
+    var showsSidebar: Bool { width >= 960 }
+    var showsInsights: Bool { width >= PlannerTheme.referenceWindowWidth }
+    var contentWidth: CGFloat { width - (showsSidebar ? Self.sidebarWidth + 1 : 0) }
+    var agendaWidth: CGFloat {
+        contentWidth - (showsInsights ? Self.insightsWidth + 1 : 0)
+    }
+}
+
+private struct PlannerCompactContentKey: EnvironmentKey {
+    static let defaultValue = false
+}
+
+extension EnvironmentValues {
+    var plannerCompactContent: Bool {
+        get { self[PlannerCompactContentKey.self] }
+        set { self[PlannerCompactContentKey.self] = newValue }
     }
 }
 

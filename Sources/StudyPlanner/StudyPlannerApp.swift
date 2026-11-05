@@ -42,10 +42,8 @@ struct StudyPlannerApp: App {
     @Environment(\.openWindow) private var openWindow
     var body: some Scene {
         WindowGroup("学习日程", id: "main") {
-            PlannerWindowContent {
-                MainView(store: store)
-            }
-                .frame(minWidth: 1060, minHeight: 700).tint(.blue)
+            MainView(store: store)
+                .frame(minWidth: PlannerWindowLayout.minimumWidth, minHeight: 700).tint(.blue)
                 .onAppear { delegate.connect(store) }
         }.defaultSize(width: PlannerTheme.referenceWindowWidth, height: 820)
         .commands {

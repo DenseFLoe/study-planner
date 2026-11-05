@@ -37,6 +37,8 @@ struct MainView: View {
     @State private var month = Date()
     @State private var sheet: EditorSheet?
     @State private var showingAddMenu = false
+    @State private var showingNavigation = false
+    @State private var showingInsights = false
     @State private var dismissedDeletion: UUID?
     @State private var showingCompletedFixedEvents = false
     @State private var fixedQuery = ""
@@ -68,61 +70,23 @@ struct MainView: View {
     }
 
     var body: some View {
-        HStack(spacing: 0) {
-            sidebar.frame(width: 232)
-            Rectangle().fill(PlannerTheme.hairline).frame(width: 1)
-            VStack(spacing: 0) {
-                header
-                if store.orderSaveBusy {
-                    HStack { ProgressView().controlSize(.small); Text(store.saveStatus); Spacer() }
-                        .padding(.horizontal, 24).padding(.vertical, 8)
-                        .accessibilityIdentifier("localSaveProgress")
+        GeometryReader { geometry in
+            let layout = PlannerWindowLayout(width: geometry.size.width)
+            windowContent(layout)
+                .onChange(of: layout.showsSidebar) { _, visible in
+                    if visible { showingNavigation = false }
                 }
-                if let deleted = store.latestDeletedCourse, deleted.id != dismissedDeletion {
-                    HStack {
-                        Text("已删除「\(deleted.deletedCourseName ?? "课程")」")
-                        Button("撤销删除") { Task { _ = await store.undoCourseDeletion(deleted.id) } }
-                            .disabled(store.orderSaveBusy)
-                        Spacer()
-                        Button("收起", systemImage: "xmark") { dismissedDeletion = deleted.id }
-                            .labelStyle(.iconOnly).help("仍可在“数据与备份”中恢复")
-                    }.padding(.horizontal, 24).padding(.vertical, 8)
+                .onChange(of: layout.showsInsights) { _, visible in
+                    if visible { showingInsights = false }
                 }
-                if store.syncBusy {
-                    HStack(spacing: 8) {
-                        ProgressView()
-                            .progressViewStyle(.circular)
-                            .controlSize(.small)
-                        Text("正在后台同步，可继续修改")
-                            .font(.callout.weight(.medium))
-                        Spacer()
-                    }
-                    .foregroundStyle(PlannerTheme.accent)
-                    .padding(.horizontal, PlannerTheme.pagePadding)
-                    .padding(.vertical, 10)
-                    .background(PlannerTheme.accent.opacity(0.07))
-                    .accessibilityElement(children: .combine)
-                    .accessibilityIdentifier("syncProgress")
-                }
-                Group {
-                    if !store.isReady {
-                        ContentUnavailableView(
-                            "无法打开数据库",
-                            systemImage: "externaldrive.badge.exclamationmark",
-                            description: Text("请关闭软件并检查本地数据文件的访问权限。")
-                        )
-                    } else {
-                        pageContent
-                            .id(page)
-                            .transition(.opacity.combined(with: .move(edge: .bottom)))
-                    }
-                }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-            }
         }
         .background { PlannerGlassBackdrop() }
         .animation(reduceMotion ? nil : PlannerTheme.spring, value: page)
         .animation(reduceMotion ? nil : PlannerTheme.spring, value: selectedDay)
+        .onChange(of: page) { _, _ in showingNavigation = false; showingInsights = false }
+        .onChange(of: sheet?.id) { _, value in
+            if value != nil { showingNavigation = false; showingInsights = false }
+        }
         .toolbar {
             if store.demo {
                 ToolbarItem {
@@ -202,14 +166,75 @@ struct MainView: View {
         }
     }
 
+    private func windowContent(_ layout: PlannerWindowLayout) -> some View {
+        HStack(spacing: 0) {
+            if layout.showsSidebar {
+                sidebar.frame(width: PlannerWindowLayout.sidebarWidth)
+                Rectangle().fill(PlannerTheme.hairline).frame(width: 1)
+            }
+            VStack(spacing: 0) {
+                header(layout)
+                if store.orderSaveBusy {
+                    HStack { ProgressView().controlSize(.small); Text(store.saveStatus); Spacer() }
+                        .padding(.horizontal, 24).padding(.vertical, 8)
+                        .accessibilityIdentifier("localSaveProgress")
+                }
+                if let deleted = store.latestDeletedCourse, deleted.id != dismissedDeletion {
+                    HStack {
+                        Text("已删除「\(deleted.deletedCourseName ?? "课程")」")
+                        Button("撤销删除") { Task { _ = await store.undoCourseDeletion(deleted.id) } }
+                            .disabled(store.orderSaveBusy)
+                        Spacer()
+                        Button("收起", systemImage: "xmark") { dismissedDeletion = deleted.id }
+                            .labelStyle(.iconOnly).help("仍可在“数据与备份”中恢复")
+                    }.padding(.horizontal, 24).padding(.vertical, 8)
+                }
+                if store.syncBusy {
+                    HStack(spacing: 8) {
+                        ProgressView()
+                            .progressViewStyle(.circular)
+                            .controlSize(.small)
+                        Text("正在后台同步，可继续修改")
+                            .font(.callout.weight(.medium))
+                        Spacer()
+                    }
+                    .foregroundStyle(PlannerTheme.accent)
+                    .padding(.horizontal, PlannerTheme.pagePadding)
+                    .padding(.vertical, 10)
+                    .background(PlannerTheme.accent.opacity(0.07))
+                    .accessibilityElement(children: .combine)
+                    .accessibilityIdentifier("syncProgress")
+                }
+                Group {
+                    if !store.isReady {
+                        ContentUnavailableView(
+                            "无法打开数据库",
+                            systemImage: "externaldrive.badge.exclamationmark",
+                            description: Text("请关闭软件并检查本地数据文件的访问权限。")
+                        )
+                    } else {
+                        pageContent(layout)
+                            .environment(\.plannerCompactContent, layout.contentWidth < 900)
+                            .id(page)
+                            .transition(.opacity.combined(with: .move(edge: .bottom)))
+                    }
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
+        }
+    }
+
     @ViewBuilder
-    private var pageContent: some View {
+    private func pageContent(_ layout: PlannerWindowLayout) -> some View {
         switch page {
         case .calendar:
             HStack(spacing: 0) {
                 agenda.frame(maxWidth: .infinity, maxHeight: .infinity)
-                Rectangle().fill(PlannerTheme.hairline).frame(width: 1)
-                insightsPanel.frame(width: 330)
+                    .environment(\.plannerCompactContent, layout.agendaWidth < 760)
+                if layout.showsInsights {
+                    Rectangle().fill(PlannerTheme.hairline).frame(width: 1)
+                    insightsPanel.frame(width: PlannerWindowLayout.insightsWidth)
+                }
             }
         case .courses: courseList
         case .fixed: fixedList
@@ -242,6 +267,7 @@ struct MainView: View {
             VStack(spacing: 5) {
                 ForEach(Page.allCases, id: \.self) { item in
                     Button {
+                        showingNavigation = false
                         withAnimation(reduceMotion ? nil : PlannerTheme.spring) { page = item }
                     } label: {
                         HStack(spacing: 12) {
@@ -288,6 +314,7 @@ struct MainView: View {
                 courses: store.state.courses,
                 fixed: store.state.fixedEvents
             ) {
+                showingNavigation = false
                 withAnimation(reduceMotion ? nil : PlannerTheme.spring) { page = .calendar }
             }
             .padding(.horizontal, 16)
@@ -332,23 +359,54 @@ struct MainView: View {
         }
     }
 
-    private var header: some View {
-        HStack(alignment: .center, spacing: 18) {
-            VStack(alignment: .leading, spacing: 6) {
-                Text(pageTitle)
-                    .font(.system(size: 29, weight: .bold, design: .rounded))
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.6)
-                    .contentTransition(.numericText())
-                Text(subtitle)
-                    .font(.system(size: 13.5))
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.6)
-                    .foregroundStyle(.secondary)
+    private func header(_ layout: PlannerWindowLayout) -> some View {
+        ViewThatFits(in: .horizontal) {
+            HStack(spacing: 18) {
+                headerTitle.fixedSize(horizontal: true, vertical: false)
+                Spacer(minLength: 0)
+                headerActions(layout)
             }
+            VStack(alignment: .leading, spacing: 14) {
+                headerTitle
+                headerActions(layout)
+            }
+        }
+        .padding(.horizontal, PlannerTheme.pagePadding)
+        .padding(.top, 21)
+        .padding(.bottom, 18)
+        .background(.ultraThinMaterial)
+        .overlay(alignment: .bottom) {
+            Rectangle().fill(PlannerTheme.hairline).frame(height: 1)
+        }
+    }
 
-            Spacer()
+    private var headerTitle: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(pageTitle)
+                .font(.system(size: 29, weight: .bold, design: .rounded))
+                .fixedSize(horizontal: false, vertical: true)
+                .contentTransition(.numericText())
+            Text(subtitle)
+                .font(.system(size: 13.5))
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
 
+    private func headerActions(_ layout: PlannerWindowLayout) -> some View {
+        HStack(spacing: 10) {
+            if !layout.showsSidebar {
+                Button { showingNavigation.toggle() } label: {
+                    Label("导航与月历", systemImage: "sidebar.left")
+                        .labelStyle(.iconOnly)
+                }
+                .buttonStyle(CircularIconButtonStyle())
+                .help("展开导航与月历")
+                .accessibilityIdentifier("showNavigation")
+                .popover(isPresented: $showingNavigation, arrowEdge: .bottom) {
+                    sidebar.frame(width: 264, height: 620)
+                }
+            }
             if page == .calendar {
                 HStack(spacing: 8) {
                     Button { moveDay(-1) } label: { Image(systemName: "chevron.left") }
@@ -369,15 +427,33 @@ struct MainView: View {
                     .buttonStyle(SoftButtonStyle())
                     .focusEffectDisabled()
                 }
+                .fixedSize()
             }
+
+            Spacer(minLength: 0)
 
             if !store.result.risks.isEmpty || !store.result.diagnostics.isEmpty {
                 Button { sheet = .risks } label: {
                     Label("查看排程情况", systemImage: "exclamationmark.triangle.fill")
                 }
+                .labelStyle(.iconOnly)
                 .buttonStyle(SoftButtonStyle())
                 .focusEffectDisabled()
                 .foregroundStyle(.orange)
+                .help("查看排程情况")
+            }
+
+            if page == .calendar && !layout.showsInsights {
+                Button { showingInsights.toggle() } label: {
+                    Label("学习概览", systemImage: "sidebar.right")
+                        .labelStyle(.iconOnly)
+                }
+                .buttonStyle(CircularIconButtonStyle())
+                .help("展开学习概览、继续上课与周统计")
+                .accessibilityIdentifier("showInsights")
+                .popover(isPresented: $showingInsights, arrowEdge: .bottom) {
+                    insightsPanel.frame(width: PlannerWindowLayout.insightsWidth, height: 600)
+                }
             }
 
             Button { showingAddMenu = true } label: {
@@ -415,18 +491,6 @@ struct MainView: View {
                 .padding(12)
                 .frame(width: 235)
             }
-        }
-        .padding(.horizontal, PlannerTheme.pagePadding)
-        .padding(.top, 21)
-        .padding(.bottom, 18)
-        .background(.ultraThinMaterial)
-        .overlay(alignment: .bottom) {
-            LinearGradient(
-                colors: [Color.clear, Color.white.opacity(0.42), PlannerTheme.hairline, Color.clear],
-                startPoint: .leading,
-                endPoint: .trailing
-            )
-            .frame(height: 1)
         }
     }
 
@@ -481,15 +545,18 @@ struct MainView: View {
                     Label("浮动事项已预留 " + floatingDuration + "；虚线学习卡片显示按当前顺序预估的起止时间，调整顺序后更新。", systemImage: "arrow.left.arrow.right")
                         .font(.caption).foregroundStyle(.secondary)
                 }
-                HStack {
-                    PlannerSectionTitle(
-                        title: Calendar.current.isDateInToday(selectedDay)
-                            ? (store.state.settings.actualStudyStart(on: Date()) == nil ? "今天的安排" : "新课表 · 今天")
-                            : "当天的安排",
-                        detail: "\(items.count) 项任务 · 长按课程可拖动交换"
-                    )
+                HStack(alignment: .top, spacing: 12) {
+                    VStack(alignment: .leading, spacing: 5) {
+                        Text(Calendar.current.isDateInToday(selectedDay)
+                             ? (store.state.settings.actualStudyStart(on: Date()) == nil ? "今天的安排" : "新课表 · 今天")
+                             : "当天的安排")
+                            .font(.system(size: 19, weight: .bold, design: .rounded))
+                        Text("\(items.count) 项任务 · 长按课程可拖动交换")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
                     Spacer()
                     DayAgendaCopyButton(day: selectedDay, state: store.state)
+                        .fixedSize()
                 }
 
                 if dayTasks.isEmpty && dayEvents.isEmpty {
@@ -1018,29 +1085,20 @@ private struct SummaryMetric: View {
     var color: Color
 
     var body: some View {
-        HStack(spacing: 13) {
-            ZStack {
-                Circle().fill(color.opacity(0.12))
-                Image(systemName: icon)
-                    .font(.system(size: 16, weight: .semibold))
-                    .foregroundStyle(color)
+        VStack(alignment: .leading, spacing: 8) {
+            Label {
+                Text(title).foregroundStyle(.secondary)
+            } icon: {
+                Image(systemName: icon).foregroundStyle(color)
             }
-            .frame(width: 42, height: 42)
-
-            VStack(alignment: .leading, spacing: 3) {
-                Text(title).font(.caption).foregroundStyle(.secondary)
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.6)
-                Text(value)
-                    .font(.system(size: 19, weight: .semibold, design: .rounded))
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.5)
-                    .contentTransition(.numericText())
-            }
-            Spacer(minLength: 4)
+            .font(.caption)
+            Text(value)
+                .font(.system(size: 19, weight: .semibold, design: .rounded))
+                .fixedSize(horizontal: false, vertical: true)
+                .contentTransition(.numericText())
         }
         .padding(.horizontal, 16)
-        .frame(maxWidth: .infinity)
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
 
@@ -1208,6 +1266,7 @@ private struct TimelineRow: View {
     var dragEnded: (CGPoint?) -> Void
     @State private var hovering = false
     @AppStorage("timelineTimeFontSize") private var timelineTimeFontSize = 17.0
+    @Environment(\.plannerCompactContent) private var compact
 
     private var floating: Bool { item.event?.isFloating == true || item.task?.isFloating == true }
 
@@ -1265,76 +1324,86 @@ private struct TimelineRow: View {
             HStack(spacing: 13) {
                 RoundedRectangle(cornerRadius: 3, style: .continuous).fill(tint).frame(width: 4)
 
-                ZStack {
-                    Circle().fill(tint.opacity(0.11))
-                    Image(systemName: floating ? "arrow.left.arrow.right" : (item.task == nil ? "lock.fill" : "book.closed.fill"))
-                        .font(.system(size: 15, weight: .semibold))
-                        .foregroundStyle(tint)
+                if !compact {
+                    ZStack {
+                        Circle().fill(tint.opacity(0.11))
+                        Image(systemName: floating ? "arrow.left.arrow.right" : (item.task == nil ? "lock.fill" : "book.closed.fill"))
+                            .font(.system(size: 15, weight: .semibold))
+                            .foregroundStyle(tint)
+                    }
+                    .frame(width: 38, height: 38)
                 }
-                .frame(width: 38, height: 38)
 
-                VStack(alignment: .leading, spacing: 5) {
-                    Text(item.task == nil ? (item.event?.title ?? "固定事项") : (course?.name ?? "已删除课程"))
-                        .font(.system(size: 15, weight: .semibold))
-                    if let task = item.task {
-                        if isSupervising {
-                            Label("正在监督中…", systemImage: "eye.fill")
-                                .font(.caption.weight(.semibold))
-                                .foregroundStyle(.green)
+                let contentLayout = compact
+                    ? AnyLayout(VStackLayout(alignment: .leading, spacing: 12))
+                    : AnyLayout(HStackLayout(spacing: 13))
+                contentLayout {
+                    VStack(alignment: .leading, spacing: 5) {
+                        Text(item.task == nil ? (item.event?.title ?? "固定事项") : (course?.name ?? "已删除课程"))
+                            .font(.system(size: 15, weight: .semibold))
+                        if let task = item.task {
+                            if isSupervising {
+                                Label("正在监督中…", systemImage: "eye.fill")
+                                    .font(.caption.weight(.semibold))
+                                    .foregroundStyle(.green)
+                            }
+                            if let lessonName = task.lessonName, !lessonName.isEmpty {
+                                Text(lessonName)
+                                    .font(.system(size: 18, weight: .semibold))
+                                    .fixedSize(horizontal: false, vertical: true)
+                            }
+                            Text([studyDuration(task.durationMinutes), task.isFloating ? "按当前顺序预估 · 顺序可调" : (task.end < Date() ? "待确认" : "可调度学习")].joined(separator: " · "))
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                                .help(
+                                    task.isFloating
+                                        ? "完成窗口：" + task.planningStart.formatted(date: .omitted, time: .shortened) + "–" + task.planningEnd.formatted(date: .omitted, time: .shortened) + "；预估起止时间随卡片顺序更新"
+                                        : "在可调度时段内学习，拖动卡片可调整先后"
+                                )
+                        } else {
+                            Text(item.event?.isFloating == true ? "时段内浮动 · 固定占用 " + hours(item.event!.occupiedMinutes) : "固定事项 · 不参与自动移动")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
                         }
-                        if let lessonName = task.lessonName, !lessonName.isEmpty {
-                            Text(lessonName)
-                                .font(.system(size: 18, weight: .semibold))
-                                .fixedSize(horizontal: false, vertical: true)
+                        if let event = item.event, event.isFloating {
+                            FloatingWindowIndicator(occupied: event.occupiedMinutes, window: event.endMinute - event.startMinute, tint: tint)
+                                .frame(maxWidth: 280)
                         }
-                        Text([studyDuration(task.durationMinutes), task.isFloating ? "按当前顺序预估 · 顺序可调" : (task.end < Date() ? "待确认" : "可调度学习")].joined(separator: " · "))
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                            .help(
-                                task.isFloating
-                                    ? "完成窗口：" + task.planningStart.formatted(date: .omitted, time: .shortened) + "–" + task.planningEnd.formatted(date: .omitted, time: .shortened) + "；预估起止时间随卡片顺序更新"
-                                    : "在可调度时段内学习，拖动卡片可调整先后"
-                            )
-                    } else {
-                        Text(item.event?.isFloating == true ? "时段内浮动 · 固定占用 " + hours(item.event!.occupiedMinutes) : "固定事项 · 不参与自动移动")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
                     }
-                    if let event = item.event, event.isFloating {
-                        FloatingWindowIndicator(occupied: event.occupiedMinutes, window: event.endMinute - event.startMinute, tint: tint)
-                            .frame(maxWidth: 280)
-                    }
-                }
 
-                Spacer(minLength: 8)
-
-                if let task = item.task {
-                    Button { confirm(task) } label: {
-                        Image(systemName: "checkmark")
-                            .font(.system(size: 13, weight: .bold))
-                            .frame(width: 30, height: 30)
-                            .contentShape(Circle())
-                            .foregroundStyle(hovering ? Color.white : tint)
-                            .background(hovering ? tint : Color.clear, in: Circle())
-                            .overlay(Circle().strokeBorder(tint.opacity(hovering ? 0 : 0.55), lineWidth: 1.5))
+                    if !compact { Spacer(minLength: 8) }
+                    HStack(spacing: 13) {
+                        if let task = item.task {
+                            Button { confirm(task) } label: {
+                                Image(systemName: "checkmark")
+                                    .font(.system(size: 13, weight: .bold))
+                                    .frame(width: 30, height: 30)
+                                    .contentShape(Circle())
+                                    .foregroundStyle(hovering ? Color.white : tint)
+                                    .background(hovering ? tint : Color.clear, in: Circle())
+                                    .overlay(Circle().strokeBorder(tint.opacity(hovering ? 0 : 0.55), lineWidth: 1.5))
+                            }
+                            .buttonStyle(.plain)
+                            .help(task.planningStart > Date() ? "提前完成此任务" : "确认全部完成")
+                            .accessibilityLabel(task.planningStart > Date() ? "提前完成\(course?.name ?? "任务")" : "完成\(course?.name ?? "任务")")
+                            Button { editTask(task) } label: { Image(systemName: "ellipsis") }
+                                .buttonStyle(.plain)
+                                .foregroundStyle(.secondary)
+                                .help("部分完成或未完成")
+                        } else if let event = item.event {
+                            Button("仅此日移除并重排", systemImage: "calendar.badge.minus") { skipEvent(event) }
+                                .font(.caption)
+                                .disabled(!canSkipEvent)
+                                .help("临时移除本日这一次固定事项，重排今天及未来未确认任务；其他日期照常安排")
+                            Button { editEvent(event) } label: { Image(systemName: "pencil") }
+                                .buttonStyle(.plain)
+                                .foregroundStyle(.secondary)
+                                .help("编辑固定事项")
+                        }
                     }
-                    .buttonStyle(.plain)
-                    .help(task.planningStart > Date() ? "提前完成此任务" : "确认全部完成")
-                    .accessibilityLabel(task.planningStart > Date() ? "提前完成\(course?.name ?? "任务")" : "完成\(course?.name ?? "任务")")
-                    Button { editTask(task) } label: { Image(systemName: "ellipsis") }
-                        .buttonStyle(.plain)
-                        .foregroundStyle(.secondary)
-                        .help("部分完成或未完成")
-                } else if let event = item.event {
-                    Button("仅此日移除并重排", systemImage: "calendar.badge.minus") { skipEvent(event) }
-                        .font(.caption)
-                        .disabled(!canSkipEvent)
-                        .help("临时移除本日这一次固定事项，重排今天及未来未确认任务；其他日期照常安排")
-                    Button { editEvent(event) } label: { Image(systemName: "pencil") }
-                        .buttonStyle(.plain)
-                        .foregroundStyle(.secondary)
-                        .help("编辑固定事项")
+                    .fixedSize()
                 }
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
             .padding(.horizontal, 14)
             .padding(.vertical, 12)
@@ -1629,58 +1698,69 @@ private struct CourseListRow: View {
     var websiteStatus: String?
     private var progress: Double { min(1, Double(completed) / Double(max(1, course.totalMinutes))) }
 
+    @Environment(\.plannerCompactContent) private var compact
+
     var body: some View {
-        HStack(spacing: 17) {
-            ZStack {
-                RoundedRectangle(cornerRadius: 15, style: .continuous)
-                    .fill(courseColor(course.color).opacity(0.12))
-                Image(systemName: "book.closed.fill")
-                    .font(.system(size: 18, weight: .semibold))
-                    .foregroundStyle(courseColor(course.color))
-            }
-            .frame(width: 50, height: 50)
-
-            VStack(alignment: .leading, spacing: 6) {
-                Text(course.name).font(.system(size: 18, weight: .bold))
-                Text("\(course.type.displayName) · 截止 \(course.deadline.formatted(date: .abbreviated, time: .omitted))")
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
-                Text("已学 \(hours(completed)) / 共 \(hours(course.totalMinutes)) · \(course.type == .lessonBasedRecorded && (course.mergedSources != nil || course.webCourse != nil || course.manualLessons != nil) ? "按课节排程" : "最小时间块 \(minimumBlock) 分钟")")
-                    .font(.caption)
-                    .foregroundStyle(.tertiary)
-                DailyStudyWeightPicker(weight: Binding(get: { course.dailyWeight }, set: { setDailyWeight($0) }))
-                    .frame(maxWidth: 360)
-                    .padding(.top, 6)
-                if let dailyMinutes, dailyMinutes > 0 {
-                    Text("参考每日 \(Int(ceil(dailyMinutes * course.dailyWeight))) 分钟 · 优先安排到前面的日期")
-                        .font(.caption).foregroundStyle(course.dailyWeight > 1 ? Color.orange : Color.secondary)
+        let layout = compact
+            ? AnyLayout(VStackLayout(alignment: .leading, spacing: 16))
+            : AnyLayout(HStackLayout(spacing: 17))
+        layout {
+            HStack(alignment: .top, spacing: 17) {
+                ZStack {
+                    RoundedRectangle(cornerRadius: 15, style: .continuous)
+                        .fill(courseColor(course.color).opacity(0.12))
+                    Image(systemName: "book.closed.fill")
+                        .font(.system(size: 18, weight: .semibold))
+                        .foregroundStyle(courseColor(course.color))
                 }
-                Text(course.autoScheduleEnabled ? "实际安排受可用时间与完整课节限制。" : "恢复自动排程后生效。")
-                    .font(.caption2).foregroundStyle(.secondary)
-            }
+                .frame(width: 50, height: 50)
 
-            Spacer(minLength: 16)
-
-            VStack(alignment: .trailing, spacing: 8) {
-                Text(course.autoScheduleEnabled ? "自动排程" : "已暂停")
-                    .font(.caption.weight(.medium))
-                    .foregroundStyle(course.autoScheduleEnabled ? Color.teal : Color.secondary)
-                ProgressView(value: progress)
-                    .tint(courseColor(course.color))
-                    .frame(width: 130)
-                Text("\(Int(progress * 100))%")
-                    .font(.caption2)
-                    .foregroundStyle(.tertiary)
-            }
-
-            VStack(spacing: 6) {
-                if let websiteSource { Button("网站来源与更新", action: websiteSource).buttonStyle(SoftButtonStyle()) }
-                if let websiteStatus, !websiteStatus.isEmpty {
-                    Text(websiteStatus).font(.caption2).foregroundStyle(.secondary)
+                VStack(alignment: .leading, spacing: 6) {
+                    Text(course.name).font(.system(size: 18, weight: .bold))
+                    Text("\(course.type.displayName) · 截止 \(course.deadline.formatted(date: .abbreviated, time: .omitted))")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                    Text("已学 \(hours(completed)) / 共 \(hours(course.totalMinutes)) · \(course.type == .lessonBasedRecorded && (course.mergedSources != nil || course.webCourse != nil || course.manualLessons != nil) ? "按课节排程" : "最小时间块 \(minimumBlock) 分钟")")
+                        .font(.caption)
+                        .foregroundStyle(.tertiary)
+                    DailyStudyWeightPicker(weight: Binding(get: { course.dailyWeight }, set: { setDailyWeight($0) }))
+                        .frame(maxWidth: 360)
+                        .padding(.top, 6)
+                    if let dailyMinutes, dailyMinutes > 0 {
+                        Text("参考每日 \(Int(ceil(dailyMinutes * course.dailyWeight))) 分钟 · 优先安排到前面的日期")
+                            .font(.caption).foregroundStyle(course.dailyWeight > 1 ? Color.orange : Color.secondary)
+                    }
+                    Text(course.autoScheduleEnabled ? "实际安排受可用时间与完整课节限制。" : "恢复自动排程后生效。")
+                        .font(.caption2).foregroundStyle(.secondary)
                 }
-                if let reorder { Button("调整课节顺序", action: reorder).buttonStyle(SoftButtonStyle()) }
-                Button("编辑", action: edit).buttonStyle(SoftButtonStyle())
+
             }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .fixedSize(horizontal: false, vertical: true)
+
+            HStack(spacing: 12) {
+                VStack(alignment: .trailing, spacing: 8) {
+                    Text(course.autoScheduleEnabled ? "自动排程" : "已暂停")
+                        .font(.caption.weight(.medium))
+                        .foregroundStyle(course.autoScheduleEnabled ? Color.teal : Color.secondary)
+                    ProgressView(value: progress)
+                        .tint(courseColor(course.color))
+                        .frame(width: 130)
+                    Text("\(Int(progress * 100))%")
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                }
+
+                VStack(spacing: 6) {
+                    if let websiteSource { Button("网站来源与更新", action: websiteSource).buttonStyle(SoftButtonStyle()) }
+                    if let websiteStatus, !websiteStatus.isEmpty {
+                        Text(websiteStatus).font(.caption2).foregroundStyle(.secondary)
+                    }
+                    if let reorder { Button("调整课节顺序", action: reorder).buttonStyle(SoftButtonStyle()) }
+                    Button("编辑", action: edit).buttonStyle(SoftButtonStyle())
+                }
+            }
+            .fixedSize()
         }
         .padding(18)
         .plannerSurface(radius: 18, material: .thinMaterial, shadow: false)
@@ -1697,54 +1777,65 @@ private struct FixedEventListRow: View {
     @State private var deletePrompt = false
     @State private var deletionReview: FixedEvent?
 
+    @Environment(\.plannerCompactContent) private var compact
+
     var body: some View {
         let calendarDay = event.calendarNavigationDay(relativeTo: referenceDate)
         let firstDate = event.startDate.formatted(date: .abbreviated, time: .omitted)
-        HStack(spacing: 17) {
-            ZStack {
-                RoundedRectangle(cornerRadius: 15, style: .continuous)
-                    .fill(courseColor(event.color).opacity(0.12))
-                Image(systemName: event.isFloating ? "arrow.left.arrow.right" : "calendar.badge.clock")
-                    .font(.system(size: 18, weight: .semibold))
-                    .foregroundStyle(courseColor(event.color))
-            }
-            .frame(width: 50, height: 50)
-
-            VStack(alignment: .leading, spacing: 6) {
-                Text(event.title).font(.headline)
-                if event.isFloating {
-                    Label("时段内浮动 · 固定占用 " + hours(event.occupiedMinutes), systemImage: "arrow.left.arrow.right")
-                        .font(.caption).foregroundStyle(courseColor(event.color))
-                    FloatingWindowIndicator(occupied: event.occupiedMinutes, window: event.endMinute - event.startMinute, tint: courseColor(event.color))
-                        .frame(maxWidth: 320)
+        let layout = compact
+            ? AnyLayout(VStackLayout(alignment: .leading, spacing: 16))
+            : AnyLayout(HStackLayout(spacing: 17))
+        layout {
+            HStack(alignment: .top, spacing: 17) {
+                ZStack {
+                    RoundedRectangle(cornerRadius: 15, style: .continuous)
+                        .fill(courseColor(event.color).opacity(0.12))
+                    Image(systemName: event.isFloating ? "arrow.left.arrow.right" : "calendar.badge.clock")
+                        .font(.system(size: 18, weight: .semibold))
+                        .foregroundStyle(courseColor(event.color))
                 }
-                Text("\(clockTime(event.startMinute))–\(clockTime(event.endMinute)) · \(repeatLabel(event.weekdays))")
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
-                Text(event.weekdays.isEmpty ? firstDate : "\(firstDate) 至 \(event.endDate.formatted(date: .abbreviated, time: .omitted))")
-                    .font(.caption)
-                    .foregroundStyle(.tertiary)
-            }
+                .frame(width: 50, height: 50)
 
-            Spacer()
+                VStack(alignment: .leading, spacing: 6) {
+                    Text(event.title).font(.headline)
+                    if event.isFloating {
+                        Label("时段内浮动 · 固定占用 " + hours(event.occupiedMinutes), systemImage: "arrow.left.arrow.right")
+                            .font(.caption).foregroundStyle(courseColor(event.color))
+                        FloatingWindowIndicator(occupied: event.occupiedMinutes, window: event.endMinute - event.startMinute, tint: courseColor(event.color))
+                            .frame(maxWidth: 320)
+                    }
+                    Text("\(clockTime(event.startMinute))–\(clockTime(event.endMinute)) · \(repeatLabel(event.weekdays))")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                    Text(event.weekdays.isEmpty ? firstDate : "\(firstDate) 至 \(event.endDate.formatted(date: .abbreviated, time: .omitted))")
+                        .font(.caption)
+                        .foregroundStyle(.tertiary)
+                }
 
-            Button("查看日历", systemImage: "calendar") {
-                if let calendarDay { showCalendar(calendarDay) }
             }
-            .disabled(calendarDay == nil)
-            .help("定位今天或下一次规则日期；已结束的事项定位最后一次，临时跳过的日期仍可查看")
-            if let edit {
-                Button("编辑", action: edit).buttonStyle(SoftButtonStyle())
-            } else {
-                Text("已完成").font(.caption).foregroundStyle(.secondary)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .fixedSize(horizontal: false, vertical: true)
+
+            HStack(spacing: 12) {
+                Button("查看日历", systemImage: "calendar") {
+                    if let calendarDay { showCalendar(calendarDay) }
+                }
+                .disabled(calendarDay == nil)
+                .help("定位今天或下一次规则日期；已结束的事项定位最后一次，临时跳过的日期仍可查看")
+                if let edit {
+                    Button("编辑", action: edit).buttonStyle(SoftButtonStyle())
+                } else {
+                    Text("已完成").font(.caption).foregroundStyle(.secondary)
+                }
+                Button("复制", systemImage: "doc.on.doc", action: duplicate)
+                    .buttonStyle(SoftButtonStyle())
+                    .accessibilityLabel("复制固定事项：\(event.title)")
+                    .help("复制为新事项，核对日期后再保存")
+                Button("删除", systemImage: "trash", role: .destructive) { deletionReview = event; deletePrompt = true }
+                    .buttonStyle(SoftButtonStyle())
+                    .help("删除这条事项的全部过去和未来课表")
             }
-            Button("复制", systemImage: "doc.on.doc", action: duplicate)
-                .buttonStyle(SoftButtonStyle())
-                .accessibilityLabel("复制固定事项：\(event.title)")
-                .help("复制为新事项，核对日期后再保存")
-            Button("删除", systemImage: "trash", role: .destructive) { deletionReview = event; deletePrompt = true }
-                .buttonStyle(SoftButtonStyle())
-                .help("删除这条事项的全部过去和未来课表")
+            .fixedSize()
         }
         .padding(18)
         .plannerSurface(radius: 18, material: .thinMaterial, shadow: false)
