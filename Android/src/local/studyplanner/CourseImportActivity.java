@@ -33,8 +33,15 @@ public class CourseImportActivity extends Activity {
     Button previousResultPage, nextResultPage;
     int resultPage;
     List<JSONObject> filteredCaptures=Collections.emptyList();
+    CourseImportCatalog.SearchResult searchResult;
+    LatestWork<CourseImportCatalog.SearchResult> searchWork;
+    Runnable pendingSearch;
+    List<JSONObject> requestedSource;
+    String requestedQuery;
+    boolean filtering;
     PlannerUi.Flow selectionActions;
-    Button importButton, refreshButton;
+    Button importButton, refreshButton, previewButton;
+    Button clearFilterButton;
     final Handler handler = new Handler();
     final ExecutorService worker = Executors.newSingleThreadExecutor();
     final Map<String,String> scripts = new HashMap<>();
@@ -57,6 +64,13 @@ public class CourseImportActivity extends Activity {
         // The manifest places this activity in its own process; do this before any WebKit API.
         if (!webKitInitialized) { if (Build.VERSION.SDK_INT >= 28) WebView.setDataDirectorySuffix("course-import"); webKitInitialized=true; }
         netdisk = "netdisk".equals(getIntent().getStringExtra("mode"));
+        searchWork=new LatestWork<>(worker,this::runOnUiThread,value->{
+            if(isDestroyed()||!value.isCurrent(captures,query.getText().toString()))return;
+            searchResult=value;filtering=false;renderResults();
+        },error->{
+            if(isDestroyed())return;
+            filtering=false;selectionSummary.setText("筛选暂未完成，原选择已保留；请修改搜索词或重新读取后重试。");
+        });
         try { for (String name : new String[]{"CourseCrawler", "GenericCrawler", "XuechengCrawler", "XuechengReplay", "QuarkCrawler", "QuarkScan"}) scripts.put(name, MainActivity.read(getAssets().open("crawlers/"+name+".js"))); }
         catch (Exception error) { finish(); return; }
         root = column(); root.setPadding(dp(12),dp(8),dp(12),dp(8)); root.setFitsSystemWindows(true); root.setBackgroundColor(0xffededed);ScrollView content=new ScrollView(this);content.setFillViewport(true);content.addView(root);setContentView(content);
@@ -85,8 +99,8 @@ public class CourseImportActivity extends Activity {
         selectionActions=new PlannerUi.Flow(this);
         selectionActions.addView(button("勾选搜索结果",()->selectMatches(true)));
         selectionActions.addView(button("取消搜索结果",()->selectMatches(false)));
-        selectionActions.addView(button("只选搜索结果",()->{if(capturing||previewing||delivering)return;Set<String> ids=CourseImportCatalog.matchingSelectableIDs(captures,query.getText().toString());if(ids.isEmpty()){message("当前搜索结果中没有可导入课程，原选择已保留。");return;}selected.clear();selected.addAll(ids);renderResults();}));
-        selectionActions.addView(button("清除筛选",()->query.setText("")));
+        selectionActions.addView(button("只选搜索结果",()->{if(capturing||previewing||delivering||!filterReady())return;Set<String> ids=CourseImportCatalog.matchingSelectableIDs(filteredCaptures,"");if(ids.isEmpty()){message("当前搜索结果中没有可导入课程，原选择已保留。");return;}selected.clear();selected.addAll(ids);renderResults();}));
+        clearFilterButton=button("清除筛选",()->query.setText(""));selectionActions.addView(clearFilterButton);
         root.addView(selectionActions);selectionSummary=label("尚未识别课程。",12);root.addView(selectionSummary);resultsScroll=new ScrollView(this);results=column();resultsScroll.addView(results);root.addView(resultsScroll,new LinearLayout.LayoutParams(-1,dp(240)));
         resultPosition=label("",12);root.addView(resultPosition);PlannerUi.Flow resultNavigation=new PlannerUi.Flow(this);
         previousResultPage=button("上一页课程",()->{resultPage--;renderResults();resultsScroll.scrollTo(0,0);});
@@ -96,7 +110,7 @@ public class CourseImportActivity extends Activity {
         LinearLayout options=row();deadline=field(options,"新课程截止日期",LocalDate.now(Planner.ZONE).plusMonths(3).toString(),false);deadline.setFocusable(false);deadline.setOnClickListener(v->{LocalDate date;try{date=LocalDate.parse(deadline.getText().toString());}catch(Exception e){date=LocalDate.now(Planner.ZONE);}new DatePickerDialog(this,(picker,y,m,d)->deadline.setText(LocalDate.of(y,m+1,d).toString()),date.getYear(),date.getMonthValue()-1,date.getDayOfMonth()).show();});root.addView(options);
         if(netdisk){mergeSelected=new CheckBox(this);mergeSelected.setText("将所选目录合为一门课程");root.addView(mergeSelected);mergedName=field(root,"合并名称","合并课程",false);}
         PlannerUi.Flow bottom=new PlannerUi.Flow(this);
-        bottom.addView(button("编排预览",this::preview));
+        previewButton=button("编排预览",this::preview);previewButton.setEnabled(false);bottom.addView(previewButton);
         importButton=button("导入所选课程",this::deliver);
         importButton.setEnabled(false);
         bottom.addView(importButton);
@@ -114,7 +128,7 @@ public class CourseImportActivity extends Activity {
         if(!child){try{documentStart=WebViewFeature.isFeatureSupported(WebViewFeature.DOCUMENT_START_SCRIPT);if(documentStart)WebViewCompat.addDocumentStartJavaScript(view,scripts.get("GenericCrawler"),Collections.singleton("*"));}catch(RuntimeException error){documentStart=false;}}
         view.setWebViewClient(new WebViewClient(){
             @Override public boolean shouldOverrideUrlLoading(WebView web,WebResourceRequest request){return !https(request.getUrl().toString());}
-            @Override public void onPageStarted(WebView web,String url,android.graphics.Bitmap icon){if(!child){generation++;observedRevision=-1;capturing=false;refreshButton.setEnabled(true);if(netdisk){directory=null;captures.clear();selected.clear();}renderResults();if(!documentStart)web.evaluateJavascript(scripts.get("GenericCrawler"),null);}else replayURL(web,url);}
+            @Override public void onPageStarted(WebView web,String url,android.graphics.Bitmap icon){if(!child){generation++;observedRevision=-1;capturing=false;refreshButton.setEnabled(true);if(netdisk){directory=null;captures=Collections.emptyList();selected.clear();}renderResults();if(!documentStart)web.evaluateJavascript(scripts.get("GenericCrawler"),null);}else replayURL(web,url);}
             @Override public void onPageFinished(WebView web,String url){if(child){replayURL(web,url);return;}address.setText(url);pageTitle=web.getTitle()==null?"":web.getTitle();inject(web);status.setText(documentStart?"页面已打开，可以抓取课程。":"当前系统 WebView 不支持加载前捕获：请升级 WebView，或在页面内切换课程后再抓取。研途专用抓取仍可使用。");String host=Uri.parse(url).getHost();if(!netdisk&&WebsiteCapture.isYantuHost(host)&&url.contains("/mycourse"))handler.postDelayed(()->{if(!capturing&&!isDestroyed())capture();},1800);}
             @Override public void onReceivedError(WebView web,WebResourceRequest request,WebResourceError error){if(request.isForMainFrame())status.setText("网页加载失败，请检查网址和网络。");}
         });
@@ -126,10 +140,10 @@ public class CourseImportActivity extends Activity {
     static boolean https(String url){try{Uri value=Uri.parse(url);return "https".equalsIgnoreCase(value.getScheme())&&value.getHost()!=null&&value.getUserInfo()==null;}catch(Exception error){return false;}}
     void inject(WebView web){web.evaluateJavascript("window.webkit={messageHandlers:{courseStatus:{postMessage:v=>{window.__studyStatus=String(v)}},replayMetadata:{postMessage:v=>{window.__studyReplay=v}}}};",null);for(String name:new String[]{"GenericCrawler","CourseCrawler","XuechengCrawler","QuarkCrawler","QuarkScan"})web.evaluateJavascript(scripts.get(name),null);}
     void open(String input){String url=input.trim();if(!url.contains("://"))url="https://"+url; if(!https(url)){message("请填写不含账号信息的 HTTPS 网址。");return;}browser.loadUrl(url);}
-    void resetSession(){generation++;capturing=false;captures.clear();selected.clear();browser.stopLoading();CookieManager.getInstance().removeAllCookies(done->{WebStorage.getInstance().deleteAllData();browser.clearCache(true);browser.clearHistory();open(address.getText().toString());});renderResults();}
+    void resetSession(){generation++;capturing=false;captures=Collections.emptyList();selected.clear();browser.stopLoading();CookieManager.getInstance().removeAllCookies(done->{WebStorage.getInstance().deleteAllData();browser.clearCache(true);browser.clearHistory();open(address.getText().toString());});renderResults();}
     void directory(){if(directory==null){message("请先读取分享目录。");return;}try{StringBuilder text=new StringBuilder(directory.optString("shareTitle"));for(JSONObject entry:Planner.list(directory.getJSONArray("entries")))text.append("\n\n").append(entry.optBoolean("isDirectory")?"目录 · ":"文件 · ").append(entry.optString("relativePath")).append(entry.optBoolean("isDirectory")?"":"\n"+entry.optLong("size")+" 字节"+(entry.has("durationSeconds")?" · "+Math.ceil(entry.optDouble("durationSeconds")/60)+" 分钟":""));message(text.toString());}catch(Exception error){message("目录数据不完整。");}}
     boolean matches(JSONObject snapshot,String term){return CourseImportCatalog.matches(snapshot,term);}
-    void selectMatches(boolean select){if(capturing||previewing||delivering)return;Set<String> ids=CourseImportCatalog.matchingSelectableIDs(captures,query.getText().toString());if(select)selected.addAll(ids);else selected.removeAll(ids);renderResults();}
+    void selectMatches(boolean select){if(capturing||previewing||delivering||!filterReady())return;Set<String> ids=CourseImportCatalog.matchingSelectableIDs(filteredCaptures,"");if(select)selected.addAll(ids);else selected.removeAll(ids);renderResults();}
     boolean importable(JSONObject snapshot){return CourseImportCatalog.importable(snapshot);}
     void updateSelectionSummary(){if(selectionSummary!=null)selectionSummary.setText(CourseImportCatalog.summary(captures,selected,filteredCaptures));}
     void groupChoices(){Map<String,List<JSONObject>> groups=new TreeMap<>();groups.put("全部课程",new ArrayList<>());for(JSONObject snapshot:captures)if(importable(snapshot)){groups.get("全部课程").add(snapshot);JSONObject net=snapshot.optJSONObject("netdisk");if(net==null)continue;String path=net.optString("folderPath"),parent="";String[] parts=path.split("/");for(int i=0;i<parts.length-1;i++){parent+= (parent.isEmpty()?"":"/")+parts[i];groups.computeIfAbsent(parent,k->new ArrayList<>()).add(snapshot);}}for(Map.Entry<String,List<JSONObject>> group:groups.entrySet()){if(group.getValue().isEmpty())continue;CheckBox check=new CheckBox(this);check.setText(group.getKey()+" · "+group.getValue().size()+" 门（批量选择）");boolean all=true;for(JSONObject snapshot:group.getValue())all&=selected.contains(WebCourseImport.identity(snapshot));check.setChecked(all);check.setEnabled(!capturing&&!previewing&&!delivering);check.setOnCheckedChangeListener((button,value)->{for(JSONObject snapshot:group.getValue()){if(value)selected.add(WebCourseImport.identity(snapshot));else selected.remove(WebCourseImport.identity(snapshot));}handler.post(this::renderResults);});results.addView(check);}}
@@ -153,11 +167,29 @@ public class CourseImportActivity extends Activity {
 
     interface CaptureWork {List<JSONObject> run()throws Exception;}
     void background(CaptureWork work){final int current=generation;worker.execute(()->{try{List<JSONObject> data=work.run();runOnUiThread(()->{if(current==generation&&!isDestroyed())accept(data);});}catch(Exception error){runOnUiThread(()->{if(current==generation&&!isDestroyed())failed("目录识别失败："+error.getMessage());});}});}
-    void accept(List<JSONObject> values){try{String host=Uri.parse(browser.getUrl()==null?"":browser.getUrl()).getHost();if(!netdisk&&host!=null&&!WebsiteCapture.isYantuHost(host))captures=WebsiteCapture.merge(captures,values);else captures=values;Set<String> retained=CourseImportCatalog.retainedSelection(captures,selected);selected.clear();selected.addAll(retained);capturing=false;refreshButton.setEnabled(true);status.setText("识别到 "+captures.size()+" 门课程。请选择、核对课节与进度后导入；已有课程将保留完成流水。");if(values.isEmpty())status.setText(captures.isEmpty()?"尚未捕获可排程课节，请进入课程详情并展开章节，再重新抓取。":"本轮没有新的课程，已保留此前识别的课程。");renderResults();}catch(Exception error){failed("课程合并识别失败，请重试。");}}
-    void failed(String message){capturing=false;failure=message;refreshButton.setEnabled(true);captures.clear();selected.clear();status.setText(message);renderResults();}
+    void accept(List<JSONObject> values){try{String host=Uri.parse(browser.getUrl()==null?"":browser.getUrl()).getHost();if(!netdisk&&host!=null&&!WebsiteCapture.isYantuHost(host))captures=WebsiteCapture.merge(captures,values);else captures=new ArrayList<>(values);Set<String> retained=CourseImportCatalog.retainedSelection(captures,selected);selected.clear();selected.addAll(retained);capturing=false;refreshButton.setEnabled(true);status.setText("识别到 "+captures.size()+" 门课程。请选择、核对课节与进度后导入；已有课程将保留完成流水。");if(values.isEmpty())status.setText(captures.isEmpty()?"尚未捕获可排程课节，请进入课程详情并展开章节，再重新抓取。":"本轮没有新的课程，已保留此前识别的课程。");renderResults();}catch(Exception error){failed("课程合并识别失败，请重试。");}}
+    void failed(String message){capturing=false;failure=message;refreshButton.setEnabled(true);captures=Collections.emptyList();selected.clear();status.setText(message);renderResults();}
+    boolean filterReady(){return !filtering&&searchResult!=null&&searchResult.isCurrent(captures,query.getText().toString());}
     void renderResults(){
         if(results==null)return;
-        filteredCaptures=CourseImportCatalog.filtered(captures,query.getText().toString());
+        String term=query.getText().toString();
+        if(searchResult==null||!searchResult.isCurrent(captures,term)){
+            if(!filtering||requestedSource!=captures||!term.equals(requestedQuery)){
+                searchWork.clear();if(pendingSearch!=null)handler.removeCallbacks(pendingSearch);
+                filtering=true;requestedSource=captures;requestedQuery=term;
+                final List<JSONObject> source=captures;
+                pendingSearch=()->searchWork.submit(()->new CourseImportCatalog.SearchResult(source,term));
+                handler.postDelayed(pendingSearch,150);
+            }
+            results.removeAllViews();filteredCaptures=Collections.emptyList();
+            selectionSummary.setText("正在筛选课程…已选 "+selected.size()+" 门，选择仍保留。");
+            resultPosition.setText("");previousResultPage.setEnabled(false);nextResultPage.setEnabled(false);
+            for(int i=0;i<selectionActions.getChildCount();i++)selectionActions.getChildAt(i).setEnabled(false);
+            clearFilterButton.setEnabled(!capturing&&!previewing&&!delivering);importButton.setEnabled(false);previewButton.setEnabled(false);
+            return;
+        }
+        searchWork.clear();if(pendingSearch!=null)handler.removeCallbacks(pendingSearch);pendingSearch=null;
+        filtering=false;filteredCaptures=searchResult.matches;
         int pages=CourseImportCatalog.pageCount(filteredCaptures);
         resultPage=Math.max(0,Math.min(resultPage,pages-1));
         results.removeAllViews();
@@ -168,7 +200,7 @@ public class CourseImportActivity extends Activity {
             CheckBox choice=new CheckBox(this);String id=WebCourseImport.identity(snapshot),website=CourseImportCatalog.website(snapshot);
             choice.setText(snapshot.optString("name")+" · "+snapshot.optJSONArray("lessons").length()+" 课节"+(website.isEmpty()?"":"\n"+website)+(problem==null?"":"\n"+problem));
             choice.setEnabled(problem==null&&!capturing&&!previewing&&!delivering);choice.setChecked(selected.contains(id));
-            choice.setOnCheckedChangeListener((button,checked)->{if(checked)selected.add(id);else selected.remove(id);updateSelectionSummary();importButton.setEnabled(!capturing&&!delivering&&!selected.isEmpty());});
+            choice.setOnCheckedChangeListener((button,checked)->{if(checked)selected.add(id);else selected.remove(id);updateSelectionSummary();boolean ready=!capturing&&!previewing&&!delivering&&filterReady()&&!selected.isEmpty();importButton.setEnabled(ready);previewButton.setEnabled(ready);});
             results.addView(choice);results.addView(button("查看课节与来源",()->details(snapshot)));
             JSONArray existing=snapshot.optJSONArray("existingCourses");
             if(existing!=null)for(JSONObject course:Planner.list(existing))results.addView(button("查看已有计划 · "+course.optString("name"),()->{setResult(RESULT_OK,new Intent().putExtra("courseID",course.optString("id")));finish();}));
@@ -176,13 +208,14 @@ public class CourseImportActivity extends Activity {
         if(resultPosition!=null)resultPosition.setText((filteredCaptures.isEmpty()?"没有匹配的课程。":"第 "+(resultPage+1)+" / "+pages+" 页 · 每页最多 "+CourseImportCatalog.PAGE_SIZE+" 门。")+" 批选作用于全部搜索结果，选择跨页保留。");
         if(previousResultPage!=null)previousResultPage.setEnabled(resultPage>0);
         if(nextResultPage!=null)nextResultPage.setEnabled(resultPage+1<pages);
-        importButton.setEnabled(!capturing&&!delivering&&!selected.isEmpty());
+        importButton.setEnabled(!capturing&&!previewing&&!delivering&&filterReady()&&!selected.isEmpty());
+        previewButton.setEnabled(!capturing&&!previewing&&!delivering&&filterReady()&&!selected.isEmpty());
     }
     void details(JSONObject snapshot){try{StringBuilder text=new StringBuilder(snapshot.getString("name"));JSONObject net=snapshot.optJSONObject("netdisk");if(net!=null){text.append("\n").append(net.optString("detection")).append("\n缺失时长估算：").append(net.optInt("unknownDurations")).append(" 节");JSONObject dup=net.optJSONObject("duplicates");if(dup!=null)for(String key:new String[]{"groups","relatedPackages","relatedCourses","requiresReview"})for(int i=0;i<dup.optJSONArray(key).length();i++)text.append("\n").append(dup.getJSONArray(key).getString(i));}JSONObject files=snapshot.optJSONObject("netdiskLessons");for(JSONObject lesson:Planner.list(snapshot.getJSONArray("lessons"))){text.append("\n\n").append(lesson.getString("name")).append("\n").append(lesson.optBoolean("published")?"已发布":"未发布").append(" · ").append(lesson.has("durationSeconds")?Math.ceil(lesson.optDouble("durationSeconds")/60)+" 分钟":"时长未知").append(" · 进度 ").append(lesson.has("watchedPercent")?lesson.optDouble("watchedPercent")+"%":"未知");if(files!=null){JSONObject file=files.optJSONObject(lesson.optString("id"));if(file!=null)text.append("\n").append(file.optString("path")).append(" · ").append(file.optLong("size")).append(" 字节").append(file.optBoolean("estimatedDuration")?" · 估算时长":"");}}message(text.toString());}catch(Exception error){message("课程信息不完整。");}}
     List<JSONObject> chosen()throws Exception{List<JSONObject> data=new ArrayList<>();for(JSONObject capture:captures)if(selected.contains(WebCourseImport.identity(capture))){if(capture.has("refusal")||WebCourseImport.problem(capture)!=null)throw new IllegalArgumentException("请选择完整课程。");data.add(capture);}if(data.isEmpty())throw new IllegalArgumentException("请先选择课程。");if(netdisk&&mergeSelected.isChecked())return Collections.singletonList(NetdiskImport.merge(data,mergedName.getText().toString()));return data;}
     double importDeadline(){return Planner.at(LocalDate.parse(deadline.getText().toString()),0);}
     void preview(){
-        if(previewing||capturing||delivering)return;
+        if(previewing||capturing||delivering||!filterReady())return;
         try{
             List<JSONObject> data=chosen();double date=importDeadline();int current=generation;previewing=true;
             ProgressDialog progress=ProgressDialog.show(this,"","正在预览…",true,false);
@@ -192,9 +225,9 @@ public class CourseImportActivity extends Activity {
                 for(JSONObject course:Planner.list(state.getJSONArray("courses"))){JSONObject web=course.optJSONObject("webCourse");if(!course.optBoolean("isArchived")&&web!=null&&packages.contains(WebCourseImport.identity(web)))courseIDs.add(course.getString("id"));}
                 SchedulePreview result=SchedulePreview.fromPlan(state,courseIDs,"导入编排预览",now);
                 StringBuilder notes=new StringBuilder();JSONArray warnings=state.optJSONArray("androidWarnings");if(warnings!=null)for(int i=0;i<warnings.length();i++)notes.append(warnings.getString(i)).append('\n');String details=notes.toString();
-                runOnUiThread(()->{previewing=false;progress.dismiss();if(!isDestroyed()&&current==generation)showPreview(result,details);});
-            }catch(Exception error){runOnUiThread(()->{previewing=false;progress.dismiss();if(!isDestroyed()&&current==generation)message(error.getMessage());});}});
-        }catch(Exception error){previewing=false;message(error.getMessage());}
+                runOnUiThread(()->{previewing=false;progress.dismiss();if(isDestroyed())return;renderResults();if(current==generation)showPreview(result,details);});
+            }catch(Exception error){runOnUiThread(()->{previewing=false;progress.dismiss();if(isDestroyed())return;renderResults();if(current==generation)message(error.getMessage());});}});
+        }catch(Exception error){previewing=false;renderResults();message(error.getMessage());}
     }
     void showPreview(SchedulePreview result,String warnings){
         LinearLayout form=column(),rows=column();form.setPadding(dp(16),dp(8),dp(16),dp(8));
@@ -207,15 +240,15 @@ public class CourseImportActivity extends Activity {
         new AlertDialog.Builder(this).setTitle(result.courseName).setView(form).setPositiveButton("关闭",null).show();
     }
     void deliver(){
-        if(capturing||previewing||delivering)return;
+        if(capturing||previewing||delivering||!filterReady())return;
         try{
             List<JSONObject> data=chosen();double date=importDeadline();int current=generation;delivering=true;importButton.setEnabled(false);
             ProgressDialog progress=ProgressDialog.show(this,"","正在准备导入文件…",true,false);
             worker.execute(()->{try{
                 File file=CourseImportReceipt.stage(getCacheDir(),data,date);
-                runOnUiThread(()->{delivering=false;progress.dismiss();if(isDestroyed()||current!=generation)return;setResult(RESULT_OK,new Intent().putExtra("captureFile",file.getAbsolutePath()));finish();});
-            }catch(Exception error){runOnUiThread(()->{delivering=false;progress.dismiss();if(isDestroyed()||current!=generation)return;importButton.setEnabled(!capturing&&!delivering&&!selected.isEmpty());message("导入文件未生成："+error.getMessage()+"\n当前选择仍保留，可重试。");});}});
-        }catch(Exception error){delivering=false;importButton.setEnabled(!capturing&&!delivering&&!selected.isEmpty());message(error.getMessage());}
+                runOnUiThread(()->{delivering=false;progress.dismiss();if(isDestroyed())return;renderResults();if(current!=generation)return;setResult(RESULT_OK,new Intent().putExtra("captureFile",file.getAbsolutePath()));finish();});
+            }catch(Exception error){runOnUiThread(()->{delivering=false;progress.dismiss();if(isDestroyed())return;renderResults();if(current!=generation)return;message("导入文件未生成："+error.getMessage()+"\n当前选择仍保留，可重试。");});}});
+        }catch(Exception error){delivering=false;renderResults();message(error.getMessage());}
     }
     void message(String value){TextView text=label(value,14);text.setPadding(dp(16),dp(8),dp(16),dp(8));ScrollView scroll=new ScrollView(this);scroll.addView(text);new AlertDialog.Builder(this).setTitle("课程导入").setView(scroll).setPositiveButton("知道了",null).show();}
     int dp(int value){return (int)(value*getResources().getDisplayMetrics().density+.5f);}
@@ -224,5 +257,5 @@ public class CourseImportActivity extends Activity {
     TextView label(String value,int size){TextView text=new TextView(this);text.setText(value);text.setTextSize(size);text.setTextColor(0xff191919);return text;}
     Button button(String title,Runnable action){return PlannerUi.compactButton(this,title,action);}
     EditText field(LinearLayout parent,String hint,String value,boolean numeric){EditText input=new EditText(this);input.setHint(hint);input.setText(value);input.setTextSize(13);input.setSingleLine();if(numeric)input.setInputType(android.text.InputType.TYPE_CLASS_NUMBER);parent.addView(input,new LinearLayout.LayoutParams(parent.getOrientation()==LinearLayout.HORIZONTAL?0:-1,-2,parent.getOrientation()==LinearLayout.HORIZONTAL?1:0));return input;}
-    @Override protected void onDestroy(){generation++;if(popup!=null)popup.dismiss();handler.removeCallbacksAndMessages(null);worker.shutdownNow();if(browser!=null){browser.stopLoading();browser.clearCache(true);browser.destroy();}if(replay!=null){replay.stopLoading();replay.destroy();}CookieManager.getInstance().removeAllCookies(null);WebStorage.getInstance().deleteAllData();super.onDestroy();}
+    @Override protected void onDestroy(){generation++;if(searchWork!=null)searchWork.close();if(popup!=null)popup.dismiss();handler.removeCallbacksAndMessages(null);worker.shutdownNow();if(browser!=null){browser.stopLoading();browser.clearCache(true);browser.destroy();}if(replay!=null){replay.stopLoading();replay.destroy();}CookieManager.getInstance().removeAllCookies(null);WebStorage.getInstance().deleteAllData();super.onDestroy();}
 }

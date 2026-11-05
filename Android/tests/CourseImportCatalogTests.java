@@ -52,6 +52,19 @@ public final class CourseImportCatalogTests {
         check(acrossPages.size()==100&&CourseImportCatalog.summary(large,acrossPages,filtered).contains("已选 100 门"),"Cross-page selection count lost");
         check(CourseImportCatalog.matchingSelectableIDs(large,"").size()==253,"Bulk selection was limited to a page");
         check(CourseImportCatalog.filtered(large,"课程137").size()==1&&CourseImportCatalog.pageCount(CourseImportCatalog.filtered(large,"课程137"))==1,"Search did not reduce pages");
+        Deque<Runnable> background=new ArrayDeque<>(),ui=new ArrayDeque<>();
+        List<CourseImportCatalog.SearchResult> delivered=new ArrayList<>();List<Exception> failures=new ArrayList<>();
+        LatestWork<CourseImportCatalog.SearchResult> work=new LatestWork<>(background::add,ui::add,delivered::add,failures::add);
+        work.submit(()->new CourseImportCatalog.SearchResult(large,"课程137"));background.remove().run();
+        work.submit(()->new CourseImportCatalog.SearchResult(large,"课程252"));background.remove().run();
+        ui.remove().run();check(delivered.isEmpty(),"Old search result replaced the latest query");
+        ui.remove().run();CourseImportCatalog.SearchResult latest=delivered.get(0);
+        check(latest.matches.size()==1&&latest.matches.get(0)==large.get(252),"Latest result omitted its final-page course");
+        check(latest.isCurrent(large,"课程252")&&!latest.isCurrent(large,"课程137"),"Query identity accepted stale results");
+        List<JSONObject> refreshed=new ArrayList<>(large);
+        check(!latest.isCurrent(refreshed,"课程252"),"Refreshed catalog reused the old search result");
+        work.submit(()->new CourseImportCatalog.SearchResult(refreshed,"课程137"));background.remove().run();work.close();ui.remove().run();
+        check(delivered.size()==1&&failures.isEmpty(),"Closed import search updated the screen");
         System.out.println("Course import catalog: "+checks+" checks passed");
     }
 }

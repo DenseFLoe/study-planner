@@ -8,6 +8,15 @@ import java.util.*;
 /** Public import catalog fields and selection counts; URL credentials never enter search text. */
 public final class CourseImportCatalog {
     public static final int PAGE_SIZE=50;
+    /** Capture lists are replaced on refresh and remain read-only while a search runs. */
+    public static final class SearchResult {
+        public final List<JSONObject> source, matches;
+        public final String query;
+        public SearchResult(List<JSONObject> source,String query) {
+            this.source=source;this.query=query;matches=filtered(source,query);
+        }
+        public boolean isCurrent(List<JSONObject> captures,String term) {return source==captures&&query.equals(term);}
+    }
     private static final java.util.regex.Pattern MARKS=java.util.regex.Pattern.compile("\\p{M}+");
     private static final java.util.regex.Pattern WORDS=java.util.regex.Pattern.compile("\\s+");
     private static String normalized(String value) {
