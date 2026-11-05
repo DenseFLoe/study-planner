@@ -30,6 +30,29 @@ final class NetdiskCourseBrowserTests: XCTestCase {
         XCTAssertEqual(browser.selectableIDs, ["math", "english"])
     }
 
+    func testSearchIncludesLessonSubjectStageAndChapterAcrossCompatibleTextForms() {
+        var math = course("math", name: "基础班", lesson: "第一讲")
+        math.snapshot.lessons[0].subject = "数学二"
+        math.snapshot.lessons[0].stage = "强化"
+        math.snapshot.lessons[0].chapter = "导数 Café"
+        let english = course("english", name: "英语")
+        let browser = NetdiskCourseBrowser(courses: [math, english], paths: ["math": "资料/２０２６/高数"])
+        XCTAssertEqual(browser.matching("数学二 强化").map(\.packageID), ["math"])
+        XCTAssertEqual(browser.matching("2026　导数").map(\.packageID), ["math"])
+        XCTAssertEqual(browser.matching("cafe").map(\.packageID), ["math"])
+        XCTAssertTrue(browser.matching("强化 英语").isEmpty)
+        XCTAssertEqual(browser.selectableIDs, ["math", "english"])
+    }
+
+    func testSearchDoesNotIndexPrivateURLsOrOpaqueFileIdentities() {
+        var value = course("SYNTHETIC_PRIVATE_ID", name: "公开课程")
+        value.snapshot.sourceURL = "https://pan.quark.cn/s/abc123?passcode=SYNTHETIC_PRIVATE_CODE"
+        value.snapshot.lessons[0].id = "SYNTHETIC_PRIVATE_FILE"
+        let browser = NetdiskCourseBrowser(courses: [value], paths: [:])
+        XCTAssertTrue(browser.matching("SYNTHETIC_PRIVATE").isEmpty)
+        XCTAssertEqual(browser.matching("公开课程").map(\.packageID), [value.packageID])
+    }
+
     func testFolderGroupSelectsDescendantsAndSkipsRefusedCourses() throws {
         let courses = [course("math", name: "高数"), course("math2", name: "线代"),
                        course("english", name: "阅读"),

@@ -296,7 +296,7 @@ struct NetdiskImportSheet: View {
                                         uniquingKeysWith: { first, _ in first })
                 DatePicker("新课程截止日", selection: $deadline, in: Date()..., displayedComponents: .date)
                     .datePickerStyle(.compact)
-                TextField("搜索课程、目录或课节", text: $searchText)
+                TextField("搜索课程、目录、课节或章节", text: $searchText)
                     .textFieldStyle(.roundedBorder)
                 HStack(spacing: 8) {
                     Text(searchActive ? "找到 \(matches.count) 门课程" : "按网盘目录分类")

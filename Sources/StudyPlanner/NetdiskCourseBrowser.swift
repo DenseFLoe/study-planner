@@ -47,12 +47,13 @@ struct NetdiskCourseBrowser {
     var selectableIDs: Set<String> { Set(courses.filter { $0.refusal == nil }.map(\.packageID)) }
 
     func matching(_ query: String) -> [NetdiskSnapshotBuilder.Course] {
-        let terms = query.split(whereSeparator: \.isWhitespace).map(String.init)
+        let terms = query.precomposedStringWithCompatibilityMapping.split(whereSeparator: \.isWhitespace).map(String.init)
         guard !terms.isEmpty else { return courses }
         return courses.filter { course in
             let path = paths[course.packageID] ?? ""
-            let names = [course.name, path] + course.snapshot.lessons.map(\.name)
-            return terms.allSatisfy { term in names.contains { $0.localizedStandardContains(term) } }
+            let names = [course.name, path] + course.snapshot.lessons.flatMap { [$0.name, $0.subject, $0.stage, $0.chapter] }
+            let text = names.joined(separator: " ").precomposedStringWithCompatibilityMapping
+            return terms.allSatisfy { text.localizedStandardContains($0) }
         }
     }
 
