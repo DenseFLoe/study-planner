@@ -36,6 +36,8 @@ public class CourseImportActivity extends Activity {
     List<JSONObject> filteredCaptures=Collections.emptyList();
     CourseImportCatalog.SearchResult searchResult;
     LatestWork<CourseImportCatalog.SearchResult> searchWork;
+    LatestWork<CourseImportPreview> previewWork;
+    ProgressDialog previewProgress;
     Runnable pendingSearch;
     List<JSONObject> requestedSource;
     String requestedQuery;
@@ -65,6 +67,9 @@ public class CourseImportActivity extends Activity {
         // The manifest places this activity in its own process; do this before any WebKit API.
         if (!webKitInitialized) { if (Build.VERSION.SDK_INT >= 28) WebView.setDataDirectorySuffix("course-import"); webKitInitialized=true; }
         netdisk = "netdisk".equals(getIntent().getStringExtra("mode"));
+        previewWork=new LatestWork<>(worker,this::runOnUiThread,value->{
+            endPreview();if(isDestroyed())return;renderResults();showPreview(value.schedule,value.warnings);
+        },error->{endPreview();if(isDestroyed())return;renderResults();message(error.getMessage());});
         searchWork=new LatestWork<>(worker,this::runOnUiThread,value->{
             if(isDestroyed()||!value.isCurrent(captures,query.getText().toString()))return;
             searchResult=value;filtering=false;renderResults();
@@ -129,7 +134,7 @@ public class CourseImportActivity extends Activity {
         if(!child){try{documentStart=WebViewFeature.isFeatureSupported(WebViewFeature.DOCUMENT_START_SCRIPT);if(documentStart)WebViewCompat.addDocumentStartJavaScript(view,scripts.get("GenericCrawler"),Collections.singleton("*"));}catch(RuntimeException error){documentStart=false;}}
         view.setWebViewClient(new WebViewClient(){
             @Override public boolean shouldOverrideUrlLoading(WebView web,WebResourceRequest request){return !https(request.getUrl().toString());}
-            @Override public void onPageStarted(WebView web,String url,android.graphics.Bitmap icon){if(!child){generation++;observedRevision=-1;capturing=false;refreshButton.setEnabled(true);if(netdisk){directory=null;captures=Collections.emptyList();selected.clear();}renderResults();if(!documentStart)web.evaluateJavascript(scripts.get("GenericCrawler"),null);}else replayURL(web,url);}
+            @Override public void onPageStarted(WebView web,String url,android.graphics.Bitmap icon){if(!child){generation++;cancelPreview();observedRevision=-1;capturing=false;refreshButton.setEnabled(true);if(netdisk){directory=null;captures=Collections.emptyList();selected.clear();}renderResults();if(!documentStart)web.evaluateJavascript(scripts.get("GenericCrawler"),null);}else replayURL(web,url);}
             @Override public void onPageFinished(WebView web,String url){if(child){replayURL(web,url);return;}address.setText(url);pageTitle=web.getTitle()==null?"":web.getTitle();inject(web);status.setText(documentStart?"页面已打开，可以抓取课程。":"当前系统 WebView 不支持加载前捕获：请升级 WebView，或在页面内切换课程后再抓取。研途专用抓取仍可使用。");String host=Uri.parse(url).getHost();if(!netdisk&&WebsiteCapture.isYantuHost(host)&&url.contains("/mycourse"))handler.postDelayed(()->{if(!capturing&&!isDestroyed())capture();},1800);}
             @Override public void onReceivedError(WebView web,WebResourceRequest request,WebResourceError error){if(request.isForMainFrame())status.setText("网页加载失败，请检查网址和网络。");}
         });
@@ -141,7 +146,7 @@ public class CourseImportActivity extends Activity {
     static boolean https(String url){try{Uri value=Uri.parse(url);return "https".equalsIgnoreCase(value.getScheme())&&value.getHost()!=null&&value.getUserInfo()==null;}catch(Exception error){return false;}}
     void inject(WebView web){web.evaluateJavascript("window.webkit={messageHandlers:{courseStatus:{postMessage:v=>{window.__studyStatus=String(v)}},replayMetadata:{postMessage:v=>{window.__studyReplay=v}}}};",null);for(String name:new String[]{"GenericCrawler","CourseCrawler","XuechengCrawler","QuarkCrawler","QuarkScan"})web.evaluateJavascript(scripts.get(name),null);}
     void open(String input){String url=input.trim();if(!url.contains("://"))url="https://"+url; if(!https(url)){message("请填写不含账号信息的 HTTPS 网址。");return;}browser.loadUrl(url);}
-    void resetSession(){generation++;capturing=false;captures=Collections.emptyList();selected.clear();browser.stopLoading();CookieManager.getInstance().removeAllCookies(done->{WebStorage.getInstance().deleteAllData();browser.clearCache(true);browser.clearHistory();open(address.getText().toString());});renderResults();}
+    void resetSession(){generation++;cancelPreview();capturing=false;captures=Collections.emptyList();selected.clear();browser.stopLoading();CookieManager.getInstance().removeAllCookies(done->{WebStorage.getInstance().deleteAllData();browser.clearCache(true);browser.clearHistory();open(address.getText().toString());});renderResults();}
     void directory(){
         if(directory==null){message("请先读取分享目录。");return;}
         final JSONObject scan=directory;
@@ -285,21 +290,18 @@ public class CourseImportActivity extends Activity {
     CourseImportRequest importRequest(){return new CourseImportRequest(captures,selected,
         netdisk&&mergeSelected.isChecked()?mergedName.getText().toString():null,importDeadline());}
     double importDeadline(){return Planner.at(LocalDate.parse(deadline.getText().toString()),0);}
+    void endPreview(){previewing=false;if(previewProgress!=null){previewProgress.dismiss();previewProgress=null;}}
+    void cancelPreview(){if(previewWork!=null)previewWork.clear();endPreview();}
     void preview(){
         if(previewing||capturing||delivering||!filterReady())return;
         try{
-            CourseImportRequest request=importRequest();int current=generation;previewing=true;
-            ProgressDialog progress=ProgressDialog.show(this,"","正在预览…",true,false);
-            worker.execute(()->{try{
-                List<JSONObject> data=request.prepare();
-                JSONObject state=PlannerRuntime.get(this).database.load();double now=Planner.now();WebCourseImport.save(state,data,request.deadline,now);Planner.replan(state,now);
-                Set<String> packages=new HashSet<>(),courseIDs=new HashSet<>();for(JSONObject snapshot:data)packages.add(WebCourseImport.identity(snapshot));
-                for(JSONObject course:Planner.list(state.getJSONArray("courses"))){JSONObject web=course.optJSONObject("webCourse");if(!course.optBoolean("isArchived")&&web!=null&&packages.contains(WebCourseImport.identity(web)))courseIDs.add(course.getString("id"));}
-                SchedulePreview result=SchedulePreview.fromPlan(state,courseIDs,"导入编排预览",now);
-                StringBuilder notes=new StringBuilder();JSONArray warnings=state.optJSONArray("androidWarnings");if(warnings!=null)for(int i=0;i<warnings.length();i++)notes.append(warnings.getString(i)).append('\n');String details=notes.toString();
-                runOnUiThread(()->{previewing=false;progress.dismiss();if(isDestroyed())return;renderResults();if(current==generation)showPreview(result,details);});
-            }catch(Exception error){runOnUiThread(()->{previewing=false;progress.dismiss();if(isDestroyed())return;renderResults();if(current==generation)message(error.getMessage());});}});
-        }catch(Exception error){previewing=false;renderResults();message(error.getMessage());}
+            CourseImportRequest request=importRequest();previewing=true;
+            previewProgress=new ProgressDialog(this);previewProgress.setMessage("正在预览…");previewProgress.setIndeterminate(true);
+            previewProgress.setCancelable(true);previewProgress.setCanceledOnTouchOutside(false);
+            previewProgress.setButton(DialogInterface.BUTTON_NEGATIVE,"取消预览",(dialog,which)->{cancelPreview();renderResults();});
+            previewProgress.setOnCancelListener(dialog->{cancelPreview();renderResults();});previewProgress.show();
+            previewWork.submit(()->CourseImportPreview.calculate(PlannerRuntime.get(this).database.load(),request,Planner.now()));
+        }catch(Exception error){cancelPreview();renderResults();message(error.getMessage());}
     }
     void showPreview(SchedulePreview result,String warnings){
         LinearLayout form=column(),rows=column();form.setPadding(dp(16),dp(8),dp(16),dp(8));
@@ -329,5 +331,6 @@ public class CourseImportActivity extends Activity {
     TextView label(String value,int size){TextView text=new TextView(this);text.setText(value);text.setTextSize(size);text.setTextColor(0xff191919);return text;}
     Button button(String title,Runnable action){return PlannerUi.compactButton(this,title,action);}
     EditText field(LinearLayout parent,String hint,String value,boolean numeric){EditText input=new EditText(this);input.setHint(hint);input.setText(value);input.setTextSize(13);input.setSingleLine();if(numeric)input.setInputType(android.text.InputType.TYPE_CLASS_NUMBER);parent.addView(input,new LinearLayout.LayoutParams(parent.getOrientation()==LinearLayout.HORIZONTAL?0:-1,-2,parent.getOrientation()==LinearLayout.HORIZONTAL?1:0));return input;}
-    @Override protected void onDestroy(){generation++;if(searchWork!=null)searchWork.close();if(popup!=null)popup.dismiss();handler.removeCallbacksAndMessages(null);worker.shutdownNow();if(browser!=null){browser.stopLoading();browser.clearCache(true);browser.destroy();}if(replay!=null){replay.stopLoading();replay.destroy();}CookieManager.getInstance().removeAllCookies(null);WebStorage.getInstance().deleteAllData();super.onDestroy();}
+    @Override protected void onStop(){cancelPreview();super.onStop();}
+    @Override protected void onDestroy(){generation++;cancelPreview();if(previewWork!=null)previewWork.close();if(searchWork!=null)searchWork.close();if(popup!=null)popup.dismiss();handler.removeCallbacksAndMessages(null);worker.shutdownNow();if(browser!=null){browser.stopLoading();browser.clearCache(true);browser.destroy();}if(replay!=null){replay.stopLoading();replay.destroy();}CookieManager.getInstance().removeAllCookies(null);WebStorage.getInstance().deleteAllData();super.onDestroy();}
 }

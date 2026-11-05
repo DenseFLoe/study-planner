@@ -22,7 +22,7 @@ final class LatestWork<T> {
         worker.execute(() -> {
             if (closed || request != generation) return;
             try {
-                T result = work.run();
+                T result = BackgroundCancellation.call(() -> closed || request != generation, work::run);
                 ui.execute(() -> { if (!closed && request == generation) accept.accept(result); });
             } catch (Exception error) {
                 ui.execute(() -> { if (!closed && request == generation) failure.accept(error); });

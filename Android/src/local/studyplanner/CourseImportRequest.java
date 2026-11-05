@@ -23,6 +23,7 @@ final class CourseImportRequest {
         List<JSONObject> data = new ArrayList<>();
         Set<String> found = new HashSet<>();
         for (JSONObject capture : captures) {
+            BackgroundCancellation.check();
             String id = WebCourseImport.identity(capture);
             if (!selected.contains(id)) continue;
             if (!CourseImportCatalog.importable(capture)) throw new IllegalArgumentException("请选择完整课程。");
@@ -31,6 +32,7 @@ final class CourseImportRequest {
         }
         if (!found.equals(selected)) throw new IllegalArgumentException("部分所选课程已不存在，请重新核对选择。");
         if (data.isEmpty()) throw new IllegalArgumentException("请先选择课程。");
+        BackgroundCancellation.check();
         return mergeName == null ? Collections.unmodifiableList(data)
             : Collections.singletonList(NetdiskImport.merge(data, mergeName));
     }

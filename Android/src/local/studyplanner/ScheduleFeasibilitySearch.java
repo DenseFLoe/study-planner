@@ -100,6 +100,7 @@ final class ScheduleFeasibilitySearch {
         List<Node> nodes=new ArrayList<>();nodes.add(new Node(new Key(queues.size()),initial,-1,-2,initial,0));
         List<Integer> beam=new ArrayList<>();beam.add(0);int expansions=0;
         for(int step=0;step<blocks+floating.size();step++){
+            BackgroundCancellation.check();
             if(Thread.currentThread().isInterrupted())return null;
             Map<Key,Node> candidates=new HashMap<>();
             for(int index:beam){Node previous=nodes.get(index);

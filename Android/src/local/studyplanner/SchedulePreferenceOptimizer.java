@@ -103,6 +103,7 @@ final class SchedulePreferenceOptimizer {
             values.add(early);double[] result=new double[values.size()];for(int i=0;i<result.length;i++)result[i]=values.get(i);return result;
         }
         Plan pack(List<List<Integer>> rows){
+            BackgroundCancellation.check();
             budget--;double[] starts=new double[tasks.size()];double cursor=Double.NEGATIVE_INFINITY;
             int[] lastLesson=new int[courses.size()];Arrays.fill(lastLesson,-1);
             for(int d=0;d<days.size();d++){
@@ -255,6 +256,7 @@ final class SchedulePreferenceOptimizer {
             nodes.add(new BeamNode(new BeamKey(courses.size()),windows.get(0).start-rest,-1,0,-1,0,0,0,new double[0]));
             List<Integer> beam=new ArrayList<>();beam.add(0);int expansions=0;
             for(int step=0;step<tasks.size();step++){
+                BackgroundCancellation.check();
                 if(Thread.currentThread().isInterrupted())return null;
                 Map<BeamKey,BeamNode> candidates=new HashMap<>();
                 for(int parent:beam){BeamNode previous=nodes.get(parent);
@@ -383,6 +385,7 @@ final class SchedulePreferenceOptimizer {
                 return bound;
             }
             void visit(double ready,int placed){
+                BackgroundCancellation.check();
                 if(limit.evaluations<=0||localEvaluations<=0||limit.leaves<=0||Thread.currentThread().isInterrupted())return;
                 if(placed==count){
                     limit.leaves--;double[] value=score(rows,starts);

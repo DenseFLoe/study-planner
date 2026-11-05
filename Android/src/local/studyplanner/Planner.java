@@ -643,6 +643,7 @@ public final class Planner {
         // Try different course orders: a short lesson must not consume the only window that can
         // hold a long lesson. At most three distinct blocks deep.
         List<JSONObject> seed(List<JSONObject> candidates,List<Span> free,int count)throws Exception{
+            BackgroundCancellation.check();
             if(count==0)return new ArrayList<>();
             if(candidates.size()<count)return null;
             for(JSONObject course:candidates){
@@ -682,6 +683,7 @@ public final class Planner {
             // `courses` is sorted in place, so the deadline-first order and the course list are one.
             for(JSONObject course:ordered)positions.put(course.getString("id"),0);
             for(int index=0;index<days.size();index++){
+                BackgroundCancellation.check();
                 LocalDate date=days.get(index).d;
                 List<JSONObject> active=new ArrayList<>();for(JSONObject course:ordered)if(eligible(course,date)&&next(course)!=null)active.add(course);
                 // The exception is local to a day actually containing a fitting 3x course. A future,
@@ -742,6 +744,7 @@ public final class Planner {
         }
     }
     public static List<String> replan(JSONObject s,double now)throws Exception{
+        BackgroundCancellation.check();
         List<String> warnings=new ArrayList<>();LocalDate today=day(now),horizon=today;
         final SchedulePriorities priorities=new SchedulePriorities(s.getJSONObject("settings"));
         final boolean defaultOrder=priorities.usesDefaultOrder();
@@ -762,6 +765,7 @@ public final class Planner {
         List<ScheduleFeasibilitySearch.Floating> floatingJobs=new ArrayList<>();
         JSONArray adjustments=new JSONArray();
         List<Day> days=new ArrayList<>();for(LocalDate d=today;!d.isAfter(horizon);d=d.plusDays(1)){
+            BackgroundCancellation.check();
             List<Span> windows=new ArrayList<>(),blocks=new ArrayList<>();for(JSONObject a:list(s.getJSONObject("settings").getJSONArray("availability")))if(a.getInt("weekday")==weekday(d))windows.add(new Span(Math.max(scheduleStart,at(d,a.getInt("startMinute"))),at(d,a.getInt("endMinute"))));
             List<JSONObject> events=new ArrayList<>();List<Span> regions=new ArrayList<>();
             for(JSONObject e:list(s.getJSONArray("fixedEvents")))if(occurs(e,d)){
@@ -786,7 +790,7 @@ public final class Planner {
             days.add(new Day(d,subtract(windows,blocks)));
         }
         List<Day> original=copyDays(days);Map<String,Integer> required=new HashMap<>(),missing=new HashMap<>();Map<String,Double> demand=new HashMap<>();Map<String,List<Work>> pendingWork=new HashMap<>();
-        for(JSONObject c:courses){String id=c.getString("id");int r=remaining(s,c);r=Math.max(0,r);required.put(id,r);
+        for(JSONObject c:courses){BackgroundCancellation.check();String id=c.getString("id");int r=remaining(s,c);r=Math.max(0,r);required.put(id,r);
             List<Work> work=lessonWork(s,c);
             work.removeIf(w->w.minutes<=0);int workTotal=0;for(Work w:work)workTotal+=w.minutes;if(workTotal!=r){work.clear();if("不定时录播课程".equals(c.optString("type")))warnings.add(c.optString("name")+"：课节进度与总进度不一致，请重新抓取或检查课节。");}
             if(work.isEmpty()){int left=r;while(left>0){int size=Math.min(unit(s,c),left);work.add(new Work(size,null,null));left-=size;}}
@@ -805,10 +809,10 @@ public final class Planner {
             preferredDays.put(id,new HashSet<>(learnable.subList(0,Math.min(count,learnable.size()))));
         }
         courses.sort((a,b)->{int v=day(a.optDouble("deadline")).compareTo(day(b.optDouble("deadline")));if(v==0)v=Double.compare(demand.get(b.optString("id")),demand.get(a.optString("id")));if(v==0)v=Integer.compare(b.optInt("priority"),a.optInt("priority"));if(v==0)v=Integer.compare(unit(s,b),unit(s,a));return v!=0?v:a.optString("id").compareTo(b.optString("id"));});
-        List<JSONObject> tasks=new ArrayList<>();for(JSONObject c:courses){String id=c.getString("id");List<Work> work=pendingWork.get(id);double lessonStart=Double.NEGATIVE_INFINITY;
+        List<JSONObject> tasks=new ArrayList<>();for(JSONObject c:courses){BackgroundCancellation.check();String id=c.getString("id");List<Work> work=pendingWork.get(id);double lessonStart=Double.NEGATIVE_INFINITY;
             for(int i=0;i<days.size();i++)if(eligible(c,days.get(i).d))while(!work.isEmpty()){Work next=work.get(0);Double start=take(days,i,next.minutes,next.lessonID==null?Double.NEGATIVE_INFINITY:lessonStart);if(start==null)break;tasks.add(task(id,start,next));if(next.lessonID!=null)lessonStart=start+next.minutes*60.0+BREAK_SECONDS;work.remove(0);}int left=0;for(Work w:work)left+=w.minutes;missing.put(id,left);}
         int attempts=0;
-        for(JSONObject c:courses){String cid=c.getString("id");List<Work> work=pendingWork.get(cid);while(!work.isEmpty()&&attempts<200){Work next=work.get(0);int size=next.minutes;boolean repaired=false;
+        for(JSONObject c:courses){String cid=c.getString("id");List<Work> work=pendingWork.get(cid);while(!work.isEmpty()&&attempts<200){BackgroundCancellation.check();Work next=work.get(0);int size=next.minutes;boolean repaired=false;
             search:for(int di=0;di<original.size();di++)if(eligible(c,original.get(di).d))for(Span span:original.get(di).free)if(span.minutes()>=size){List<Double> starts=new ArrayList<>();starts.add(span.a);for(JSONObject t:tasks)if(t.getDouble("start")>=span.a&&end(t)<span.b)starts.add(end(t)+BREAK_SECONDS);Collections.sort(starts);
                 for(double start:starts){if(next.lessonID!=null){boolean earlier=false;for(JSONObject t:tasks)if(t.optString("courseID").equals(cid)&&start<end(t)+BREAK_SECONDS){earlier=true;break;}if(earlier)continue;}if(++attempts>200)break search;Span reserved=new Span(start,start+size*60);if(reserved.b>span.b)continue;Span reservation=buffered(reserved.a,reserved.b);List<JSONObject> blockers=new ArrayList<>();for(JSONObject t:tasks)if(t.getDouble("start")<reservation.b&&end(t)>reservation.a)blockers.add(t);
                     boolean immovable=false;for(JSONObject t:blockers){boolean found=false;JSONObject owner=course(s,t.getString("courseID"));for(Day d:days)if(eligible(owner,d.d))for(Span f:d.free)if(f.minutes()>=t.getInt("durationMinutes"))found=true;if(!found){immovable=true;break;}}if(immovable)continue;
@@ -896,11 +900,12 @@ public final class Planner {
             else if(!defaultOrder)adjustments.put("为保留截止日前已排入的整节课，自定义权重在空间不足处已让步。");
         }
         Map<LocalDate,Integer> indices=new HashMap<>();for(int i=0;i<days.size();i++)indices.put(days.get(i).d,i);int[] totals=new int[days.size()];Map<String,int[]> loads=new HashMap<>();for(JSONObject c:courses)loads.put(c.getString("id"),new int[days.size()]);for(JSONObject t:tasks){int i=indices.get(day(t.getDouble("start")));totals[i]+=t.getInt("durationMinutes");loads.get(t.getString("courseID"))[i]+=t.getInt("durationMinutes");}
-        boolean changed=courses.size()<3&&defaultOrder;while(changed){changed=false;for(JSONObject t:tasks){if(hasLessonID(t))continue;String id=t.getString("courseID");JSONObject c=course(s,id);int src=indices.get(day(t.getDouble("start"))),size=t.getInt("durationMinutes"),target=-1;int[] load=loads.get(id);for(int i=0;i<days.size();i++)if(i!=src&&eligible(c,days.get(i).d)&&(!preferredDays.containsKey(id)||preferredDays.get(id).contains(days.get(i).d))&&load[src]-load[i]>size){boolean fits=false;for(Span f:days.get(i).free)if(f.minutes()>=size)fits=true;if(fits&&(target<0||load[i]<load[target]||(load[i]==load[target]&&totals[i]<totals[target])))target=i;}
+        boolean changed=courses.size()<3&&defaultOrder;while(changed){BackgroundCancellation.check();changed=false;for(JSONObject t:tasks){if(hasLessonID(t))continue;String id=t.getString("courseID");JSONObject c=course(s,id);int src=indices.get(day(t.getDouble("start"))),size=t.getInt("durationMinutes"),target=-1;int[] load=loads.get(id);for(int i=0;i<days.size();i++)if(i!=src&&eligible(c,days.get(i).d)&&(!preferredDays.containsKey(id)||preferredDays.get(id).contains(days.get(i).d))&&load[src]-load[i]>size){boolean fits=false;for(Span f:days.get(i).free)if(f.minutes()>=size)fits=true;if(fits&&(target<0||load[i]<load[target]||(load[i]==load[target]&&totals[i]<totals[target])))target=i;}
             if(target>=0){Double start=take(days,target,size);t.put("start",start);List<Span> occupied=new ArrayList<>();for(JSONObject bookedTask:tasks)occupied.add(buffered(bookedTask.getDouble("start"),end(bookedTask)));for(int di=0;di<days.size();di++)days.get(di).free=subtract(original.get(di).free,occupied);totals[src]-=size;totals[target]+=size;load[src]-=size;load[target]+=size;changed=true;}
         }}
         List<JSONObject> packed=new ArrayList<>();double nextStart=Double.NEGATIVE_INFINITY;
         for(Day d:original){
+            BackgroundCancellation.check();
             String previous="";
             for(Span span:d.free){List<JSONObject> pool=new ArrayList<>();for(JSONObject t:tasks)if(t.getDouble("start")>=span.a&&end(t)<=span.b)pool.add(t);pool.sort(Comparator.comparingDouble(t->t.optDouble("start")));double time=Math.max(span.a,nextStart);
                 while(!pool.isEmpty()){int pick=0;int priority=course(s,pool.get(0).getString("courseID")).optInt("priority");if(defaultOrder)for(int i=0;i<pool.size();i++)if(!pool.get(i).getString("courseID").equals(previous)&&course(s,pool.get(i).getString("courseID")).optInt("priority")==priority){pick=i;break;}
@@ -909,6 +914,7 @@ public final class Planner {
             }
         }
         SchedulePreferenceOptimizer.Outcome optimized=SchedulePreferenceOptimizer.optimize(packed,courses,original,priorities);
+        BackgroundCancellation.check();
         packed=optimized.tasks;
         if(optimized.improved)adjustments.put("已在保留每门课程已排入学习量的前提下，按权重逐级优化跨日分配与当天顺序。");
         for(JSONObject t:packed)t.put("status",day(t.optDouble("start")).equals(today)?"planned":"future");
@@ -925,14 +931,16 @@ public final class Planner {
             for(Span region:floatingRegions)if(region.a<end(t)&&region.b>t.getDouble("start")){a=Math.min(a,region.a);b=Math.max(b,region.b);affected=true;}
             if(affected)t.put("floatingWindowStart",a).put("floatingWindowEnd",b);
         }
+        BackgroundCancellation.check();
         packed=DailyTaskOrdering.apply(s,packed,history);
-        for(JSONObject t:packed){String base="task|"+t.getString("courseID")+"|"+(long)t.getDouble("start")+"|"+t.getInt("durationMinutes")+(hasLessonID(t)?"|"+t.optString("lessonID"):"");String stable=stableID(base);
+        for(JSONObject t:packed){BackgroundCancellation.check();String base="task|"+t.getString("courseID")+"|"+(long)t.getDouble("start")+"|"+t.getInt("durationMinutes")+(hasLessonID(t)?"|"+t.optString("lessonID"):"");String stable=stableID(base);
             List<String> confirmed=new ArrayList<>();boolean collision=false;for(JSONObject old:list(s.getJSONArray("tasks")))if(!pending(old)&&old.getString("courseID").equals(t.getString("courseID"))){confirmed.add(old.getString("id"));if(old.getString("id").equals(stable)||(old.getDouble("start")==t.getDouble("start")&&old.getInt("durationMinutes")==t.getInt("durationMinutes")&&old.optString("lessonID").equals(t.optString("lessonID"))))collision=true;}Collections.sort(confirmed);if(collision){stable=stableID(base+"|confirmed|"+String.join(",",confirmed));t.put("replacesConfirmedBlock",true);}
             for(JSONObject old:list(s.getJSONArray("tasks")))if(pending(old)&&old.getString("courseID").equals(t.getString("courseID"))&&old.getDouble("start")==t.getDouble("start")&&old.getInt("durationMinutes")==t.getInt("durationMinutes")&&old.optString("lessonID").equals(t.optString("lessonID"))){stable=old.getString("id");if(old.has("replacesConfirmedBlock")&&!old.isNull("replacesConfirmedBlock"))t.put("replacesConfirmedBlock",old.getBoolean("replacesConfirmedBlock"));break;}
             t.put("id",stable);
         }
         JSONArray risks=new JSONArray();Set<LocalDate> cutoffs=new TreeSet<>();for(JSONObject c:courses)cutoffs.add(day(c.getDouble("deadline")));for(LocalDate cutoff:cutoffs){List<JSONObject> group=new ArrayList<>();JSONArray names=new JSONArray();int requiredMinutes=0,absent=0,capacity=0;for(JSONObject c:courses)if(!day(c.getDouble("deadline")).isAfter(cutoff)){group.add(c);requiredMinutes+=required.get(c.getString("id"));absent+=missing.get(c.getString("id"));if(missing.get(c.getString("id"))>0)names.put(c.getString("name"));}if(absent==0)continue;for(Day d:original)if(!d.d.isAfter(cutoff)){boolean learnable=false;for(JSONObject c:group)if(eligible(c,d.d))learnable=true;if(learnable)for(Span span:d.free)capacity+=span.minutes();}risks.put(new JSONObject().put("deadline",at(cutoff,0)).put("requiredMinutes",requiredMinutes).put("availableMinutes",capacity).put("unscheduledMinutes",absent).put("courseNames",names));}s.put("androidRisks",risks);
         ScheduleHealth.record(s,courses,required,missing,allWork,hardDays,original,packed,today,horizon,adjustments);
+        BackgroundCancellation.check();
         history.addAll(packed);history.sort(Comparator.comparingDouble(t->t.optDouble("start")));s.put("tasks",array(history));s.put("androidWarnings",new JSONArray(warnings));return warnings;
     }
     /** Derived UI diagnostics are recalculated after SQLite/sync reads without replacing shared tasks. */
