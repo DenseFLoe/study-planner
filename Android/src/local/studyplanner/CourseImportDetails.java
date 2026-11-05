@@ -51,6 +51,33 @@ public final class CourseImportDetails {
         List<String> index=new ArrayList<>();for(String row:rows)index.add(CourseImportCatalog.normalized(row));
         searchable=Collections.unmodifiableList(index);
     }
+    private CourseImportDetails(String title,String summary,List<String> rows){
+        this.title=title;this.summary=summary;lessonCount=0;noticeCount=0;totalCount=rows.size();
+        entries=Collections.unmodifiableList(rows);
+        List<String> index=new ArrayList<>();for(String row:rows)index.add(CourseImportCatalog.normalized(row));
+        searchable=Collections.unmodifiableList(index);
+    }
+    public static CourseImportDetails directory(JSONObject scan){
+        List<String> rows=new ArrayList<>();JSONArray entries=scan.optJSONArray("entries");
+        int folders=0,files=0,unavailable=0;
+        if(entries!=null)for(int i=0;i<entries.length();i++){
+            JSONObject entry=entries.optJSONObject(i);
+            if(entry==null){rows.add((i+1)+". 目录条目信息不完整，请重新读取。");continue;}
+            boolean folder=entry.optBoolean("isDirectory");if(folder)folders++;else files++;
+            String kind=folder?"目录":NetdiskImport.video(entry)?"视频":"文件";
+            StringBuilder line=new StringBuilder((i+1)+". "+kind+" · "+entry.optString("relativePath",entry.optString("name","未命名条目")));
+            if(!folder){
+                long size=entry.optLong("size",-1);append(line,size<0?"大小未知":size+" 字节");
+                Double duration=NetdiskImport.duration(entry);
+                if(duration!=null)append(line,(long)Math.ceil(duration/60)+" 分钟");
+                else if(NetdiskImport.video(entry))append(line,"时长未知");
+            }
+            if(!NetdiskImport.playable(entry)){unavailable++;append(line,folder?"网盘标记该目录不可用。":"网盘标记不可用，课程识别将跳过此文件。");}
+            rows.add(line.toString());
+        }
+        String summary="共 "+rows.size()+" 条目 · "+folders+" 个目录 · "+files+" 个文件"+(unavailable==0?"":" · "+unavailable+" 项标记不可用");
+        return new CourseImportDetails(scan.optString("shareTitle","分享目录"),summary,rows);
+    }
     private CourseImportDetails(CourseImportDetails source,List<String> rows,List<String> index){
         title=source.title;summary=source.summary;lessonCount=source.lessonCount;noticeCount=source.noticeCount;totalCount=source.totalCount;
         entries=Collections.unmodifiableList(rows);searchable=Collections.unmodifiableList(index);

@@ -142,7 +142,11 @@ public class CourseImportActivity extends Activity {
     void inject(WebView web){web.evaluateJavascript("window.webkit={messageHandlers:{courseStatus:{postMessage:v=>{window.__studyStatus=String(v)}},replayMetadata:{postMessage:v=>{window.__studyReplay=v}}}};",null);for(String name:new String[]{"GenericCrawler","CourseCrawler","XuechengCrawler","QuarkCrawler","QuarkScan"})web.evaluateJavascript(scripts.get(name),null);}
     void open(String input){String url=input.trim();if(!url.contains("://"))url="https://"+url; if(!https(url)){message("请填写不含账号信息的 HTTPS 网址。");return;}browser.loadUrl(url);}
     void resetSession(){generation++;capturing=false;captures=Collections.emptyList();selected.clear();browser.stopLoading();CookieManager.getInstance().removeAllCookies(done->{WebStorage.getInstance().deleteAllData();browser.clearCache(true);browser.clearHistory();open(address.getText().toString());});renderResults();}
-    void directory(){if(directory==null){message("请先读取分享目录。");return;}try{StringBuilder text=new StringBuilder(directory.optString("shareTitle"));for(JSONObject entry:Planner.list(directory.getJSONArray("entries")))text.append("\n\n").append(entry.optBoolean("isDirectory")?"目录 · ":"文件 · ").append(entry.optString("relativePath")).append(entry.optBoolean("isDirectory")?"":"\n"+entry.optLong("size")+" 字节"+(entry.has("durationSeconds")?" · "+Math.ceil(entry.optDouble("durationSeconds")/60)+" 分钟":""));message(text.toString());}catch(Exception error){message("目录数据不完整。");}}
+    void directory(){
+        if(directory==null){message("请先读取分享目录。");return;}
+        final JSONObject scan=directory;
+        showImportDetails(scan.optString("shareTitle","分享目录"),"搜索文件名、目录路径、视频或不可用条目",()->CourseImportDetails.directory(scan));
+    }
     boolean matches(JSONObject snapshot,String term){return CourseImportCatalog.matches(snapshot,term);}
     void selectMatches(boolean select){if(capturing||previewing||delivering||!filterReady())return;Set<String> ids=searchResult.selectableIDs;if(select)selected.addAll(ids);else selected.removeAll(ids);renderResults();}
     boolean importable(JSONObject snapshot){return CourseImportCatalog.importable(snapshot);}
@@ -236,17 +240,20 @@ public class CourseImportActivity extends Activity {
         previewButton.setEnabled(!capturing&&!previewing&&!delivering&&filterReady()&&!selected.isEmpty());
     }
     void details(JSONObject snapshot){
+        showImportDetails(snapshot.optString("name","课程详情"),"搜索课节、章节、文件路径或识别提示",()->new CourseImportDetails(snapshot));
+    }
+    void showImportDetails(String title,String searchHint,LatestWork.Work<CourseImportDetails> prepare){
         LinearLayout form=column(),rows=column();form.setPadding(dp(16),dp(8),dp(16),dp(8));
-        EditText search=field(form,"搜索课节、章节、文件路径或识别提示","",false);
-        TextView summary=label("正在整理课程信息…",13),position=label("",12);form.addView(summary);form.addView(position);
+        EditText search=field(form,searchHint,"",false);
+        TextView summary=label("正在整理详情…",13),position=label("",12);form.addView(summary);form.addView(position);
         ScrollView scroll=new ScrollView(this);scroll.addView(rows);form.addView(scroll,new LinearLayout.LayoutParams(-1,dp(360)));
         PlannerUi.Flow navigation=new PlannerUi.Flow(this);form.addView(navigation);
-        AlertDialog dialog=new AlertDialog.Builder(this).setTitle(snapshot.optString("name","课程详情")).setView(form).setPositiveButton("关闭",null).create();
+        AlertDialog dialog=new AlertDialog.Builder(this).setTitle(title).setView(form).setPositiveButton("关闭",null).create();
         CourseImportDetails[] catalog={null},details={null};int[] page={0};Button[] buttons=new Button[2];
         Runnable render=()->{
             rows.removeAllViews();CourseImportDetails current=details[0];if(current==null)return;
             summary.setText(current.summary);page[0]=current.pageIndex(page[0]);
-            position.setText(current.count()==0?(current.totalCount==0?"尚无课节信息，请返回后重新读取目录。":"没有匹配内容，可缩短搜索词或清除筛选。")
+            position.setText(current.count()==0?(current.totalCount==0?"尚无条目信息，请返回后重新读取目录。":"没有匹配内容，可缩短搜索词或清除筛选。")
                 :"匹配 "+current.count()+" / "+current.totalCount+" 条 · 第 "+(page[0]+1)+" / "+current.pageCount()+" 页");
             for(String line:current.page(page[0])){TextView row=label(line,14);row.setPadding(0,dp(8),0,dp(8));row.setTextIsSelectable(true);rows.addView(row);}
             buttons[0].setEnabled(page[0]>0);buttons[1].setEnabled(page[0]+1<current.pageCount());scroll.scrollTo(0,0);
@@ -255,14 +262,14 @@ public class CourseImportActivity extends Activity {
         for(Button button:buttons){button.setEnabled(false);navigation.addView(button);}
         LatestWork<CourseImportDetails> work=new LatestWork<>(worker,this::runOnUiThread,value->{
             if(isDestroyed()||!dialog.isShowing())return;details[0]=value;render.run();
-        },error->{if(!isDestroyed()&&dialog.isShowing())summary.setText("课程详情暂未读取成功，可关闭后重试；原选择仍保留。");});
+        },error->{if(!isDestroyed()&&dialog.isShowing())summary.setText("详情暂未读取成功，可关闭后重试；原选择仍保留。");});
         Runnable[] pending={null};
         Runnable load=()->{
             work.clear();if(pending[0]!=null)handler.removeCallbacks(pending[0]);
-            details[0]=null;page[0]=0;rows.removeAllViews();position.setText("正在筛选课节与来源…");
+            details[0]=null;page[0]=0;rows.removeAllViews();position.setText("正在筛选详情…");
             for(Button button:buttons)button.setEnabled(false);
             final String term=search.getText().toString();
-            pending[0]=()->work.submit(()->{if(catalog[0]==null)catalog[0]=new CourseImportDetails(snapshot);return catalog[0].find(term);});
+            pending[0]=()->work.submit(()->{if(catalog[0]==null)catalog[0]=prepare.run();return catalog[0].find(term);});
             handler.postDelayed(pending[0],150);
         };
         search.addTextChangedListener(new TextWatcher(){

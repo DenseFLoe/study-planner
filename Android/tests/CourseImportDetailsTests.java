@@ -49,6 +49,26 @@ public final class CourseImportDetailsTests {
         check(details.find("　 \t ")==details&&details.count()==55,"Blank search did not restore the complete directory");
         CourseImportDetails accents=new CourseImportDetails(new JSONObject().put("lessons",new JSONArray().put(new JSONObject().put("name","Résumé ALgebra"))));
         check(accents.find("ＲＥＳＵＭＥ algebra").count()==1,"Case, accent or width normalization changed between import searches");
+        JSONObject scan=new JSONObject().put("shareTitle","全部资料").put("sourceURL","https://pan.quark.cn/s/abc123?pwd=SYNTHETIC_PRIVATE")
+            .put("entries",new JSONArray()
+                .put(new JSONObject().put("name","数学").put("relativePath","数学").put("isDirectory",true))
+                .put(new JSONObject().put("fid","OPAQUE_ID").put("name","01.mp4").put("relativePath","数学/01.mp4").put("size",123).put("durationSeconds",61))
+                .put(new JSONObject().put("name","讲义.pdf").put("relativePath","数学/讲义.pdf").put("banned",true)));
+        String scanBefore=SyncLedger.canonical(scan);CourseImportDetails directory=CourseImportDetails.directory(scan);
+        check(directory.title.equals("全部资料")&&directory.summary.contains("1 个目录 · 2 个文件")&&directory.summary.contains("1 项标记不可用"),"Directory summary or provider status was lost");
+        check(directory.find("视频 01.mp4").count()==1&&directory.find("视频").count()==1&&directory.find("视频").page(0).get(0).contains("2 分钟"),"Directory video type or duration missing");
+        check(directory.find("不可用 讲义").count()==1&&directory.find("文件 讲义").page(0).get(0).contains("大小未知"),"Unavailable or missing-size file disappeared from review");
+        check(directory.find("SYNTHETIC_PRIVATE").count()==0&&directory.find("OPAQUE_ID").count()==0,"Private share parameters or provider IDs became searchable");
+        check(SyncLedger.canonical(scan).equals(scanBefore),"Directory review mutated scan data");
+        for(String flag:new String[]{"banned","badContent","riskType","status"}){
+            JSONObject item=new JSONObject().put("name","受限.mp4");item.put(flag,flag.equals("status")?0:flag.equals("riskType")?1:true);
+            CourseImportDetails blocked=CourseImportDetails.directory(new JSONObject().put("entries",new JSONArray().put(item)));
+            check(blocked.find("不可用").count()==1,"Provider flag was not aligned with course recognition: "+flag);
+        }
+        check(CourseImportDetails.directory(new JSONObject()).page(99).isEmpty(),"Missing directory entries failed");
+        JSONArray directoryRows=new JSONArray();for(int i=0;i<5001;i++)directoryRows.put(new JSONObject().put("name","视频"+i+".mp4").put("relativePath","资料/视频"+i+".mp4"));
+        CourseImportDetails largeDirectory=CourseImportDetails.directory(new JSONObject().put("entries",directoryRows));
+        check(largeDirectory.pageCount()==201&&largeDirectory.find("视频５０００.mp4").count()==1,"Large directory was truncated or unsearchable");
         System.out.println("Course import details: "+checks+" checks passed");
     }
 }
