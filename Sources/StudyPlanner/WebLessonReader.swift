@@ -718,8 +718,25 @@ struct WebCourseImportSheet: View {
     @State private var deadline = Calendar.current.date(byAdding: .day, value: 90, to: Date())!
     @State private var message = ""
     @State private var saving = false
+    @State private var searchText = ""
+    @State private var matchingIDs: Set<String>?
+    @State private var filteredRequest: SearchRequest?
     private let timer = Timer.publish(every: 2, on: .main, in: .common).autoconnect()
+    private struct SearchRequest: Hashable { var query: String; var refreshedAt: Date? }
+    private var searchRequest: SearchRequest { .init(query: searchText, refreshedAt: reader.lastRefresh) }
+    private var filtering: Bool {
+        !searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && filteredRequest != searchRequest
+    }
     private var chosen: [WebCourseSnapshot] { reader.result?.snapshots.filter { selected.contains($0.identityKey) } ?? [] }
+    private var visibleSnapshots: [WebCourseSnapshot] {
+        let snapshots = reader.result?.snapshots ?? []
+        guard !searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return snapshots }
+        guard !filtering, let matchingIDs else { return [] }
+        return snapshots.filter { matchingIDs.contains($0.identityKey) }
+    }
+    private var visibleSelectableIDs: Set<String> {
+        Set(visibleSnapshots.filter { $0.importProblem == nil }.map(\.identityKey))
+    }
     var body: some View {
         let layout = WebImportLayout.size
         VStack(alignment: .leading, spacing: 14) {
@@ -756,19 +773,21 @@ struct WebCourseImportSheet: View {
                 Text("已选 \(chosen.count) 门").font(.caption).foregroundStyle(.secondary)
                 Button("导入并生成计划") { save() }
                     .buttonStyle(.borderedProminent)
-                    .disabled(chosen.isEmpty || reader.busy || !(reader.result?.issues.isEmpty ?? false))
+                    .disabled(chosen.isEmpty || reader.busy || filtering || !(reader.result?.issues.isEmpty ?? false))
             }
         }.padding(20).frame(width: layout.width, height: layout.height)
         .disabled(saving)
         .interactiveDismissDisabled(saving)
         .onAppear { reader.open() }
         .onDisappear { reader.stop() }
+        .task(id: searchRequest) { await filterCourses() }
         .onReceive(timer) { _ in if !saving { reader.tick(autoRefresh: autoRefresh) } }
         .onChange(of: reader.lastRefresh) { _, _ in
             guard !saving else { return }
             // Re-identifying the same courses must not clear a selection the user already made.
             let offered = Set(reader.result?.snapshots.filter { $0.importProblem == nil }.map(\.identityKey) ?? [])
-            if offered != lastOffered { lastOffered = offered; selected = offered }
+            selected = WebCourseImportSelection.refreshed(selected: selected, previouslyOffered: lastOffered, offered: offered)
+            lastOffered = offered
         }
     }
     private var courseSidebar: some View {
@@ -781,11 +800,39 @@ struct WebCourseImportSheet: View {
             if let result = reader.result {
                 DatePicker("新课程截止日", selection: $deadline, in: Date()..., displayedComponents: .date)
                     .datePickerStyle(.compact)
+                HStack {
+                    TextField("搜索课程、课节或来源网站", text: $searchText)
+                        .textFieldStyle(.roundedBorder)
+                    Button("清除筛选") { searchText = "" }.disabled(searchText.isEmpty)
+                    if filtering { ProgressView().controlSize(.small) }
+                }
+                HStack {
+                    Text(filtering ? "正在筛选课程…" : "显示 \(visibleSnapshots.count)/\(result.snapshots.count) 门")
+                        .font(.caption).foregroundStyle(.secondary)
+                    Spacer()
+                    Button("选中结果") { selected.formUnion(visibleSelectableIDs) }
+                        .disabled(filtering || visibleSelectableIDs.isEmpty || visibleSelectableIDs.isSubset(of: selected))
+                    Button("只选结果") { selected = visibleSelectableIDs }
+                        .disabled(filtering || visibleSelectableIDs.isEmpty || selected == visibleSelectableIDs)
+                        .help("只勾选当前筛选中可导入的课程，取消其他课程的选择")
+                    Button("清空选择") { selected.removeAll() }.disabled(selected.isEmpty)
+                }
+                .disabled(reader.busy)
+                let visibleIDs = Set(visibleSnapshots.map(\.identityKey))
+                let hiddenCount = chosen.filter { !visibleIDs.contains($0.identityKey) }.count
+                if hiddenCount > 0 && !filtering {
+                    Text("另有 \(hiddenCount) 门已选课程不在当前筛选中，导入时会一并保存；可清除筛选查看，或点“只选结果”。")
+                        .font(.caption).foregroundStyle(.orange)
+                }
                 Text("已发现 \(result.packageCount) 个课程包；\(result.unavailable.count) 项暂不可导入")
                     .font(.caption).foregroundStyle(.secondary)
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 10) {
-                        ForEach(result.snapshots, id: \.identityKey) { snapshot in
+                        if visibleSnapshots.isEmpty && !filtering {
+                            ContentUnavailableView("没有匹配的课程", systemImage: "magnifyingglass",
+                                                   description: Text("试试课程名、课节关键词或来源网站；清除筛选可查看全部课程。"))
+                        }
+                        ForEach(visibleSnapshots, id: \.identityKey) { snapshot in
                             courseCard(snapshot)
                         }
                         ForEach(Array(result.unavailable.enumerated()), id: \.offset) { _, item in
@@ -834,7 +881,10 @@ struct WebCourseImportSheet: View {
                 if $0 { selected.insert(snapshot.identityKey) } else { selected.remove(snapshot.identityKey) }
             }))
             .font(.callout.weight(.semibold))
-            .disabled(snapshot.importProblem != nil)
+            .disabled(snapshot.importProblem != nil || reader.busy || filtering)
+            if let host = WebCourseImportSearch.websiteLabel(for: snapshot) {
+                Label(host, systemImage: "globe").font(.caption).foregroundStyle(.secondary)
+            }
             Text("\(snapshot.lessons.count) 节 · 剩余 \(WebLessonTiming.clock(snapshot.remainingSeconds)) / 总计 \(WebLessonTiming.clock(snapshot.totalSeconds))")
                 .font(.caption).foregroundStyle(.secondary).monospacedDigit()
             if let existing {
@@ -877,8 +927,23 @@ struct WebCourseImportSheet: View {
             return candidate
         } catch { return nil }
     }
+    private func filterCourses() async {
+        let request = searchRequest
+        let query = request.query
+        guard !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            matchingIDs = nil; filteredRequest = request; return
+        }
+        do { try await Task.sleep(for: .milliseconds(150)) } catch { return }
+        let snapshots = reader.result?.snapshots ?? []
+        let ids = await Task.detached(priority: .userInitiated) {
+            WebCourseImportSearch.matchingIDs(query: query, snapshots: snapshots)
+        }.value
+        guard !Task.isCancelled else { return }
+        matchingIDs = ids
+        filteredRequest = request
+    }
     private func save() {
-        guard !saving, !reader.busy, reader.result?.issues.isEmpty == true else { return }
+        guard !saving, !reader.busy, !filtering, reader.result?.issues.isEmpty == true else { return }
         let snapshots = chosen
         guard !snapshots.isEmpty else { message = "请勾选要导入的课程。"; return }
         let importDeadline = deadline
