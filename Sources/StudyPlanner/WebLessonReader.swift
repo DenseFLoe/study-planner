@@ -717,6 +717,7 @@ struct WebCourseImportSheet: View {
     @State private var lastOffered = Set<String>()
     @State private var deadline = Calendar.current.date(byAdding: .day, value: 90, to: Date())!
     @State private var message = ""
+    @State private var saving = false
     private let timer = Timer.publish(every: 2, on: .main, in: .common).autoconnect()
     private var chosen: [WebCourseSnapshot] { reader.result?.snapshots.filter { selected.contains($0.identityKey) } ?? [] }
     var body: some View {
@@ -749,6 +750,7 @@ struct WebCourseImportSheet: View {
             browserInstructions
             courseSidebar.frame(maxWidth: .infinity, maxHeight: .infinity)
             HStack {
+                if saving { ProgressView("正在导入并保存计划…").controlSize(.small) }
                 Text(message).foregroundStyle(.red).font(.caption)
                 Spacer()
                 Text("已选 \(chosen.count) 门").font(.caption).foregroundStyle(.secondary)
@@ -757,10 +759,13 @@ struct WebCourseImportSheet: View {
                     .disabled(chosen.isEmpty || reader.busy || !(reader.result?.issues.isEmpty ?? false))
             }
         }.padding(20).frame(width: layout.width, height: layout.height)
+        .disabled(saving)
+        .interactiveDismissDisabled(saving)
         .onAppear { reader.open() }
         .onDisappear { reader.stop() }
-        .onReceive(timer) { _ in reader.tick(autoRefresh: autoRefresh) }
+        .onReceive(timer) { _ in if !saving { reader.tick(autoRefresh: autoRefresh) } }
         .onChange(of: reader.lastRefresh) { _, _ in
+            guard !saving else { return }
             // Re-identifying the same courses must not clear a selection the user already made.
             let offered = Set(reader.result?.snapshots.filter { $0.importProblem == nil }.map(\.identityKey) ?? [])
             if offered != lastOffered { lastOffered = offered; selected = offered }
@@ -873,10 +878,17 @@ struct WebCourseImportSheet: View {
         } catch { return nil }
     }
     private func save() {
+        guard !saving, !reader.busy, reader.result?.issues.isEmpty == true else { return }
+        let snapshots = chosen
+        guard !snapshots.isEmpty else { message = "请勾选要导入的课程。"; return }
+        let importDeadline = deadline
+        let importTime = Date()
+        saving = true
+        message = ""
         Task {
-            let snapshots = chosen
+            defer { saving = false }
             let success = await store.change { state in
-                try state.importWebCourses(snapshots, deadline: deadline, now: Date())
+                try state.importWebCourses(snapshots, deadline: importDeadline, now: importTime)
             }
             if success { dismiss() } else { message = store.errorMessage ?? "保存失败" }
         }
