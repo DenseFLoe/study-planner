@@ -65,6 +65,7 @@ actor NetdiskCrawler {
 
     func crawl(link: NetdiskLink, passcode: String?,
                existingCourses: [Course], now: Date) async throws -> Result {
+        try Task.checkCancellation()
         var progress = Progress(title: "", foldersRead: 0, foldersQueued: 0, filesSeen: 0, videosSeen: 0,
                                 unreadFolders: 0, detail: "正在读取分享信息…", isFinished: false)
         func report(_ detail: String? = nil) {
@@ -75,6 +76,7 @@ actor NetdiskCrawler {
         report()
 
         let token = try await api.token(pwdID: link.pwdID, passcode: passcode)
+        try Task.checkCancellation()
         progress.title = token.title
         if token.needsPasscode { throw NetdiskAPIError.needsPasscode }
         report("已连接分享，正在读取目录…")
@@ -114,9 +116,11 @@ actor NetdiskCrawler {
                 let listing = try await api.list(pwdID: link.pwdID, stoken: token.stoken,
                                                  directoryFID: next.fid, page: page, size: limits.pageSize,
                                                  passcode: passcode)
+                try Task.checkCancellation()
                 pagesInFolder += 1
                 var accepted = try pageProgress.append(ids: listing.items.map(\.fid), total: listing.total)
                 for item in listing.items {
+                    try Task.checkCancellation()
                     // Adjacent pages may overlap; a file appearing in different folders means
                     // this crawl no longer represents one consistent directory listing.
                     guard accepted.newIDs.remove(item.fid) != nil else { continue }
@@ -145,10 +149,14 @@ actor NetdiskCrawler {
             if !complete { unread += 1 }
         }
 
+        try Task.checkCancellation()
+        progress.unreadFolders = unread
+        progress.foldersQueued = 0
         report("目录读取完成，正在识别课程…")
-        let outcome = NetdiskDigest.digest(entries: entries, rootTitle: token.title, pwdID: link.pwdID,
+        let outcome = try NetdiskDigest.digest(entries: entries, rootTitle: token.title, pwdID: link.pwdID,
                                            rootFID: link.fragmentFID ?? "",
-                                           unreadFolders: unread, issues: issues, limits: limits.digest)
+                                           unreadFolders: unread, issues: issues, limits: limits.digest,
+                                           checkCancellation: Task.checkCancellation)
         // The editable address field may have changed while this link was being read.
         let sourceURL = "https://pan.quark.cn/s/" + link.pwdID
             + (link.fragmentFID.map { "#/list/share/" + $0 } ?? "")
@@ -159,15 +167,21 @@ actor NetdiskCrawler {
                                totalSeconds: outcome.totalSeconds, unreadFolders: outcome.unreadFolders,
                                issues: outcome.issues)
         report("课程识别完成，正在检查重复…")
-        let duplicates = NetdiskDedup.scan(packages: outcome.packages, courses: existingCourses)
+        let duplicates = try NetdiskDedup.scan(packages: outcome.packages, courses: existingCourses,
+                                               checkCancellation: Task.checkCancellation)
         // Keep the same natural folder order the user sees on the share page.
-        let ordered = outcome.packages.sorted {
+        let ordered = try outcome.packages.sorted {
+            try Task.checkCancellation()
             return NetdiskTitles.naturalCompare($0.path, $1.path) == .orderedAscending
         }
-        let courses = ordered.compactMap {
-            NetdiskSnapshotBuilder.build(package: NetdiskDedup.removingSafeCopies(from: $0, report: duplicates),
-                                         scan: scan)
+        report("重复检查完成，正在整理课节…")
+        let courses = try ordered.compactMap {
+            let package = try NetdiskDedup.removingSafeCopies(from: $0, report: duplicates,
+                                                             checkCancellation: Task.checkCancellation)
+            return try NetdiskSnapshotBuilder.build(package: package, scan: scan,
+                                                     checkCancellation: Task.checkCancellation)
         }
+        try Task.checkCancellation()
         var finished = progress
         finished.isFinished = true
         finished.detail = "读取完成：\(outcome.packages.count) 门课程，\(outcome.totalVideoCount) 个视频。"

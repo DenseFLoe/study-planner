@@ -84,6 +84,48 @@ private actor CodeTransport: NetdiskTransport {
 }
 
 final class NetdiskCrawlerTests: XCTestCase {
+    private final class ProgressLog: @unchecked Sendable {
+        private let lock = NSLock()
+        private var values: [NetdiskCrawler.Progress] = []
+        func append(_ progress: NetdiskCrawler.Progress) { lock.withLock { values.append(progress) } }
+        var recorded: [NetdiskCrawler.Progress] { lock.withLock { values } }
+    }
+
+    func testCancellationAtEveryFinishingStageNeverReportsCompletion() async throws {
+        let items = (1...30).map { video("v\($0)", "第\($0)讲 极限.mp4", duration: 600, size: 1_000) }
+        let link = try XCTUnwrap(NetdiskLink.parse("https://pan.quark.cn/s/48d8818e6cc0"))
+        for stage in ["目录读取完成，正在识别课程…", "课程识别完成，正在检查重复…", "重复检查完成，正在整理课节…"] {
+            let log = ProgressLog()
+            let crawler = NetdiskCrawler(transport: StubTransport(pages: ["0": items])) { progress in
+                log.append(progress)
+                if progress.detail == stage { withUnsafeCurrentTask { $0?.cancel() } }
+            }
+            // The synchronous progress callback cancels only this child task at an exact boundary.
+            let task = Task {
+                try await crawler.crawl(link: link, passcode: nil, existingCourses: [], now: Date())
+            }
+            do {
+                _ = try await task.value
+                XCTFail("取消后不能返回完整结果：\(stage)")
+            } catch is CancellationError {} catch { XCTFail("Unexpected error: \(error)") }
+            XCTAssertTrue(log.recorded.contains { $0.detail == stage })
+            XCTAssertFalse(log.recorded.contains(where: \.isFinished))
+        }
+    }
+
+    func testFinishedProgressKeepsUnreadFolderCountAtScanLimit() async throws {
+        let transport = StubTransport(pages: ["0": [folder("a", "高数", items: 3), folder("b", "线代", items: 3)]])
+        let log = ProgressLog()
+        let crawler = NetdiskCrawler(transport: transport, limits: .init(maxFolders: 1), onProgress: log.append)
+        let link = try XCTUnwrap(NetdiskLink.parse("https://pan.quark.cn/s/48d8818e6cc0"))
+        let result = try await crawler.crawl(link: link, passcode: nil, existingCourses: [], now: Date())
+        let finished = try XCTUnwrap(log.recorded.last)
+        XCTAssertTrue(finished.isFinished)
+        XCTAssertEqual(finished.unreadFolders, 2)
+        XCTAssertEqual(finished.unreadFolders, result.scan.unreadFolders)
+        XCTAssertEqual(finished.foldersQueued, 0)
+    }
+
 
     private func folder(_ fid: String, _ name: String, items: Int) -> String {
         Self.json(["fid": fid, "file_name": name, "dir": true, "file_type": 0, "category": 0,

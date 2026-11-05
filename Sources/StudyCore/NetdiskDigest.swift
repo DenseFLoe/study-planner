@@ -117,6 +117,16 @@ public enum NetdiskDigest {
                               rootFID: String = "",
                               unreadFolders: Int = 0, issues: [String] = [],
                               limits: Limits = .standard) -> Outcome {
+        digest(entries: entries, rootTitle: rootTitle, pwdID: pwdID, rootFID: rootFID,
+               unreadFolders: unreadFolders, issues: issues, limits: limits, checkCancellation: {})
+    }
+
+    /// Cancels read-only recognition without returning a partly assembled tree or course list.
+    public static func digest(entries: [NetdiskEntry], rootTitle: String, pwdID: String,
+                              rootFID: String = "", unreadFolders: Int = 0, issues: [String] = [],
+                              limits: Limits = .standard,
+                              checkCancellation: () throws -> Void) rethrows -> Outcome {
+        try checkCancellation()
         var nodes: [String: Node] = [:]
         var order: [String] = []
         func node(path: String) -> Node {
@@ -130,6 +140,7 @@ public enum NetdiskDigest {
         }
         _ = node(path: "")
         for entry in entries {
+            try checkCancellation()
             let path = entry.relativePath
             var child = node(path: path)
             child.entry = entry
@@ -144,12 +155,14 @@ public enum NetdiskDigest {
         }
 
         // Cumulative video bytes/seconds per subtree, computed bottom-up over a depth-sorted list.
-        let pathsByDepth = order.sorted {
+        let pathsByDepth = try order.sorted {
+            try checkCancellation()
             let a = $0.split(separator: "/").count, b = $1.split(separator: "/").count
             return a == b ? NetdiskTitles.naturalCompare($0, $1) == .orderedAscending : a < b
         }
 
         for entry in entries where !entry.isDirectory {
+            try checkCancellation()
             let path = entry.relativePath
             switch kind(of: entry) {
             case .video:
@@ -174,11 +187,13 @@ public enum NetdiskDigest {
         var subtreeDocuments: [String: Int] = [:]
         var subtreeOthers: [String: Int] = [:]
         for path in pathsByDepth.reversed() {
+            try checkCancellation()
             guard let current = nodes[path] else { continue }
             var videos = current.ownVideos
             var documents = current.documentCount
             var others = current.otherCount
             for childPath in current.children {
+                try checkCancellation()
                 videos += subtreeVideos[childPath] ?? []
                 documents += subtreeDocuments[childPath] ?? 0
                 others += subtreeOthers[childPath] ?? 0
@@ -186,13 +201,18 @@ public enum NetdiskDigest {
             subtreeVideos[path] = videos; subtreeDocuments[path] = documents; subtreeOthers[path] = others
         }
         var episodes: [String: Int] = [:]
-        for video in subtreeVideos[""] ?? [] { episodes[video.fid] = NetdiskTitles.episode(in: video.name) ?? 0 }
+        for video in subtreeVideos[""] ?? [] {
+            try checkCancellation()
+            episodes[video.fid] = NetdiskTitles.episode(in: video.name) ?? 0
+        }
 
-        func directory(_ path: String) -> NetdiskDirectory {
+        func directory(_ path: String) throws -> NetdiskDirectory {
+            try checkCancellation()
             let current = nodes[path]
             let videos = subtreeVideos[path] ?? []
-            let children = (current?.children ?? []).sorted {
-                NetdiskTitles.naturalCompare($0, $1) == .orderedAscending
+            let children = try (current?.children ?? []).sorted {
+                try checkCancellation()
+                return NetdiskTitles.naturalCompare($0, $1) == .orderedAscending
             }
             return NetdiskDirectory(
                 fid: current?.fid ?? "", shareToken: current?.shareToken ?? "",
@@ -204,12 +224,13 @@ public enum NetdiskDigest {
                 otherCount: subtreeOthers[path] ?? 0,
                 totalBytes: videos.reduce(0) { $0 + max(0, $1.size) },
                 totalSeconds: videos.reduce(0) { $0 + (duration($1) ?? 0) },
-                children: children.map(directory))
+                children: try children.map(directory))
         }
 
         // Course candidates: every folder holding videos is scored, then the best ancestor keeps them.
         var scored: [(path: String, score: Double, signal: NetdiskCourseSignal)] = []
         for path in order {
+            try checkCancellation()
             guard let current = nodes[path] else { continue }
             let videos = subtreeVideos[path] ?? []
             guard !videos.isEmpty else { continue }
@@ -218,23 +239,27 @@ public enum NetdiskDigest {
             // (like the real 考研 share) stays a container for its stage courses.
             if path.isEmpty, current.ownVideos.isEmpty,
                current.children.filter({ isChapterName(nodes[$0]?.name ?? "") }).count < 2 { continue }
-            let signal = signal(for: current, videos: videos, documents: subtreeDocuments[path] ?? 0,
-                                others: subtreeOthers[path] ?? 0, episodes: episodes, limits: limits)
+            let signal = try signal(for: current, videos: videos, documents: subtreeDocuments[path] ?? 0,
+                                    others: subtreeOthers[path] ?? 0, episodes: episodes, limits: limits,
+                                    checkCancellation: checkCancellation)
             scored.append((path, signal.score, signal))
         }
         // Some shares put each lecture in its own consecutively named folder. Merge those
         // siblings into one course while leaving a larger sibling (for example 扫码视频) separate.
         var seriesGroups: [(parent: String, stem: String, children: [String], videos: [NetdiskEntry])] = []
         for path in order {
+            try checkCancellation()
             guard let current = nodes[path], current.ownVideos.isEmpty else { continue }
             var byStem: [String: [String]] = [:]
             for child in current.children {
+                try checkCancellation()
                 guard let name = nodes[child]?.name,
                       let stem = seriesStem(name),
                       let videos = subtreeVideos[child], (1...2).contains(videos.count) else { continue }
                 byStem[stem, default: []].append(child)
             }
             for (stem, children) in byStem where children.count >= 3 {
+                try checkCancellation()
                 seriesGroups.append((path, stem, children, children.flatMap { subtreeVideos[$0] ?? [] }))
             }
         }
@@ -243,17 +268,23 @@ public enum NetdiskDigest {
         // 真题 — is a container too, even though it holds every video of every stage. Chapters of one
         // recorded course (`第1章`, `01.极限`) do not look like that and keep their course.
         for path in order where !path.isEmpty {
+            try checkCancellation()
             guard let current = nodes[path], current.ownVideos.isEmpty,
                   current.ownDocumentCount == 0, current.otherCount == 0 else { continue }
-            let stageChildren = current.children.filter { child in
+            let stageChildren = try current.children.filter { child in
+                try checkCancellation()
                 guard let name = nodes[child]?.name.lowercased() else { return false }
                 guard !isChapterName(name) else { return false }
                 guard stageKeywords.contains(where: { name.contains($0) }) else { return false }
-                return scored.contains { $0.path == child && $0.score >= 0.6 }
+                return try scored.contains {
+                    try checkCancellation()
+                    return $0.path == child && $0.score >= 0.6
+                }
             }
             if stageChildren.count >= 2 { wrappers.insert(path) }
         }
         for path in order where !path.isEmpty {
+            try checkCancellation()
             guard let current = nodes[path], current.ownVideos.isEmpty,
                   materialKeywords.contains(where: { current.name.contains($0) }) else { continue }
             if current.children.filter({ !(subtreeVideos[$0] ?? []).isEmpty }).count >= 2 {
@@ -265,18 +296,23 @@ public enum NetdiskDigest {
         // score highly, but splitting them would turn one course into dozens of plans.
         var chapterSubtrees: [String] = []
         for path in order {
+            try checkCancellation()
             guard let current = nodes[path], !wrappers.contains(path) else { continue }
             let chapters = current.children.filter { isChapterName(nodes[$0]?.name ?? "") }
             if chapters.count >= 2 { chapterSubtrees.append(contentsOf: chapters) }
         }
-        scored.removeAll { candidate in
-            chapterSubtrees.contains { chapter in
-                candidate.path == chapter || candidate.path.hasPrefix(chapter + "/")
+        try scored.removeAll { candidate in
+            try checkCancellation()
+            return try chapterSubtrees.contains { chapter in
+                try checkCancellation()
+                return candidate.path == chapter || candidate.path.hasPrefix(chapter + "/")
             }
         }
-        scored.removeAll { candidate in
-            seriesGroups.contains { group in
-                candidate.path == group.parent
+        try scored.removeAll { candidate in
+            try checkCancellation()
+            return try seriesGroups.contains { group in
+                try checkCancellation()
+                return candidate.path == group.parent
                     || (!candidate.path.isEmpty && group.parent.hasPrefix(candidate.path + "/"))
                     || group.children.contains { child in
                         candidate.path == child || candidate.path.hasPrefix(child + "/")
@@ -290,14 +326,17 @@ public enum NetdiskDigest {
             scored.removeAll { $0.path.isEmpty }
         }
         // Deeper, more specific folders win a tie: a folder and its only child must not both be courses.
-        scored.sort {
+        try scored.sort {
+            try checkCancellation()
             if $0.score != $1.score { return $0.score > $1.score }
             return $0.path.count > $1.path.count
         }
         var chosen: [String] = []
         for candidate in scored {
-            let contained = chosen.contains { selected in
-                candidate.path == selected
+            try checkCancellation()
+            let contained = try chosen.contains { selected in
+                try checkCancellation()
+                return candidate.path == selected
                     || candidate.path.isEmpty || selected.isEmpty
                     || candidate.path.hasPrefix(selected + "/")
                     || selected.hasPrefix(candidate.path + "/")
@@ -307,8 +346,12 @@ public enum NetdiskDigest {
         // A folder that only exists to hold one course is not itself a course worth naming.
         var packages: [NetdiskPackage] = []
         for path in chosen {
+            try checkCancellation()
             guard let current = nodes[path], let signal = scored.first(where: { $0.path == path })?.signal else { continue }
-            let videos = (subtreeVideos[path] ?? []).sorted(by: lessonComparator(episodes: episodes))
+            let videos = try (subtreeVideos[path] ?? []).sorted {
+                try checkCancellation()
+                return lessonComparator(episodes: episodes)($0, $1)
+            }
             let childFolders = current.children.count
             let display = NetdiskTitles.displayName(current.name)
             var notes = signal.notes
@@ -329,10 +372,14 @@ public enum NetdiskDigest {
                 unreadFolders: 0))
         }
         for group in seriesGroups {
+            try checkCancellation()
             guard let current = nodes[group.parent] else { continue }
-            let videos = group.videos.sorted(by: lessonComparator(episodes: episodes))
-            let signal = signal(for: current, videos: videos, documents: 0, others: 0,
-                                episodes: episodes, limits: limits)
+            let videos = try group.videos.sorted {
+                try checkCancellation()
+                return lessonComparator(episodes: episodes)($0, $1)
+            }
+            let signal = try signal(for: current, videos: videos, documents: 0, others: 0,
+                                    episodes: episodes, limits: limits, checkCancellation: checkCancellation)
             packages.append(NetdiskPackage(
                 packageID: "quark:" + pwdID + ":" + current.fid + ":series:" + group.stem,
                 name: current.name, fid: current.fid, shareToken: current.shareToken,
@@ -348,11 +395,13 @@ public enum NetdiskDigest {
                 minHeight: videos.map(resolution).min() ?? 0,
                 unreadFolders: 0))
         }
-        packages.sort {
+        try packages.sort {
+            try checkCancellation()
             let compared = NetdiskTitles.naturalCompare($0.path, $1.path)
             return compared == .orderedSame ? $0.packageID < $1.packageID : compared == .orderedAscending
         }
-        let root = directory("")
+        let root = try directory("")
+        try checkCancellation()
         let allVideos = subtreeVideos[""] ?? []
         return Outcome(root: root, packages: packages, totalVideoCount: allVideos.count,
                        totalBytes: allVideos.reduce(0) { $0 + max(0, $1.size) },
@@ -386,7 +435,9 @@ public enum NetdiskDigest {
 
     /// The four signals behind "is this folder a course", each 0 ... 1.
     private static func signal(for node: Node, videos: [NetdiskEntry], documents: Int, others: Int,
-                               episodes: [String: Int], limits: Limits) -> NetdiskCourseSignal {
+                               episodes: [String: Int], limits: Limits,
+                               checkCancellation: () throws -> Void) rethrows -> NetdiskCourseSignal {
+        try checkCancellation()
         let content = videos.count + documents + others
         let videoRatio = content > 0 ? Double(videos.count) / Double(content) : 0
         let name = node.name.lowercased()
@@ -396,8 +447,11 @@ public enum NetdiskDigest {
         if materialKeywords.contains(where: { name.contains($0) }) { nameScore -= 0.35; notes.append("目录名像资料/讲义") }
         if NetdiskTitles.episode(in: node.name) != nil { nameScore += 0.2 }
         nameScore = min(1, max(0, nameScore))
-        let sequence = sequenceScore(videos: videos, episodes: episodes)
-        let known = videos.compactMap { duration($0) }
+        let sequence = try sequenceScore(videos: videos, episodes: episodes, checkCancellation: checkCancellation)
+        let known = try videos.compactMap {
+            try checkCancellation()
+            return duration($0)
+        }
         let seconds = known.isEmpty ? Double(videos.count) * 300 : known.reduce(0, +)
         let volumeScore = min(1, Double(videos.count) / Double(max(1, limits.minVideosPerCourse)) * 0.5
                                 + min(1, seconds / 3600) * 0.5)
@@ -415,11 +469,15 @@ public enum NetdiskDigest {
     public static func sequenceScore(videos: [NetdiskEntry]) -> Double {
         var episodes: [String: Int] = [:]
         for video in videos { episodes[video.fid] = NetdiskTitles.episode(in: video.name) ?? 0 }
-        return sequenceScore(videos: videos, episodes: episodes)
+        return sequenceScore(videos: videos, episodes: episodes, checkCancellation: {})
     }
-    private static func sequenceScore(videos: [NetdiskEntry], episodes: [String: Int]) -> Double {
+    private static func sequenceScore(videos: [NetdiskEntry], episodes: [String: Int],
+                                      checkCancellation: () throws -> Void) rethrows -> Double {
         guard videos.count >= 2 else { return videos.isEmpty ? 0 : 0.3 }
-        let numbered = videos.compactMap { episodes[$0.fid] }.filter { $0 > 0 }
+        let numbered = try videos.compactMap {
+            try checkCancellation()
+            return episodes[$0.fid]
+        }.filter { $0 > 0 }
         let ratio = Double(numbered.count) / Double(videos.count)
         let continuity = Double(Set(numbered).count) / Double(max(1, numbered.count))
         return min(1, ratio * 0.7 + continuity * 0.3)

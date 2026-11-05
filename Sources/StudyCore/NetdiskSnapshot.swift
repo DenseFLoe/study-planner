@@ -192,8 +192,20 @@ public enum NetdiskSnapshotBuilder {
     /// Assembles one course package into the same snapshot type the website reader produces,
     /// so persistence, scheduling and syncing need no netdisk-specific path.
     public static func build(package: NetdiskPackage, scan: NetdiskScan) -> Course? {
+        build(package: package, scan: scan, checkCancellation: {})
+    }
+
+    public static func build(package: NetdiskPackage, scan: NetdiskScan,
+                             checkCancellation: () throws -> Void) rethrows -> Course? {
+        try checkCancellation()
         let videos = package.videos
-        let known = videos.compactMap { NetdiskDigest.duration($0) }.sorted()
+        let known = try videos.compactMap {
+            try checkCancellation()
+            return NetdiskDigest.duration($0)
+        }.sorted {
+            try checkCancellation()
+            return $0 < $1
+        }
         let unknown = videos.count - known.count
         let usedMedian = known.isEmpty ? 0 : max(known[known.count / 2], 60)
         let name = displayName(package: package, scan: scan)
@@ -226,6 +238,7 @@ public enum NetdiskSnapshotBuilder {
         var meta: [String: NetdiskLessonMeta] = [:]
         // Digest already placed the package's videos in natural lesson order.
         for video in videos {
+            try checkCancellation()
             let occurrence = (counts[video.fid] ?? 0) + 1
             counts[video.fid] = occurrence
             let id = "quark:" + scan.pwdID + ":" + video.fid + (occurrence > 1 ? ":\(occurrence)" : "")
@@ -239,6 +252,7 @@ public enum NetdiskSnapshotBuilder {
                                          width: video.width, height: video.height,
                                          estimatedDuration: duration == nil, shareToken: video.shareToken)
         }
+        try checkCancellation()
         let snapshot = WebCourseSnapshot(packageID: package.packageID, name: name, sourceURL: scan.sourceURL,
                                          fetchedAt: scan.fetchedAt, expectedOutlines: 1, fetchedOutlines: 1,
                                          lessons: lessons, issues: [])

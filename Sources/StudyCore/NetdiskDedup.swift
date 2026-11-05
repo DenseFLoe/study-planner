@@ -119,16 +119,27 @@ public enum NetdiskDedup {
 
     /// Keep chapter context: many courses restart at 第1讲 in each chapter.
     public static func groupWithinCourse(_ videos: [NetdiskEntry]) -> [(kept: NetdiskEntry, dropped: NetdiskEntry, reason: String)] {
+        groupWithinCourse(videos, checkCancellation: {})
+    }
+
+    public static func groupWithinCourse(_ videos: [NetdiskEntry], checkCancellation: () throws -> Void)
+        rethrows -> [(kept: NetdiskEntry, dropped: NetdiskEntry, reason: String)] {
+        try checkCancellation()
         var buckets: [String: [NetdiskEntry]] = [:]
         for video in videos where NetdiskDigest.isVideo(video) {
+            try checkCancellation()
             if let duration = video.durationSeconds, duration < 5 { continue }
             let identity = NetdiskTitles.looseIdentity(video.name)
             buckets[video.parentPath + "|" + identity, default: []].append(video)
         }
         var pairs: [(kept: NetdiskEntry, dropped: NetdiskEntry, reason: String)] = []
         for bucket in buckets.values where bucket.count > 1 {
-            let ranked = bucket.sorted { quality($0) > quality($1) }
+            let ranked = try bucket.sorted {
+                try checkCancellation()
+                return quality($0) > quality($1)
+            }
             for loser in ranked.dropFirst() {
+                try checkCancellation()
                 pairs.append((ranked[0], loser, "时长、清晰度与体积最好的那一份"))
             }
         }
@@ -190,29 +201,49 @@ public enum NetdiskDedup {
     }
 
     public static func candidate(for package: NetdiskPackage) -> Candidate {
-        Candidate(packageID: package.packageID, name: package.name, path: package.path,
+        candidate(for: package, checkCancellation: {})
+    }
+
+    public static func candidate(for package: NetdiskPackage,
+                                 checkCancellation: () throws -> Void) rethrows -> Candidate {
+        try checkCancellation()
+        return Candidate(packageID: package.packageID, name: package.name, path: package.path,
                   videos: package.videos,
-                  looseIdentities: package.videos.map { informativeIdentity($0.name) ?? "" },
+                  looseIdentities: try package.videos.map {
+                      try checkCancellation()
+                      return informativeIdentity($0.name) ?? ""
+                  },
                   durationSeconds: package.totalSeconds, totalBytes: package.totalBytes,
                   minHeight: package.minHeight)
     }
 
     /// Works on package summaries, not the original entries, so the report stays small enough to sync.
     public static func scan(packages: [NetdiskPackage], courses: [Course] = []) -> NetdiskDuplicateReport {
+        scan(packages: packages, courses: courses, checkCancellation: {})
+    }
+
+    /// Stops superseded scans inside large courses as well as between candidate comparisons.
+    public static func scan(packages: [NetdiskPackage], courses: [Course] = [],
+                            checkCancellation: () throws -> Void) rethrows -> NetdiskDuplicateReport {
+        try checkCancellation()
         var report = NetdiskDuplicateReport()
         report.checkedCourses = packages.count
         report.checkedVideos = packages.reduce(0) { $0 + $1.videoCount }
         for package in packages {
-            let pairs = groupWithinCourse(package.videos)
+            try checkCancellation()
+            let pairs = try groupWithinCourse(package.videos, checkCancellation: checkCancellation)
             guard !pairs.isEmpty else { continue }
             var grouped: [String: (kept: NetdiskEntry, removed: [NetdiskEntry], reason: String)] = [:]
             for pair in pairs {
+                try checkCancellation()
                 var bucket = grouped[pair.kept.fid] ?? (pair.kept, [], pair.reason)
                 bucket.removed.append(pair.dropped)
                 grouped[pair.kept.fid] = bucket
             }
             for bucket in grouped.values {
-                let requiresReview = bucket.removed.contains { copy in
+                try checkCancellation()
+                let requiresReview = try bucket.removed.contains { copy in
+                    try checkCancellation()
                     guard bucket.kept.size > 0, copy.size > 0,
                           let keptDuration = NetdiskDigest.duration(bucket.kept),
                           let copyDuration = NetdiskDigest.duration(copy) else { return true }
@@ -223,18 +254,25 @@ public enum NetdiskDedup {
                 report.withinCourses.append(NetdiskDuplicateGroup(
                     packageID: package.packageID, courseName: package.name,
                     retained: describe(bucket.kept, reason: "体积最大"),
-                    removed: bucket.removed.map { describe($0, reason: "重复副本") },
+                    removed: try bucket.removed.map {
+                        try checkCancellation()
+                        return describe($0, reason: "重复副本")
+                    },
                     requiresReview: requiresReview,
                     reason: requiresReview ? "文件大小或时长不同，导入时暂时保留全部" : "大小与时长接近，导入时只保留最佳的一份"))
             }
         }
-        report.withinCourses.sort { $0.packageID == $1.packageID ? $0.retained.fid < $1.retained.fid : $0.packageID < $1.packageID }
+        try report.withinCourses.sort {
+            try checkCancellation()
+            return $0.packageID == $1.packageID ? $0.retained.fid < $1.retained.fid : $0.packageID < $1.packageID
+        }
 
-        let candidates = packages.map(candidate(for:))
+        let candidates = try packages.map { try candidate(for: $0, checkCancellation: checkCancellation) }
         let lessonSets = candidates.map { Set($0.looseIdentities.filter { !$0.isEmpty }) }
         var dropped: Set<String> = []
         for i in candidates.indices {
             for j in candidates.indices where j > i {
+                try checkCancellation()
                 let lhs = candidates[i], rhs = candidates[j]
                 if dropped.contains(lhs.packageID) || dropped.contains(rhs.packageID) { continue }
                 let left = lessonSets[i], right = lessonSets[j]
@@ -261,14 +299,25 @@ public enum NetdiskDedup {
             }
         }
         // Only fully-automatic drops are removed outright; reviewed ones stay and stay selectable.
-        report.droppedPackages.sort { $0.droppedPackageID < $1.droppedPackageID }
+        try report.droppedPackages.sort {
+            try checkCancellation()
+            return $0.droppedPackageID < $1.droppedPackageID
+        }
 
         for package in packages {
-            let matched = courses.compactMap { course -> NetdiskCourseMatch? in
+            try checkCancellation()
+            let matched = try courses.compactMap { course -> NetdiskCourseMatch? in
+                try checkCancellation()
                 let lessons = course.webCourse?.lessons.map(\.name) ?? course.manualLessons?.map(\.name) ?? []
                 guard !lessons.isEmpty, !package.videos.isEmpty else { return nil }
-                let mine = Set(package.videos.compactMap { informativeIdentity($0.name) })
-                let theirs = Set(lessons.compactMap { informativeIdentity($0) })
+                let mine = Set(try package.videos.compactMap {
+                    try checkCancellation()
+                    return informativeIdentity($0.name)
+                })
+                let theirs = Set(try lessons.compactMap {
+                    try checkCancellation()
+                    return informativeIdentity($0)
+                })
                 guard !mine.isEmpty, !theirs.isEmpty else { return nil }
                 let shared = Double(mine.intersection(theirs).count) / Double(min(mine.count, theirs.count))
                 guard shared >= 0.6 else { return nil }
@@ -279,9 +328,13 @@ public enum NetdiskDedup {
                                           reason: shared >= 0.9
                                               ? "课节几乎完全相同，请核对是否已有这门课"
                                               : "有 \(Int((shared * 100).rounded()))% 课节相同，可能是同一门课的不同版本")
-            }.sorted { $0.score > $1.score }
+            }.sorted {
+                try checkCancellation()
+                return $0.score > $1.score
+            }
             report.existingCourseMatches.append(contentsOf: matched.prefix(1))
         }
+        try checkCancellation()
         return report
     }
 
@@ -306,12 +359,29 @@ public enum NetdiskDedup {
     /// stay visible because a change in size or duration may mean different content.
     public static func removingSafeCopies(from package: NetdiskPackage,
                                           report: NetdiskDuplicateReport) -> NetdiskPackage {
-        let removed = Set(report.withinCourses
-            .filter { $0.packageID == package.packageID && !$0.requiresReview }
-            .flatMap { $0.removed.map(\.fid) })
+        removingSafeCopies(from: package, report: report, checkCancellation: {})
+    }
+
+    public static func removingSafeCopies(from package: NetdiskPackage, report: NetdiskDuplicateReport,
+                                          checkCancellation: () throws -> Void) rethrows -> NetdiskPackage {
+        try checkCancellation()
+        let removed = Set(try report.withinCourses
+            .filter {
+                try checkCancellation()
+                return $0.packageID == package.packageID && !$0.requiresReview
+            }
+            .flatMap { group in
+                try group.removed.map {
+                    try checkCancellation()
+                    return $0.fid
+                }
+            })
         guard !removed.isEmpty else { return package }
         var result = package
-        result.videos.removeAll { removed.contains($0.fid) }
+        try result.videos.removeAll {
+            try checkCancellation()
+            return removed.contains($0.fid)
+        }
         result.totalBytes = result.videos.reduce(0) { $0 + max(0, $1.size) }
         result.totalSeconds = result.videos.reduce(0) { $0 + (NetdiskDigest.duration($1) ?? 0) }
         result.unknownDurations = result.videos.filter { NetdiskDigest.duration($0) == nil }.count
