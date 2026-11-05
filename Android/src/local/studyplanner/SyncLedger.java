@@ -156,10 +156,16 @@ public final class SyncLedger {
 
     void mergeCloudSnapshot(SyncLedger remote,double now)throws Exception {
         JSONObject localState=materialize(),remoteState=remote.materialize();
+        SyncLedger combined=new SyncLedger(shallowCopy(value).put("records",shallowCopy(records())));
+        combined.merge(remote.changes(0));JSONObject state=combined.materialize();
+        // Confirmation alone changes pending membership, not the plan revision.
+        Set<String> confirmed=new HashSet<>();
+        for(JSONObject task:Planner.list(state.getJSONArray("tasks")))if(!Planner.pending(task))confirmed.add(task.getString("id"));
         Set<String> localCourses=new HashSet<>(),remoteCourses=new HashSet<>();
         for(JSONObject c:Planner.list(localState.getJSONArray("courses")))localCourses.add(c.getString("id"));
         for(JSONObject c:Planner.list(remoteState.getJSONArray("courses")))remoteCourses.add(c.getString("id"));
         Map<String,Set<String>> a=pendingPlans(localState),b=pendingPlans(remoteState);
+        for(Map<String,Set<String>> plans:Arrays.asList(a,b))for(Set<String> tasks:plans.values())tasks.removeAll(confirmed);
         Set<String> shared=new HashSet<>(localCourses);shared.retainAll(remoteCourses);
         Set<String> differing=new HashSet<>();for(String course:shared)if(!a.getOrDefault(course,Collections.emptySet()).equals(b.getOrDefault(course,Collections.emptySet())))differing.add(course);
         Map<String,JSONObject> av=planVersions(differing),bv=remote.planVersions(differing);Set<String> keep=new HashSet<>();
@@ -174,9 +180,10 @@ public final class SyncLedger {
             }
             keep.addAll((useRemote?b:a).getOrDefault(course,Collections.emptySet()));
         }
-        merge(remote.changes(0));JSONObject state=materialize();JSONArray tasks=new JSONArray();
+        JSONArray tasks=new JSONArray();
         for(JSONObject task:Planner.list(state.getJSONArray("tasks")))if(!Planner.pending(task)||keep.contains(task.getString("id")))tasks.put(task);
-        state.put("tasks",tasks);if(SyncExchange.invalidPending(state,now))Planner.replan(state,now);capture(state);
+        state.put("tasks",tasks);if(SyncExchange.invalidPending(state,now))Planner.replan(state,now);combined.capture(state);
+        Iterator<String> names=combined.value.keys();while(names.hasNext()){String name=names.next();value.put(name,combined.value.get(name));}
     }
     static Map<String,Set<String>> pendingPlans(JSONObject state)throws Exception{
         Map<String,Set<String>> result=new HashMap<>();for(JSONObject task:Planner.list(state.getJSONArray("tasks")))if(Planner.pending(task))result.computeIfAbsent(task.getString("courseID"),k->new HashSet<>()).add(task.getString("id"));return result;

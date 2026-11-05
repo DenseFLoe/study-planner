@@ -100,4 +100,45 @@ final class CloudMergeRegressionTests: XCTestCase {
         try a.mergeCloudSnapshot(b, now: now)
         XCTAssertTrue(try a.materialize().tasks.contains { $0.id == history.id })
     }
+    func testConfirmationDoesNotConflictWithTheSamePendingPlan() throws {
+        var base = fixture()
+        let studied = ScheduledTask(courseID: base.courses[0].id, start: now.addingTimeInterval(-3600), durationMinutes: 60)
+        let future = ScheduledTask(courseID: base.courses[0].id, start: now.addingTimeInterval(86400), durationMinutes: 60)
+        base.tasks = [studied, future]
+        var common = SyncLedger(); try common.capture(base, now: now.addingTimeInterval(-7200))
+        var confirmed = common, edited = base
+        try edited.confirm(taskID: studied.id, actualMinutes: 60, now: now)
+        try confirmed.capture(edited, now: now)
+        for (var local, remote) in [(confirmed, common), (common, confirmed)] {
+            try local.mergeCloudSnapshot(remote, now: now)
+            let result = try local.materialize()
+            XCTAssertEqual(result.completions.count, 1)
+            XCTAssertTrue(result.tasks.contains { $0.id == studied.id && !$0.isUnconfirmed })
+            XCTAssertTrue(result.tasks.contains { $0.id == future.id && $0.isUnconfirmed })
+            let sequence = local.sequence
+            try local.mergeCloudSnapshot(remote, now: now)
+            XCTAssertEqual(local.sequence, sequence)
+        }
+        var undone = confirmed, undoState = edited
+        try undoState.undoConfirmation(taskID: studied.id, now: now.addingTimeInterval(60))
+        try undone.capture(undoState, now: now.addingTimeInterval(60))
+        for (var local, remote) in [(undone, confirmed), (confirmed, undone)] {
+            try local.mergeCloudSnapshot(remote, now: now.addingTimeInterval(60))
+            let result = try local.materialize()
+            XCTAssertTrue(result.completions.isEmpty)
+            XCTAssertTrue(result.tasks.contains { $0.id == studied.id && $0.isUnconfirmed })
+            XCTAssertTrue(result.tasks.contains { $0.id == future.id && $0.isUnconfirmed })
+        }
+    }
+    func testDifferentPlansWithSameRevisionRemainRejectedAtomically() throws {
+        var base = fixture()
+        base.tasks = [ScheduledTask(courseID: base.courses[0].id, start: now.addingTimeInterval(86400), durationMinutes: 60)]
+        var a = SyncLedger(); a.device = "same-plan-source"; try a.capture(base, now: now)
+        base.tasks[0].id = UUID()
+        var b = SyncLedger(); b.device = a.device; try b.capture(base, now: now)
+        let before = a.records, sequence = a.sequence
+        XCTAssertThrowsError(try a.mergeCloudSnapshot(b, now: now))
+        XCTAssertEqual(a.records, before)
+        XCTAssertEqual(a.sequence, sequence)
+    }
 }

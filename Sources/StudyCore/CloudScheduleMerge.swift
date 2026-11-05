@@ -5,9 +5,15 @@ public extension SyncLedger {
     /// one plan per shared course; completion rows still merge independently.
     mutating func mergeCloudSnapshot(_ remote: SyncLedger, now: Date = Date()) throws {
         let localState = try materialize(), remoteState = try remote.materialize()
+        var combined = self
+        try combined.merge(remote.changes(after: 0))
+        var state = try combined.materialize()
+        // Confirming a task changes the pending set without creating a new plan.
+        // Resolve confirmations first so identical drafts do not look ambiguous.
+        let confirmed = Set(state.tasks.filter { !$0.isUnconfirmed }.map(\.id))
         let localCourses = Set(localState.courses.map(\.id)), remoteCourses = Set(remoteState.courses.map(\.id))
         func plans(_ state: PlannerState) -> [UUID: Set<UUID>] {
-            Dictionary(grouping: state.tasks.filter(\.isUnconfirmed), by: \.courseID).mapValues { Set($0.map(\.id)) }
+            Dictionary(grouping: state.tasks.filter { $0.isUnconfirmed && !confirmed.contains($0.id) }, by: \.courseID).mapValues { Set($0.map(\.id)) }
         }
         let a = plans(localState), b = plans(remoteState)
         let shared = localCourses.intersection(remoteCourses)
@@ -38,10 +44,9 @@ public extension SyncLedger {
                 keep.formUnion(right.wins(over: left) ? b[course, default: []] : a[course, default: []])
             } else { keep.formUnion(av[course] != nil ? a[course, default: []] : b[course, default: []]) }
         }
-        try merge(remote.changes(after: 0))
-        var state = try materialize()
         state.tasks.removeAll { $0.isUnconfirmed && !keep.contains($0.id) }
         state.reconcileSavedSchedule(now: now)
-        try capture(state, now: now)
+        try combined.capture(state, now: now)
+        self = combined
     }
 }

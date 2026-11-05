@@ -62,5 +62,34 @@ public final class CloudMergeRegressionTests {
             check(f.remote.ledger.materialize().getJSONArray("courses").length()==1,"obsolete queued course reappeared on server");
         }
     }
-    public static void main(String[] args)throws Exception{fields();stalePlan();legacyReplacementAndOutbox();System.out.println("Cloud incident regressions: "+checks+" checks passed");}
+    static void confirmationOnly()throws Exception{
+        long time=1793880000000L;double now=time/1000.0-Planner.EPOCH;JSONObject base=SyncExchangeTests.fixture(now);
+        base.getJSONArray("courses").getJSONObject(0).put("autoScheduleEnabled",true).put("deadline",now+30*86400);
+        JSONArray availability=new JSONArray();for(int weekday=1;weekday<=7;weekday++)availability.put(new JSONObject().put("id",Planner.id()).put("weekday",weekday).put("startMinute",0).put("endMinute",1440));
+        base.getJSONObject("settings").put("availability",availability);
+        String course=base.getJSONArray("courses").getJSONObject(0).getString("id");
+        JSONObject studied=Planner.task(course,now-3600,60),future=Planner.task(course,now+86400,60);
+        base.put("tasks",new JSONArray().put(studied).put(future));
+        SyncLedger common=new SyncLedger();common.capture(base,time-7200000);
+        SyncLedger confirmed=copy(common);JSONObject edited=confirmed.materialize();Planner.confirm(edited,studied.getString("id"),60,now);confirmed.capture(edited,time);
+        for(SyncLedger[] pair:Arrays.asList(new SyncLedger[]{copy(confirmed),common},new SyncLedger[]{copy(common),confirmed})){
+            SyncLedger local=pair[0];local.mergeCloudSnapshot(pair[1],now);JSONObject result=local.materialize();
+            check(result.getJSONArray("completions").length()==1,"confirmation-only sync rejected or lost completion");
+            check(result.getJSONArray("tasks").length()==2,"confirmation-only sync changed the plan");
+            long sequence=local.sequence();local.mergeCloudSnapshot(pair[1],now);check(local.sequence()==sequence,"repeated confirmation sync did not converge");
+        }
+        SyncLedger undone=copy(confirmed);JSONObject undo=undone.materialize();Planner.undoConfirmation(undo,studied.getString("id"),now+60);undone.capture(undo,time+60000);
+        for(SyncLedger[] pair:Arrays.asList(new SyncLedger[]{copy(undone),confirmed},new SyncLedger[]{copy(confirmed),undone})){
+            pair[0].mergeCloudSnapshot(pair[1],now+60);JSONObject result=pair[0].materialize();
+            check(result.getJSONArray("completions").length()==0,"undo confirmation was lost");
+            check(SyncLedger.pendingPlans(result).get(course).contains(studied.getString("id")),"undone task no longer pending");
+        }
+        SyncLedger a=new SyncLedger();a.value.put("device","same-plan-source");a.capture(base,time);
+        JSONObject other=CourseTools.copy(base);other.getJSONArray("tasks").getJSONObject(0).put("id",Planner.id());
+        SyncLedger b=new SyncLedger();b.value.put("device","same-plan-source");b.capture(other,time);
+        String before=SyncLedger.canonical(a.value);boolean rejected=false;
+        try{a.mergeCloudSnapshot(b,now);}catch(IllegalStateException expected){rejected=true;}
+        check(rejected,"different plans with identical revision were accepted");check(before.equals(SyncLedger.canonical(a.value)),"rejected plan merge mutated local data");
+    }
+    public static void main(String[] args)throws Exception{fields();stalePlan();legacyReplacementAndOutbox();confirmationOnly();System.out.println("Cloud incident regressions: "+checks+" checks passed");}
 }
