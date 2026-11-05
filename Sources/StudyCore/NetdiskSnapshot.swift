@@ -74,10 +74,45 @@ public struct NetdiskSnapshot: Codable, Equatable, Sendable {
                 videoCount: Int, totalBytes: Int64, unknownDurations: Int, detection: String,
                 duplicates: NetdiskDuplicateSummary?, sourcePackageIDs: [String]? = nil) {
         self.pwdID = pwdID; self.shareTitle = shareTitle; self.folderPath = folderPath
-        self.sourceURL = sourceURL; self.fetchedAt = fetchedAt; self.videoCount = videoCount
+        self.sourceURL = NetdiskLink.publicURL(sourceURL); self.fetchedAt = fetchedAt; self.videoCount = videoCount
         self.totalBytes = totalBytes; self.unknownDurations = unknownDurations; self.detection = detection
         self.duplicates = duplicates
         self.sourcePackageIDs = sourcePackageIDs
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case pwdID, shareTitle, folderPath, sourceURL, fetchedAt, videoCount, totalBytes
+        case unknownDurations, detection, duplicates, sourcePackageIDs
+    }
+
+    public init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        self.init(pwdID: try values.decode(String.self, forKey: .pwdID),
+                  shareTitle: try values.decode(String.self, forKey: .shareTitle),
+                  folderPath: try values.decode(String.self, forKey: .folderPath),
+                  sourceURL: try values.decode(String.self, forKey: .sourceURL),
+                  fetchedAt: try values.decode(Date.self, forKey: .fetchedAt),
+                  videoCount: try values.decode(Int.self, forKey: .videoCount),
+                  totalBytes: try values.decode(Int64.self, forKey: .totalBytes),
+                  unknownDurations: try values.decode(Int.self, forKey: .unknownDurations),
+                  detection: try values.decode(String.self, forKey: .detection),
+                  duplicates: try values.decodeIfPresent(NetdiskDuplicateSummary.self, forKey: .duplicates),
+                  sourcePackageIDs: try values.decodeIfPresent([String].self, forKey: .sourcePackageIDs))
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var values = encoder.container(keyedBy: CodingKeys.self)
+        try values.encode(pwdID, forKey: .pwdID)
+        try values.encode(shareTitle, forKey: .shareTitle)
+        try values.encode(folderPath, forKey: .folderPath)
+        try values.encode(NetdiskLink.publicURL(sourceURL), forKey: .sourceURL)
+        try values.encode(fetchedAt, forKey: .fetchedAt)
+        try values.encode(videoCount, forKey: .videoCount)
+        try values.encode(totalBytes, forKey: .totalBytes)
+        try values.encode(unknownDurations, forKey: .unknownDurations)
+        try values.encode(detection, forKey: .detection)
+        try values.encodeIfPresent(duplicates, forKey: .duplicates)
+        try values.encodeIfPresent(sourcePackageIDs, forKey: .sourcePackageIDs)
     }
 }
 

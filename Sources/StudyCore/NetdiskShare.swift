@@ -152,6 +152,13 @@ public struct NetdiskLink: Equatable, Sendable {
         self.pwdID = pwdID; self.fragmentFID = fragmentFID; self.inAppPasscode = inAppPasscode
     }
 
+    /// Keep the public share/folder identity, never credentials or query parameters.
+    public static func publicURL(_ text: String) -> String {
+        guard let link = parse(text) else { return "" }
+        return "https://pan.quark.cn/s/" + link.pwdID
+            + (link.fragmentFID.map { "#/list/share/" + $0 } ?? "")
+    }
+
     public static func parse(_ text: String) -> NetdiskLink? {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return nil }

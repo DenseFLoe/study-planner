@@ -6,12 +6,25 @@ extension WebCourseIdentity {
         guard !data.isEmpty else { return data }
         guard let course = (try? JSONSerialization.jsonObject(with: data, options: [.fragmentsAllowed])) as? [String: Any] else { return data }
         var changed = false
+        func cleanNetdisk(_ metadata: [String: Any]) -> [String: Any] {
+            var result = metadata
+            if let source = metadata["sourceURL"] as? String {
+                let safe = NetdiskLink.publicURL(source)
+                if safe != source { result["sourceURL"] = safe; changed = true }
+            }
+            return result
+        }
         func clean(_ course: [String: Any]) -> [String: Any] {
             var result = course
-            if var web = course["webCourse"] as? [String: Any], let source = web["sourceURL"] as? String {
-                let safe = safeURL(source)
-                if safe != source { web["sourceURL"] = safe; result["webCourse"] = web; changed = true }
+            if var web = course["webCourse"] as? [String: Any] {
+                if let source = web["sourceURL"] as? String {
+                    let safe = safeURL(source)
+                    if safe != source { web["sourceURL"] = safe; changed = true }
+                }
+                if let netdisk = web["netdisk"] as? [String: Any] { web["netdisk"] = cleanNetdisk(netdisk) }
+                result["webCourse"] = web
             }
+            if let netdisk = course["netdisk"] as? [String: Any] { result["netdisk"] = cleanNetdisk(netdisk) }
             if let sources = course["mergedSources"] as? [[String: Any]] { result["mergedSources"] = sources.map(clean) }
             return result
         }
