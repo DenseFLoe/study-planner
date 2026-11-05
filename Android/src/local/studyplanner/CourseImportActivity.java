@@ -211,7 +211,27 @@ public class CourseImportActivity extends Activity {
         importButton.setEnabled(!capturing&&!previewing&&!delivering&&filterReady()&&!selected.isEmpty());
         previewButton.setEnabled(!capturing&&!previewing&&!delivering&&filterReady()&&!selected.isEmpty());
     }
-    void details(JSONObject snapshot){try{StringBuilder text=new StringBuilder(snapshot.getString("name"));JSONObject net=snapshot.optJSONObject("netdisk");if(net!=null){text.append("\n").append(net.optString("detection")).append("\n缺失时长估算：").append(net.optInt("unknownDurations")).append(" 节");JSONObject dup=net.optJSONObject("duplicates");if(dup!=null)for(String key:new String[]{"groups","relatedPackages","relatedCourses","requiresReview"})for(int i=0;i<dup.optJSONArray(key).length();i++)text.append("\n").append(dup.getJSONArray(key).getString(i));}JSONObject files=snapshot.optJSONObject("netdiskLessons");for(JSONObject lesson:Planner.list(snapshot.getJSONArray("lessons"))){text.append("\n\n").append(lesson.getString("name")).append("\n").append(lesson.optBoolean("published")?"已发布":"未发布").append(" · ").append(lesson.has("durationSeconds")?Math.ceil(lesson.optDouble("durationSeconds")/60)+" 分钟":"时长未知").append(" · 进度 ").append(lesson.has("watchedPercent")?lesson.optDouble("watchedPercent")+"%":"未知");if(files!=null){JSONObject file=files.optJSONObject(lesson.optString("id"));if(file!=null)text.append("\n").append(file.optString("path")).append(" · ").append(file.optLong("size")).append(" 字节").append(file.optBoolean("estimatedDuration")?" · 估算时长":"");}}message(text.toString());}catch(Exception error){message("课程信息不完整。");}}
+    void details(JSONObject snapshot){
+        LinearLayout form=column(),rows=column();form.setPadding(dp(16),dp(8),dp(16),dp(8));
+        TextView summary=label("正在整理课程信息…",13),position=label("",12);form.addView(summary);form.addView(position);
+        ScrollView scroll=new ScrollView(this);scroll.addView(rows);form.addView(scroll,new LinearLayout.LayoutParams(-1,dp(360)));
+        PlannerUi.Flow navigation=new PlannerUi.Flow(this);form.addView(navigation);
+        AlertDialog dialog=new AlertDialog.Builder(this).setTitle(snapshot.optString("name","课程详情")).setView(form).setPositiveButton("关闭",null).create();
+        CourseImportDetails[] details={null};int[] page={0};Button[] buttons=new Button[2];
+        Runnable render=()->{
+            rows.removeAllViews();CourseImportDetails current=details[0];if(current==null)return;
+            summary.setText(current.summary);page[0]=current.pageIndex(page[0]);
+            position.setText(current.count()==0?"尚无课节信息，请返回后重新读取目录。":"第 "+(page[0]+1)+" / "+current.pageCount()+" 页 · 每页最多 "+CourseImportDetails.PAGE_SIZE+" 条");
+            for(String line:current.page(page[0])){TextView row=label(line,14);row.setPadding(0,dp(8),0,dp(8));row.setTextIsSelectable(true);rows.addView(row);}
+            buttons[0].setEnabled(page[0]>0);buttons[1].setEnabled(page[0]+1<current.pageCount());scroll.scrollTo(0,0);
+        };
+        buttons[0]=button("上一页",()->{page[0]--;render.run();});buttons[1]=button("下一页",()->{page[0]++;render.run();});
+        for(Button button:buttons){button.setEnabled(false);navigation.addView(button);}
+        LatestWork<CourseImportDetails> work=new LatestWork<>(worker,this::runOnUiThread,value->{
+            if(isDestroyed()||!dialog.isShowing())return;details[0]=value;render.run();
+        },error->{if(!isDestroyed()&&dialog.isShowing())summary.setText("课程详情暂未读取成功，可关闭后重试；原选择仍保留。");});
+        dialog.setOnDismissListener(value->work.close());dialog.show();work.submit(()->new CourseImportDetails(snapshot));
+    }
     List<JSONObject> chosen()throws Exception{List<JSONObject> data=new ArrayList<>();for(JSONObject capture:captures)if(selected.contains(WebCourseImport.identity(capture))){if(capture.has("refusal")||WebCourseImport.problem(capture)!=null)throw new IllegalArgumentException("请选择完整课程。");data.add(capture);}if(data.isEmpty())throw new IllegalArgumentException("请先选择课程。");if(netdisk&&mergeSelected.isChecked())return Collections.singletonList(NetdiskImport.merge(data,mergedName.getText().toString()));return data;}
     double importDeadline(){return Planner.at(LocalDate.parse(deadline.getText().toString()),0);}
     void preview(){
