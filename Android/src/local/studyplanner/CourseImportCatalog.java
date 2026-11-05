@@ -7,6 +7,7 @@ import java.util.*;
 
 /** Public import catalog fields and selection counts; URL credentials never enter search text. */
 public final class CourseImportCatalog {
+    public static final int PAGE_SIZE=50;
     private static final java.util.regex.Pattern MARKS=java.util.regex.Pattern.compile("\\p{M}+");
     private static final java.util.regex.Pattern WORDS=java.util.regex.Pattern.compile("\\s+");
     private static String normalized(String value) {
@@ -40,9 +41,21 @@ public final class CourseImportCatalog {
     public static Set<String> retainedSelection(List<JSONObject> captures,Set<String> selected) {
         Set<String> ids=matchingSelectableIDs(captures,"");ids.retainAll(selected);return ids;
     }
+    public static List<JSONObject> filtered(List<JSONObject> captures,String query) {
+        List<JSONObject> result=new ArrayList<>();for(JSONObject capture:captures)if(matches(capture,query))result.add(capture);return result;
+    }
+    public static int pageCount(List<JSONObject> filtered) {return filtered.isEmpty()?1:(filtered.size()-1)/PAGE_SIZE+1;}
+    public static List<JSONObject> page(List<JSONObject> filtered,int index) {
+        int start=Math.max(0,Math.min(index,pageCount(filtered)-1))*PAGE_SIZE;
+        return new ArrayList<>(filtered.subList(start,start+Math.min(PAGE_SIZE,filtered.size()-start)));
+    }
     public static String summary(List<JSONObject> captures,Set<String> selected,String query) {
+        return summary(captures,selected,filtered(captures,query));
+    }
+    public static String summary(List<JSONObject> captures,Set<String> selected,List<JSONObject> filtered) {
         Set<String> known=new HashSet<>(),visible=new HashSet<>();
-        for(JSONObject snapshot:captures){String id=WebCourseImport.identity(snapshot);known.add(id);if(matches(snapshot,query))visible.add(id);}
+        for(JSONObject snapshot:captures)known.add(WebCourseImport.identity(snapshot));
+        for(JSONObject snapshot:filtered)visible.add(WebCourseImport.identity(snapshot));
         known.retainAll(selected);Set<String> hidden=new HashSet<>(known);hidden.removeAll(visible);
         return "显示 "+visible.size()+" / "+captures.size()+" 门 · 已选 "+known.size()+" 门"
             +(hidden.isEmpty()?"":"\n其中 "+hidden.size()+" 门在筛选之外，导入时会一并保存；可清除筛选查看，或点“只选搜索结果”。");

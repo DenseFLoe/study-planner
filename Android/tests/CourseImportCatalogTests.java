@@ -40,6 +40,18 @@ public final class CourseImportCatalogTests {
         check(CourseImportCatalog.retainedSelection(Collections.singletonList(course("alpha.test")),Collections.emptySet()).isEmpty(),"Refresh invented a selection");
         List<JSONObject> large=new ArrayList<>();for(int i=0;i<250;i++){JSONObject item=course("example.test").put("name","课程"+i).put("packageID","generic:"+i);large.add(item);}
         check(CourseImportCatalog.matchingSelectableIDs(large,"课程１３７ 第三章").equals(Collections.singleton(WebCourseImport.identity(large.get(137)))),"Large catalog search broadened selection");
+        for(int i=250;i<253;i++)large.add(course("example.test").put("name","课程"+i).put("packageID","generic:"+i));
+        List<JSONObject> filtered=CourseImportCatalog.filtered(large,"");
+        check(CourseImportCatalog.pageCount(filtered)==6,"Catalog page count wrong");
+        check(CourseImportCatalog.page(filtered,0).size()==50&&CourseImportCatalog.page(filtered,1).get(0)==large.get(50),"Page boundary changed order");
+        check(CourseImportCatalog.page(filtered,Integer.MAX_VALUE).size()==3,"Last page overflow or clamp failed");
+        check(CourseImportCatalog.page(filtered,Integer.MIN_VALUE).get(0)==large.get(0),"Negative page did not clamp");
+        check(CourseImportCatalog.page(Collections.emptyList(),99).isEmpty()&&CourseImportCatalog.pageCount(Collections.emptyList())==1,"Empty page failed");
+        List<JSONObject> copy=CourseImportCatalog.page(filtered,0);copy.clear();check(filtered.size()==253,"Page view mutated complete results");
+        Set<String> acrossPages=new HashSet<>();for(int page:new int[]{0,2})for(JSONObject item:CourseImportCatalog.page(filtered,page))acrossPages.add(WebCourseImport.identity(item));
+        check(acrossPages.size()==100&&CourseImportCatalog.summary(large,acrossPages,filtered).contains("已选 100 门"),"Cross-page selection count lost");
+        check(CourseImportCatalog.matchingSelectableIDs(large,"").size()==253,"Bulk selection was limited to a page");
+        check(CourseImportCatalog.filtered(large,"课程137").size()==1&&CourseImportCatalog.pageCount(CourseImportCatalog.filtered(large,"课程137"))==1,"Search did not reduce pages");
         System.out.println("Course import catalog: "+checks+" checks passed");
     }
 }

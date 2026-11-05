@@ -28,7 +28,11 @@ public class CourseImportActivity extends Activity {
     LinearLayout root, results;
     EditText address, passcode, folderLimit, fileLimit, query, deadline, mergedName;
     CheckBox autoRefresh, mergeSelected;
-    TextView status, selectionSummary;
+    TextView status, selectionSummary, resultPosition;
+    ScrollView resultsScroll;
+    Button previousResultPage, nextResultPage;
+    int resultPage;
+    List<JSONObject> filteredCaptures=Collections.emptyList();
     PlannerUi.Flow selectionActions;
     Button importButton, refreshButton;
     final Handler handler = new Handler();
@@ -77,13 +81,18 @@ public class CourseImportActivity extends Activity {
         actions.addView(autoRefresh);
         if(netdisk)actions.addView(button("分享目录",this::directory));
         root.addView(actions);
-        query=field(root,"搜索课程、课节、路径或网站","",false);query.addTextChangedListener(new TextWatcher(){public void beforeTextChanged(CharSequence s,int start,int count,int after){}public void onTextChanged(CharSequence s,int start,int before,int count){renderResults();}public void afterTextChanged(Editable s){}});
+        query=field(root,"搜索课程、课节、路径或网站","",false);query.addTextChangedListener(new TextWatcher(){public void beforeTextChanged(CharSequence s,int start,int count,int after){}public void onTextChanged(CharSequence s,int start,int before,int count){resultPage=0;renderResults();if(resultsScroll!=null)resultsScroll.scrollTo(0,0);}public void afterTextChanged(Editable s){}});
         selectionActions=new PlannerUi.Flow(this);
         selectionActions.addView(button("勾选搜索结果",()->selectMatches(true)));
         selectionActions.addView(button("取消搜索结果",()->selectMatches(false)));
         selectionActions.addView(button("只选搜索结果",()->{if(capturing||previewing||delivering)return;Set<String> ids=CourseImportCatalog.matchingSelectableIDs(captures,query.getText().toString());if(ids.isEmpty()){message("当前搜索结果中没有可导入课程，原选择已保留。");return;}selected.clear();selected.addAll(ids);renderResults();}));
         selectionActions.addView(button("清除筛选",()->query.setText("")));
-        root.addView(selectionActions);selectionSummary=label("尚未识别课程。",12);root.addView(selectionSummary);ScrollView scroll=new ScrollView(this);results=column();scroll.addView(results);root.addView(scroll,new LinearLayout.LayoutParams(-1,dp(240)));
+        root.addView(selectionActions);selectionSummary=label("尚未识别课程。",12);root.addView(selectionSummary);resultsScroll=new ScrollView(this);results=column();resultsScroll.addView(results);root.addView(resultsScroll,new LinearLayout.LayoutParams(-1,dp(240)));
+        resultPosition=label("",12);root.addView(resultPosition);PlannerUi.Flow resultNavigation=new PlannerUi.Flow(this);
+        previousResultPage=button("上一页课程",()->{resultPage--;renderResults();resultsScroll.scrollTo(0,0);});
+        nextResultPage=button("下一页课程",()->{resultPage++;renderResults();resultsScroll.scrollTo(0,0);});
+        previousResultPage.setEnabled(false);nextResultPage.setEnabled(false);
+        resultNavigation.addView(previousResultPage);resultNavigation.addView(nextResultPage);root.addView(resultNavigation);
         LinearLayout options=row();deadline=field(options,"新课程截止日期",LocalDate.now(Planner.ZONE).plusMonths(3).toString(),false);deadline.setFocusable(false);deadline.setOnClickListener(v->{LocalDate date;try{date=LocalDate.parse(deadline.getText().toString());}catch(Exception e){date=LocalDate.now(Planner.ZONE);}new DatePickerDialog(this,(picker,y,m,d)->deadline.setText(LocalDate.of(y,m+1,d).toString()),date.getYear(),date.getMonthValue()-1,date.getDayOfMonth()).show();});root.addView(options);
         if(netdisk){mergeSelected=new CheckBox(this);mergeSelected.setText("将所选目录合为一门课程");root.addView(mergeSelected);mergedName=field(root,"合并名称","合并课程",false);}
         PlannerUi.Flow bottom=new PlannerUi.Flow(this);
@@ -122,7 +131,7 @@ public class CourseImportActivity extends Activity {
     boolean matches(JSONObject snapshot,String term){return CourseImportCatalog.matches(snapshot,term);}
     void selectMatches(boolean select){if(capturing||previewing||delivering)return;Set<String> ids=CourseImportCatalog.matchingSelectableIDs(captures,query.getText().toString());if(select)selected.addAll(ids);else selected.removeAll(ids);renderResults();}
     boolean importable(JSONObject snapshot){return CourseImportCatalog.importable(snapshot);}
-    void updateSelectionSummary(){if(selectionSummary!=null)selectionSummary.setText(CourseImportCatalog.summary(captures,selected,query.getText().toString()));}
+    void updateSelectionSummary(){if(selectionSummary!=null)selectionSummary.setText(CourseImportCatalog.summary(captures,selected,filteredCaptures));}
     void groupChoices(){Map<String,List<JSONObject>> groups=new TreeMap<>();groups.put("全部课程",new ArrayList<>());for(JSONObject snapshot:captures)if(importable(snapshot)){groups.get("全部课程").add(snapshot);JSONObject net=snapshot.optJSONObject("netdisk");if(net==null)continue;String path=net.optString("folderPath"),parent="";String[] parts=path.split("/");for(int i=0;i<parts.length-1;i++){parent+= (parent.isEmpty()?"":"/")+parts[i];groups.computeIfAbsent(parent,k->new ArrayList<>()).add(snapshot);}}for(Map.Entry<String,List<JSONObject>> group:groups.entrySet()){if(group.getValue().isEmpty())continue;CheckBox check=new CheckBox(this);check.setText(group.getKey()+" · "+group.getValue().size()+" 门（批量选择）");boolean all=true;for(JSONObject snapshot:group.getValue())all&=selected.contains(WebCourseImport.identity(snapshot));check.setChecked(all);check.setEnabled(!capturing&&!previewing&&!delivering);check.setOnCheckedChangeListener((button,value)->{for(JSONObject snapshot:group.getValue()){if(value)selected.add(WebCourseImport.identity(snapshot));else selected.remove(WebCourseImport.identity(snapshot));}handler.post(this::renderResults);});results.addView(check);}}
 
     /** Evaluate a Promise in page memory and poll only its completed metadata envelope. */
@@ -146,7 +155,29 @@ public class CourseImportActivity extends Activity {
     void background(CaptureWork work){final int current=generation;worker.execute(()->{try{List<JSONObject> data=work.run();runOnUiThread(()->{if(current==generation&&!isDestroyed())accept(data);});}catch(Exception error){runOnUiThread(()->{if(current==generation&&!isDestroyed())failed("目录识别失败："+error.getMessage());});}});}
     void accept(List<JSONObject> values){try{String host=Uri.parse(browser.getUrl()==null?"":browser.getUrl()).getHost();if(!netdisk&&host!=null&&!WebsiteCapture.isYantuHost(host))captures=WebsiteCapture.merge(captures,values);else captures=values;Set<String> retained=CourseImportCatalog.retainedSelection(captures,selected);selected.clear();selected.addAll(retained);capturing=false;refreshButton.setEnabled(true);status.setText("识别到 "+captures.size()+" 门课程。请选择、核对课节与进度后导入；已有课程将保留完成流水。");if(values.isEmpty())status.setText(captures.isEmpty()?"尚未捕获可排程课节，请进入课程详情并展开章节，再重新抓取。":"本轮没有新的课程，已保留此前识别的课程。");renderResults();}catch(Exception error){failed("课程合并识别失败，请重试。");}}
     void failed(String message){capturing=false;failure=message;refreshButton.setEnabled(true);captures.clear();selected.clear();status.setText(message);renderResults();}
-    void renderResults(){if(results==null)return;results.removeAllViews();if(selectionActions!=null)for(int i=0;i<selectionActions.getChildCount();i++)selectionActions.getChildAt(i).setEnabled(!capturing&&!previewing&&!delivering);updateSelectionSummary();groupChoices();String term=query.getText().toString().trim().toLowerCase(Locale.ROOT);for(JSONObject snapshot:captures){if(!matches(snapshot,term))continue;String problem=snapshot.optString("refusal",WebCourseImport.problem(snapshot));CheckBox choice=new CheckBox(this);String id=WebCourseImport.identity(snapshot);String website=CourseImportCatalog.website(snapshot);choice.setText(snapshot.optString("name")+" · "+snapshot.optJSONArray("lessons").length()+" 课节"+(website.isEmpty()?"":"\n"+website)+(problem==null?"":"\n"+problem));choice.setEnabled(problem==null&&!capturing&&!previewing&&!delivering);choice.setChecked(selected.contains(id));choice.setOnCheckedChangeListener((button,checked)->{if(checked)selected.add(id);else selected.remove(id);updateSelectionSummary();importButton.setEnabled(!capturing&&!delivering&&!selected.isEmpty());});results.addView(choice);results.addView(button("查看课节与来源",()->details(snapshot)));JSONArray existing=snapshot.optJSONArray("existingCourses");if(existing!=null)for(JSONObject course:Planner.list(existing))results.addView(button("查看已有计划 · "+course.optString("name"),()->{setResult(RESULT_OK,new Intent().putExtra("courseID",course.optString("id")));finish();}));}importButton.setEnabled(!capturing&&!delivering&&!selected.isEmpty());}
+    void renderResults(){
+        if(results==null)return;
+        filteredCaptures=CourseImportCatalog.filtered(captures,query.getText().toString());
+        int pages=CourseImportCatalog.pageCount(filteredCaptures);
+        resultPage=Math.max(0,Math.min(resultPage,pages-1));
+        results.removeAllViews();
+        if(selectionActions!=null)for(int i=0;i<selectionActions.getChildCount();i++)selectionActions.getChildAt(i).setEnabled(!capturing&&!previewing&&!delivering);
+        updateSelectionSummary();groupChoices();
+        for(JSONObject snapshot:CourseImportCatalog.page(filteredCaptures,resultPage)){
+            String problem=snapshot.optString("refusal",WebCourseImport.problem(snapshot));
+            CheckBox choice=new CheckBox(this);String id=WebCourseImport.identity(snapshot),website=CourseImportCatalog.website(snapshot);
+            choice.setText(snapshot.optString("name")+" · "+snapshot.optJSONArray("lessons").length()+" 课节"+(website.isEmpty()?"":"\n"+website)+(problem==null?"":"\n"+problem));
+            choice.setEnabled(problem==null&&!capturing&&!previewing&&!delivering);choice.setChecked(selected.contains(id));
+            choice.setOnCheckedChangeListener((button,checked)->{if(checked)selected.add(id);else selected.remove(id);updateSelectionSummary();importButton.setEnabled(!capturing&&!delivering&&!selected.isEmpty());});
+            results.addView(choice);results.addView(button("查看课节与来源",()->details(snapshot)));
+            JSONArray existing=snapshot.optJSONArray("existingCourses");
+            if(existing!=null)for(JSONObject course:Planner.list(existing))results.addView(button("查看已有计划 · "+course.optString("name"),()->{setResult(RESULT_OK,new Intent().putExtra("courseID",course.optString("id")));finish();}));
+        }
+        if(resultPosition!=null)resultPosition.setText((filteredCaptures.isEmpty()?"没有匹配的课程。":"第 "+(resultPage+1)+" / "+pages+" 页 · 每页最多 "+CourseImportCatalog.PAGE_SIZE+" 门。")+" 批选作用于全部搜索结果，选择跨页保留。");
+        if(previousResultPage!=null)previousResultPage.setEnabled(resultPage>0);
+        if(nextResultPage!=null)nextResultPage.setEnabled(resultPage+1<pages);
+        importButton.setEnabled(!capturing&&!delivering&&!selected.isEmpty());
+    }
     void details(JSONObject snapshot){try{StringBuilder text=new StringBuilder(snapshot.getString("name"));JSONObject net=snapshot.optJSONObject("netdisk");if(net!=null){text.append("\n").append(net.optString("detection")).append("\n缺失时长估算：").append(net.optInt("unknownDurations")).append(" 节");JSONObject dup=net.optJSONObject("duplicates");if(dup!=null)for(String key:new String[]{"groups","relatedPackages","relatedCourses","requiresReview"})for(int i=0;i<dup.optJSONArray(key).length();i++)text.append("\n").append(dup.getJSONArray(key).getString(i));}JSONObject files=snapshot.optJSONObject("netdiskLessons");for(JSONObject lesson:Planner.list(snapshot.getJSONArray("lessons"))){text.append("\n\n").append(lesson.getString("name")).append("\n").append(lesson.optBoolean("published")?"已发布":"未发布").append(" · ").append(lesson.has("durationSeconds")?Math.ceil(lesson.optDouble("durationSeconds")/60)+" 分钟":"时长未知").append(" · 进度 ").append(lesson.has("watchedPercent")?lesson.optDouble("watchedPercent")+"%":"未知");if(files!=null){JSONObject file=files.optJSONObject(lesson.optString("id"));if(file!=null)text.append("\n").append(file.optString("path")).append(" · ").append(file.optLong("size")).append(" 字节").append(file.optBoolean("estimatedDuration")?" · 估算时长":"");}}message(text.toString());}catch(Exception error){message("课程信息不完整。");}}
     List<JSONObject> chosen()throws Exception{List<JSONObject> data=new ArrayList<>();for(JSONObject capture:captures)if(selected.contains(WebCourseImport.identity(capture))){if(capture.has("refusal")||WebCourseImport.problem(capture)!=null)throw new IllegalArgumentException("请选择完整课程。");data.add(capture);}if(data.isEmpty())throw new IllegalArgumentException("请先选择课程。");if(netdisk&&mergeSelected.isChecked())return Collections.singletonList(NetdiskImport.merge(data,mergedName.getText().toString()));return data;}
     double importDeadline(){return Planner.at(LocalDate.parse(deadline.getText().toString()),0);}
