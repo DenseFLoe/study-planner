@@ -289,6 +289,43 @@ struct CircularIconButtonStyle: ButtonStyle {
     }
 }
 
+/// Hover highlights the card; pressing its confirmation button has its own
+/// feedback. The ring and darker fill remain visible with Reduce Motion on.
+struct StudyConfirmationButtonStyle: ButtonStyle {
+    var tint: Color
+    var highlighted: Bool
+    var isConfirming: Bool
+    @Environment(\.isEnabled) private var isEnabled
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    func makeBody(configuration: Configuration) -> some View {
+        let pressed = configuration.isPressed && isEnabled
+        let filled = highlighted || pressed || isConfirming
+
+        configuration.label
+            .font(.system(size: 13, weight: .bold))
+            .frame(width: 30, height: 30)
+            .foregroundStyle(filled ? Color.white : tint)
+            .background {
+                Circle().fill(filled ? tint : Color.clear)
+                Circle().fill(Color.black.opacity(pressed ? 0.26 : 0))
+            }
+            .overlay {
+                Circle().strokeBorder(tint.opacity(filled ? 0 : 0.55), lineWidth: 1.5)
+                Circle().inset(by: 3).strokeBorder(Color.white.opacity(pressed ? 0.9 : 0), lineWidth: 1.5)
+            }
+            .scaleEffect(pressed && !reduceMotion ? 0.84 : 1)
+            .overlay {
+                Circle().strokeBorder(tint.opacity(pressed ? 0.65 : 0), lineWidth: 2)
+            }
+            .opacity(isEnabled || isConfirming ? 1 : 0.45)
+            .animation(reduceMotion ? nil : .easeOut(duration: 0.12), value: pressed)
+            // Keep the hit target stationary while the visible button compresses.
+            .frame(width: 30, height: 30)
+            .contentShape(Circle())
+    }
+}
+
 struct SoftButtonStyle: ButtonStyle {
     var prominent = false
     var horizontalPadding: CGFloat = 15

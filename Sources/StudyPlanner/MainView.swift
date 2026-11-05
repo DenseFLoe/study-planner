@@ -1201,6 +1201,7 @@ private struct DailyTaskTimeline: View {
     /// Identifies the settle in flight. A newer drag clears it, which is what keeps
     /// a stale completion from wiping the new drag's state.
     @State private var settleToken: UUID?
+    @State private var confirmingTaskID: UUID?
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     private var hitFrames: [UUID: CGRect] { frozenFrames ?? frames }
@@ -1219,14 +1220,23 @@ private struct DailyTaskTimeline: View {
                     item: item, course: item.task.flatMap { store.course($0.courseID) },
                     isSupervising: item.task.map { store.playbackSupervisor.isSupervising($0) } ?? false,
                     isLast: index == items.count - 1,
+                    isConfirming: confirmingTaskID == item.id,
+                    canConfirm: store.isReady && !store.orderSaveBusy && confirmingTaskID == nil,
                     confirm: { task in
+                        guard store.isReady, !store.orderSaveBusy, confirmingTaskID == nil else { return }
                         if Calendar.current.startOfDay(for: task.start) < Calendar.current.startOfDay(for: Date()) {
                             editTask(task)
-                        } else { Task { _ = await store.confirm(task, minutes: task.durationMinutes) } }
+                        } else {
+                            confirmingTaskID = task.id
+                            Task {
+                                defer { confirmingTaskID = nil }
+                                _ = await store.confirm(task, minutes: task.durationMinutes)
+                            }
+                        }
                     },
                     editTask: editTask, editEvent: editEvent, skipEvent: skipEvent,
                     canSkipEvent: canEdit && !store.orderSaveBusy,
-                    canReorder: canEdit && !store.orderSaveBusy && item.task != nil,
+                    canReorder: canEdit && !store.orderSaveBusy && confirmingTaskID == nil && item.task != nil,
                     targeted: target == item.id,
                     dragChanged: { point in dragChanged(item.id, point: point) },
                     dragEnded: { point in dragEnded(item.id, point: point) }
@@ -1330,6 +1340,8 @@ private struct TimelineRow: View {
     var course: Course?
     var isSupervising: Bool
     var isLast: Bool
+    var isConfirming: Bool
+    var canConfirm: Bool
     var confirm: (ScheduledTask) -> Void
     var editTask: (ScheduledTask) -> Void
     var editEvent: (FixedEvent) -> Void
@@ -1417,6 +1429,11 @@ private struct TimelineRow: View {
                         Text(item.task == nil ? (item.event?.title ?? "固定事项") : (course?.name ?? "已删除课程"))
                             .font(.system(size: 15, weight: .semibold))
                         if let task = item.task {
+                            if isConfirming {
+                                Text("正在确认…")
+                                    .font(.caption.weight(.semibold))
+                                    .foregroundStyle(tint)
+                            }
                             if isSupervising {
                                 Label("正在监督中…", systemImage: "eye.fill")
                                     .font(.caption.weight(.semibold))
@@ -1450,19 +1467,22 @@ private struct TimelineRow: View {
                     HStack(spacing: 13) {
                         if let task = item.task {
                             Button { confirm(task) } label: {
-                                Image(systemName: "checkmark")
-                                    .font(.system(size: 13, weight: .bold))
-                                    .frame(width: 30, height: 30)
-                                    .contentShape(Circle())
-                                    .foregroundStyle(hovering ? Color.white : tint)
-                                    .background(hovering ? tint : Color.clear, in: Circle())
-                                    .overlay(Circle().strokeBorder(tint.opacity(hovering ? 0 : 0.55), lineWidth: 1.5))
+                                if isConfirming {
+                                    ProgressView()
+                                        .controlSize(.small)
+                                        .environment(\.colorScheme, .dark)
+                                } else {
+                                    Image(systemName: "checkmark")
+                                }
                             }
-                            .buttonStyle(.plain)
+                            .buttonStyle(StudyConfirmationButtonStyle(tint: tint, highlighted: hovering, isConfirming: isConfirming))
+                            .disabled(!canConfirm)
                             .help(task.planningStart > Date() ? "提前完成此任务" : "确认全部完成")
                             .accessibilityLabel(task.planningStart > Date() ? "提前完成\(course?.name ?? "任务")" : "完成\(course?.name ?? "任务")")
+                            .accessibilityValue(isConfirming ? "正在确认" : "待确认")
                             Button { editTask(task) } label: { Image(systemName: "ellipsis") }
                                 .buttonStyle(.plain)
+                                .disabled(!canConfirm)
                                 .foregroundStyle(.secondary)
                                 .help("部分完成或未完成")
                         } else if let event = item.event {
