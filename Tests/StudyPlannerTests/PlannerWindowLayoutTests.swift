@@ -3,21 +3,37 @@ import XCTest
 
 final class PlannerWindowLayoutTests: XCTestCase {
     func testColumnsFoldBeforeCrowdingTheAgenda() {
-        let narrow = PlannerWindowLayout(width: 959)
+        let narrow = PlannerWindowLayout(width: 992)
         XCTAssertFalse(narrow.showsSidebar)
         XCTAssertFalse(narrow.showsInsights)
         XCTAssertFalse(narrow.compactAgenda)
 
-        let middle = PlannerWindowLayout(width: 960)
+        let middle = PlannerWindowLayout(width: 993)
         XCTAssertTrue(middle.showsSidebar)
         XCTAssertFalse(middle.showsInsights)
-        XCTAssertTrue(middle.compactAgenda)
+        XCTAssertFalse(middle.compactAgenda)
 
-        let wide = PlannerWindowLayout(width: 1280)
+        let beforeInsights = PlannerWindowLayout(width: 1323)
+        XCTAssertTrue(beforeInsights.showsSidebar)
+        XCTAssertFalse(beforeInsights.showsInsights)
+        XCTAssertFalse(beforeInsights.compactAgenda)
+
+        let wide = PlannerWindowLayout(width: 1324)
         XCTAssertTrue(wide.showsSidebar)
         XCTAssertTrue(wide.showsInsights)
-        XCTAssertTrue(wide.compactAgenda)
-        XCTAssertFalse(PlannerWindowLayout(width: 1324).compactAgenda)
+        XCTAssertFalse(wide.compactAgenda)
+        XCTAssertEqual(PlannerWindowLayout(width: PlannerTheme.referenceWindowWidth), wide)
+    }
+
+    func testAgendaOnlyCompactsAfterBothColumnsHaveFolded() {
+        for width in 680...1600 {
+            let layout = PlannerWindowLayout(width: Double(width))
+            XCTAssertEqual(layout.compactAgenda, width < 760, "window width: \(width)")
+            if layout.compactAgenda {
+                XCTAssertFalse(layout.showsSidebar)
+                XCTAssertFalse(layout.showsInsights)
+            }
+        }
     }
 
     func testLiveResizePublishesOnlyPresentationChanges() {
@@ -29,6 +45,6 @@ final class PlannerWindowLayoutTests: XCTestCase {
             if next != previous { changedWidths.append(width) }
             previous = next
         }
-        XCTAssertEqual(changedWidths, [760, 900, 960, 993, 1133, 1280, 1324])
+        XCTAssertEqual(changedWidths, [760, 900, 993, 1133, 1324])
     }
 }

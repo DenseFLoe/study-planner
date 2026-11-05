@@ -11,7 +11,7 @@ enum PlannerTheme {
     static let radius: CGFloat = 20
     static let compactRadius: CGFloat = 14
     static let pagePadding: CGFloat = 26
-    static let referenceWindowWidth: CGFloat = 1280
+    static let referenceWindowWidth = PlannerWindowLayout.insightsExpansionWidth
     static let spring = Animation.spring(response: 0.42, dampingFraction: 0.86)
     static let columnTransition = Animation.smooth(duration: 0.3)
 }
@@ -21,18 +21,23 @@ struct PlannerWindowLayout: Equatable {
     static let minimumWidth: CGFloat = 680
     static let sidebarWidth: CGFloat = 232
     static let insightsWidth: CGFloat = 330
+    // Match the reference agenda, including its 26 pt padding on each side.
+    // Secondary columns may appear only when this entire width still fits.
+    static let preferredAgendaWidth: CGFloat = 760
+    static let sidebarExpansionWidth = preferredAgendaWidth + sidebarWidth + 1
+    static let insightsExpansionWidth = sidebarExpansionWidth + insightsWidth + 1
     let showsSidebar: Bool
     let showsInsights: Bool
     let compactContent: Bool
     let compactAgenda: Bool
 
     init(width: CGFloat) {
-        showsSidebar = width >= 960
-        showsInsights = width >= PlannerTheme.referenceWindowWidth
+        showsSidebar = width >= Self.sidebarExpansionWidth
+        showsInsights = width >= Self.insightsExpansionWidth
         let contentWidth = width - (showsSidebar ? Self.sidebarWidth + 1 : 0)
         let agendaWidth = contentWidth - (showsInsights ? Self.insightsWidth + 1 : 0)
         compactContent = contentWidth < 900
-        compactAgenda = agendaWidth < 760
+        compactAgenda = agendaWidth < Self.preferredAgendaWidth
     }
 }
 

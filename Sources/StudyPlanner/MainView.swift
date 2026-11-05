@@ -229,8 +229,12 @@ struct MainView: View {
         switch page {
         case .calendar:
             HStack(spacing: 0) {
-                agenda.frame(maxWidth: .infinity, maxHeight: .infinity)
+                agenda.frame(maxWidth: PlannerWindowLayout.preferredAgendaWidth, maxHeight: .infinity)
                     .environment(\.plannerCompactContent, layout.compactAgenda)
+                    // Folding a panel must not stretch the cards into its old
+                    // slot. Keep their reference width until the window itself
+                    // is narrower, while retaining alignment with the header.
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
                 PlannerCollapsibleColumn(isExpanded: layout.showsInsights,
                                          width: PlannerWindowLayout.insightsWidth, edge: .trailing) { insightsPanel }
             }
