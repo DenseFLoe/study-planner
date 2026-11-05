@@ -138,6 +138,13 @@ public enum NetdiskSnapshotBuilder {
     /// Combines selected packages without losing each lesson's original file metadata.
     /// The ID depends on the member package IDs, so repeating the same merge updates one plan.
     public static func merge(_ sources: [Course], name: String, scan: NetdiskScan) -> Course? {
+        merge(sources, name: name, scan: scan, checkCancellation: {})
+    }
+
+    /// Read-only previews can stop during sorting; ordinary imports use the nonthrowing overload.
+    public static func merge(_ sources: [Course], name: String, scan: NetdiskScan,
+                             checkCancellation: () throws -> Void) rethrows -> Course? {
+        try checkCancellation()
         let title = name.trimmingCharacters(in: .whitespacesAndNewlines)
         let ids = sources.map(\.packageID).sorted()
         guard sources.count >= 2, Set(ids).count == sources.count, !title.isEmpty,
@@ -149,19 +156,24 @@ public enum NetdiskSnapshotBuilder {
         var seen = Set<String>()
         var lessons: [WebCourseLesson] = []
         var metadata: [String: NetdiskLessonMeta] = [:]
-        let orderedSources = sources.sorted { lhs, rhs in
+        let orderedSources = try sources.sorted { lhs, rhs in
+            try checkCancellation()
             let byName = NetdiskTitles.naturalCompare(lhs.name, rhs.name)
             return byName == .orderedSame ? lhs.packageID < rhs.packageID : byName == .orderedAscending
         }
         for source in orderedSources {
+            try checkCancellation()
             let byID = Dictionary(source.snapshot.lessons.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
-            let orderedLessons = LessonOrdering.intelligentIDs(source.snapshot.lessons).compactMap { byID[$0] }
-            for var lesson in orderedLessons where seen.insert(lesson.id).inserted {
+            let orderedIDs = try LessonOrdering.intelligentIDs(source.snapshot.lessons, checkCancellation: checkCancellation)
+            for id in orderedIDs {
+                try checkCancellation()
+                guard var lesson = byID[id], seen.insert(lesson.id).inserted else { continue }
                 if lesson.subject.isEmpty { lesson.subject = source.name }
                 lessons.append(lesson)
                 metadata[lesson.id] = source.lessons[lesson.id]
             }
         }
+        try checkCancellation()
         guard metadata.count == lessons.count else { return nil }
         let snapshot = WebCourseSnapshot(packageID: packageID, name: title, sourceURL: scan.sourceURL,
                                          fetchedAt: scan.fetchedAt, expectedOutlines: 1, fetchedOutlines: 1,

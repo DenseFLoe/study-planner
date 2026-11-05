@@ -3,17 +3,31 @@ import Foundation
 /// Keeps a user's order stable when a website refresh adds or removes lessons.
 public enum LessonOrdering {
     public static func intelligentIDs(_ lessons: [WebCourseLesson]) -> [String] {
-        intelligent(lessons.map {
+        intelligentIDs(lessons, checkCancellation: {})
+    }
+
+    public static func intelligentIDs(_ lessons: [WebCourseLesson],
+                                      checkCancellation: () throws -> Void) rethrows -> [String] {
+        try checkCancellation()
+        return try intelligent(lessons.map {
             LessonWorkItem(id: $0.id, name: $0.name, subject: $0.subject, stage: $0.stage,
                            chapter: $0.chapter, durationMinutes: 0, remainingMinutes: 0)
-        }).map(\.id)
+        }, checkCancellation: checkCancellation).map(\.id)
     }
     /// Build independent keys before comparing: pair-dependent heuristics can break sort transitivity.
     public static func intelligent(_ items: [LessonWorkItem]) -> [LessonWorkItem] {
-        let keyed = items.map { item in
-            (item: item, keys: [item.subject, item.stage, item.chapter, item.name].map(SortKey.init))
+        intelligent(items, checkCancellation: {})
+    }
+
+    public static func intelligent(_ items: [LessonWorkItem],
+                                   checkCancellation: () throws -> Void) rethrows -> [LessonWorkItem] {
+        try checkCancellation()
+        let keyed = try items.map { item in
+            try checkCancellation()
+            return (item: item, keys: [item.subject, item.stage, item.chapter, item.name].map(SortKey.init))
         }
-        return keyed.sorted { lhs, rhs in
+        return try keyed.sorted { lhs, rhs in
+            try checkCancellation()
             for (a, b) in zip(lhs.keys, rhs.keys) {
                 let comparison = a.compare(b)
                 if comparison != .orderedSame { return comparison == .orderedAscending }

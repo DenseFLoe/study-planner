@@ -175,6 +175,7 @@ struct NetdiskImportSheet: View {
     @State private var expandedGroups = Set<String>()
     @State private var mergeSelected = false
     @State private var mergeName = ""
+    @State private var mergePreview = NetdiskMergePreview()
     @State private var showMergedPreview = false
     @State private var deadline = Calendar.current.date(byAdding: .day, value: 90, to: Date())!
     @State private var message = ""
@@ -183,9 +184,12 @@ struct NetdiskImportSheet: View {
     private var chosen: [NetdiskSnapshotBuilder.Course] {
         reader.result?.courses.filter { selected.contains($0.packageID) && $0.refusal == nil } ?? []
     }
+    private var mergeRequest: NetdiskMergePreview.Request? {
+        guard mergeSelected, reader.result != nil else { return nil }
+        return .init(revision: reader.revision, selected: selected, name: mergeName)
+    }
     private var mergedCandidate: NetdiskSnapshotBuilder.Course? {
-        guard let result = reader.result else { return nil }
-        return NetdiskSnapshotBuilder.merge(chosen, name: mergeName, scan: result.scan)
+        mergePreview.candidate(for: mergeRequest)
     }
     private var importCandidates: [NetdiskSnapshotBuilder.Course] {
         if !mergeSelected { return chosen }
@@ -251,7 +255,10 @@ struct NetdiskImportSheet: View {
         .disabled(saving)
         .interactiveDismissDisabled(saving)
         .onAppear { reader.open(existingCourses: store.state.courses) }
-        .onDisappear { reader.stop() }
+        .onDisappear { mergePreview.cancel(); reader.stop() }
+        .onChange(of: mergeRequest, initial: true) { _, input in
+            mergePreview.update(input, courses: reader.result?.courses ?? [], scan: reader.result?.scan)
+        }
         .onChange(of: reader.revision) { _, _ in
             guard let result = reader.result else { return }
             let source = NetdiskLink.publicURL(result.scan.sourceURL)
@@ -370,6 +377,11 @@ struct NetdiskImportSheet: View {
                                 .frame(maxHeight: 180)
                             }
                             .font(.caption)
+                        } else if mergePreview.isUnavailable(for: mergeRequest) {
+                            Text("无法准备合并预览，请调整勾选或重新读取。")
+                                .font(.caption).foregroundStyle(.orange)
+                        } else {
+                            ProgressView("正在准备合并预览…").controlSize(.small)
                         }
                     }
                 }
