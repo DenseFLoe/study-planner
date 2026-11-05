@@ -69,8 +69,11 @@ final class DailyConsequencesView {
     String duration(int minutes){return minutes<60?minutes+" 分钟":app.hours(minutes);}
     String outcome(JSONObject value){switch(value.optString("kind")){
         case "heavy":return "能排入，但有 "+value.optInt("heavyDays")+" 天超出负担提醒线；最重一天 "+duration(value.optInt("peakMinutes"))+"。";
-        case "pending":return "暂未排入 "+duration(value.optInt("unplacedMinutes"))+"，完整排法仍待确认。";
-        case "shortage":return value.has("provenDeficit")?"已证实至少缺少 "+duration(value.optInt("provenDeficit"))+"；涉及 "+names(value.optJSONArray("courseNames"))+"。":"已证实缺少能放下 "+value.optInt("minimumContinuousMinutes")+" 分钟内容的连续空档。";
+        case "pending":return "暂未排入 "+duration(value.optInt("unplacedMinutes"))+"，完整排法仍待确认，不等于客观上学不完。";
+        case "shortage":
+            if(value.has("provenDeficit"))return "已证实至少缺少 "+value.optLong("provenDeficit")+" 分钟；涉及 "+names(value.optJSONArray("courseNames"))+"。";
+            if(value.optJSONObject("restConflict")!=null)return ScheduleRestConflict.explanation(value.optJSONObject("restConflict"))+"\n"+ScheduleRestConflict.recovery();
+            return value.has("minimumContinuousMinutes")?"已证实缺少能放下 "+value.optInt("minimumContinuousMinutes")+" 分钟内容的连续空档。":"已确认存在时间约束冲突，请重新排程查看具体原因。";
         default:return "仍可按期排入；后续最重一天 "+duration(value.optInt("peakMinutes"))+"。";
     }}
     static String names(JSONArray a){StringJoiner out=new StringJoiner("、");if(a!=null)for(int i=0;i<a.length();i++)out.add(a.optString(i));return out.toString();}

@@ -17,12 +17,15 @@ final class ScheduleHealth {
         boolean bounded=false;Set<LocalDate> starts=new TreeSet<>(),ends=new TreeSet<>();starts.add(today);
         for(JSONObject c:courses){LocalDate start=Planner.day(c.optDouble("startDate")),end=Planner.day(c.optDouble("deadline"));starts.add(start.isAfter(today)?start:today);ends.add(end);if(end.isAfter(horizon))bounded=true;}
         if(!bounded){
-            // Ignoring breaks and floating occupancy is an optimistic capacity upper bound.
-            for(LocalDate start:starts)for(LocalDate end:ends){int needed=0,upper=0;JSONArray names=new JSONArray();
+            // Ignore floating occupancy; count only rest that must fall inside
+            // hard windows. History has already reserved its own rest there.
+            for(LocalDate start:starts)for(LocalDate end:ends){long needed=0,upper=0,blocks=0,windows=0;JSONArray names=new JSONArray();
                 for(JSONObject c:courses){LocalDate from=Planner.day(c.optDouble("startDate"));if(from.isBefore(today))from=today;
-                    if(!from.isBefore(start)&&!Planner.day(c.optDouble("deadline")).isAfter(end)){needed+=required.get(c.optString("id"));names.put(c.optString("name"));}}
-                for(Planner.Day day:hard)if(!day.d.isBefore(start)&&!day.d.isAfter(end))for(Planner.Span span:day.free)upper+=span.minutes();
+                    if(!from.isBefore(start)&&!Planner.day(c.optDouble("deadline")).isAfter(end)){needed+=required.get(c.optString("id"));blocks+=work.get(c.optString("id")).size();names.put(c.optString("name"));}}
+                for(Planner.Day day:hard)if(!day.d.isBefore(start)&&!day.d.isAfter(end))for(Planner.Span span:day.free)if(span.minutes()>0){upper+=span.minutes();windows++;}
                 if(needed>upper)conflicts.put(new JSONObject().put("windowStart",Planner.at(start,0)).put("deadline",Planner.at(end,0)).put("requiredMinutes",needed).put("availableMinutes",upper).put("provenDeficit",needed-upper).put("courseNames",names));
+                else {JSONObject rest=ScheduleRestConflict.diagnose(needed,blocks,upper,windows);
+                    if(rest!=null)conflicts.put(new JSONObject().put("windowStart",Planner.at(start,0)).put("deadline",Planner.at(end,0)).put("requiredMinutes",needed).put("availableMinutes",upper).put("courseNames",names).put("restConflict",rest));}
             }
             for(JSONObject c:courses){int longest=0;for(Planner.Day day:hard)if(Planner.eligible(c,day.d))for(Planner.Span span:day.free)longest=Math.max(longest,span.minutes());
                 for(Planner.Work item:work.get(c.optString("id")))if(item.minutes>longest){conflicts.put(new JSONObject().put("windowStart",Math.max(Planner.at(today,0),c.optDouble("startDate"))).put("deadline",c.optDouble("deadline")).put("requiredMinutes",item.minutes).put("availableMinutes",longest).put("minimumContinuousMinutes",item.minutes).put("courseNames",new JSONArray().put(c.optString("name"))));break;}
@@ -55,8 +58,8 @@ final class ScheduleHealth {
     }
     static JSONObject outcome(JSONObject state,double now,int warning) throws Exception {
         JSONObject result=assess(state,now,warning),proof=null;
-        for(JSONObject conflict:Planner.list(array(state,"androidConflicts")))if(proof==null||conflict.optInt("provenDeficit")>proof.optInt("provenDeficit"))proof=conflict;
-        if(proof!=null){for(String key:new String[]{"provenDeficit","minimumContinuousMinutes","courseNames"})if(proof.has(key))result.put(key,proof.get(key));}
+        for(JSONObject conflict:Planner.list(array(state,"androidConflicts")))if(proof==null||conflict.optLong("provenDeficit")>proof.optLong("provenDeficit"))proof=conflict;
+        if(proof!=null){for(String key:new String[]{"provenDeficit","minimumContinuousMinutes","restConflict","courseNames"})if(proof.has(key))result.put(key,proof.get(key));}
         return result;
     }
     static String title(String kind){switch(kind){case "heavy":return "能按期排完 · 学习负担偏重";case "pending":return "当前方案还没排好";case "shortage":return "已确认存在时间约束冲突";default:return "已安排 · 仍可按期完成";}}

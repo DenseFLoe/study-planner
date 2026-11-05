@@ -29,8 +29,8 @@ public final class DailyConsequenceTests {
         check(ScheduleHealth.assess(state,NOW,180).getString("kind").equals("heavy"),"Heavy day not distinguished");
         check(ScheduleHealth.assess(state,NOW,240).getString("kind").equals("scheduled"),"Display threshold did not change health");
         JSONObject pending=state(60,60);pending.getJSONObject("settings").put("availability",new JSONArray().put(PlannerTests.window(2,480,600)));Planner.replan(pending,NOW);
-        check(ScheduleHealth.assess(pending,NOW,480).getString("kind").equals("pending"),"Unplaced block falsely proved impossible");
-        check(pending.getJSONArray("androidConflicts").length()==0,"Break-only failure falsely became proof");
+        check(ScheduleHealth.assess(pending,NOW,480).getString("kind").equals("shortage"),"Proven rest conflict not distinguished");
+        check(ScheduleHealth.outcome(pending,NOW,480).getJSONObject("restConflict").getInt("minimumRestMinutes")==15,"Rest budget missing from daily outcome");
         JSONObject shortage=state(90,90);shortage.getJSONObject("settings").put("availability",new JSONArray().put(PlannerTests.window(2,480,600)));Planner.replan(shortage,NOW);
         check(ScheduleHealth.outcome(shortage,NOW,480).getInt("provenDeficit")==60,"Conservative deficit incorrect");
         JSONObject continuous=state(90);continuous.getJSONObject("settings").put("availability",new JSONArray().put(PlannerTests.window(2,480,540)).put(PlannerTests.window(2,600,660)));Planner.replan(continuous,NOW);

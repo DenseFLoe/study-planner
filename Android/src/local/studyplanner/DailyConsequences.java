@@ -8,6 +8,9 @@ import java.util.*;
 /** Pure local projections. They never change the shared planner state or real progress. */
 final class DailyConsequences {
     static final int[] FRACTIONS={0,250,500,750,1000};
+    // Separate from the input revision: updating diagnosis must not reset the
+    // captured daily goal, baseline, credited progress or celebration history.
+    static final int FORECAST_REVISION=1;
     static final class CalculationException extends ArithmeticException {
         CalculationException(){super("学习分钟数合计超出可计算范围，原记录已保留。");}
     }
@@ -68,7 +71,7 @@ final class DailyConsequences {
         JSONObject baseline=baseline(state,now);
         JSONObject entry=new JSONObject().put("id",Planner.id()).put("date",Planner.at(today,0)).put("capturedAt",now).put("revision",revision(state,warning))
             .put("warningMinutes",warning).put("goalMinutes",goal).put("confirmedAtCapture",credited).put("capturedRecords",CourseTools.copyValue(state.getJSONArray("completions")))
-            .put("plannedToday",CourseTools.copyValue(new JSONArray(planned))).put("baseline",baseline).put("forecasts",new JSONArray()).put("celebrated",new JSONArray());
+            .put("plannedToday",CourseTools.copyValue(new JSONArray(planned))).put("baseline",baseline).put("forecasts",new JSONArray()).put("forecastRevision",FORECAST_REVISION).put("celebrated",new JSONArray());
         for(int f:fractions(entry))if(achieved(entry,f,credited))entry.getJSONArray("celebrated").put(f);return entry;
     }
     static JSONObject baseline(JSONObject state,double now) throws Exception {
@@ -100,6 +103,9 @@ final class DailyConsequences {
                 Set<Integer> celebrated=integers(entry.getJSONArray("celebrated"));for(int f:fractions(next))if(achieved(next,f,next.optInt("confirmedAtCapture")))celebrated.add(f);next.put("celebrated",new JSONArray(celebrated));}
             List<JSONObject> days=Planner.list(journal.getJSONArray("days"));days.removeIf(d->Planner.day(d.optDouble("date")).equals(date)||Planner.day(d.optDouble("date")).isBefore(date.minusDays(13)));days.add(next);journal.put("days",new JSONArray(days));entry=next;animate=false;
         }
+        // Only today's derived forecasts are recalculated. Previous days remain
+        // the original reports, and a restart at this revision reuses the cache.
+        if(entry.optInt("forecastRevision")!=FORECAST_REVISION)entry.put("forecasts",new JSONArray()).put("forecastRevision",FORECAST_REVISION);
         Set<Integer> celebrated=integers(entry.getJSONArray("celebrated")),newly=new HashSet<>();
         for(int f:fractions(entry))if(achieved(entry,f,actual)&&celebrated.add(f)&&animate)newly.add(f);
         entry.put("celebrated",new JSONArray(celebrated));return new Update(entry,actual,newly);

@@ -91,5 +91,26 @@ public final class DailyConsequenceControllerTests {
             check(controller.today!=null&&controller.confirmed==30&&controller.todayError==null,"Worker recovery blocked by refresh cache");
         }finally{controller.close();cleanup(folder);}
     }
-    public static void main(String[] args)throws Exception{lifecycle();yesterdayAndReview();workerRefreshRecovery();System.out.println("PASS "+checks+" real-controller lifecycle, independent-day, stale-callback and unchanged-disk checks (UI doubles)");}
+    static void restForecastUpgrade()throws Exception{
+        Path folder=Files.createTempDirectory("daily-controller-rest-");MainActivity app=new MainActivity(folder.toFile());DailyConsequenceController controller=new DailyConsequenceController(app);
+        try{
+            LocalDate day=DailyConsequenceTests.DAY;double now=DailyConsequenceTests.NOW;
+            JSONObject state=DailyConsequenceTests.state(30),future=DailyConsequenceTests.state(60,60).getJSONArray("courses").getJSONObject(0);
+            future.put("startDate",Planner.at(day.plusDays(1),0)).put("deadline",Planner.at(day.plusDays(1),0));state.getJSONArray("courses").put(future);
+            state.getJSONObject("settings").put("availability",new JSONArray().put(PlannerTests.window(2,480,510)).put(PlannerTests.window(3,480,600)));
+            Planner.replan(state,now);JSONObject entry=DailyConsequences.capture(state,state,now,480);entry.remove("forecastRevision");
+            for(int fraction:DailyConsequences.fractions(entry))entry.getJSONArray("forecasts").put(new JSONObject().put("fraction",fraction).put("firstDay",new JSONObject().put("kind","pending")));
+            String id=entry.getString("id"),baseline=DailyConsequences.canonical(entry.getJSONObject("baseline")),before=DailyConsequences.canonical(state);
+            controller.journal=new JSONObject().put("version",1).put("days",new JSONArray().put(entry));controller.persist();
+            calculate(controller,state,now);
+            check(controller.todayError==null&&controller.today!=null&&!controller.calculating,"Forecast upgrade did not finish");
+            check(controller.today.getString("id").equals(id)&&controller.today.getInt("goalMinutes")==30,"Upgrade recaptured goal or identity");
+            JSONObject completed=null;for(JSONObject f:Planner.list(controller.today.getJSONArray("forecasts")))if(f.getInt("fraction")==1000)completed=f;
+            check(completed!=null&&completed.getJSONObject("firstDay").getJSONObject("restConflict").getInt("minimumRestMinutes")==15,"Controller kept stale cached pending result");
+            check(DailyConsequences.canonical(controller.today.getJSONObject("baseline")).equals(baseline)&&DailyConsequences.canonical(state).equals(before),"Upgrade changed baseline or real state");
+            JSONObject saved=controller.repository.load();
+            check(saved.getJSONArray("days").getJSONObject(0).similar(controller.today),"Upgraded forecast not persisted");
+        }finally{controller.close();cleanup(folder);}
+    }
+    public static void main(String[] args)throws Exception{lifecycle();yesterdayAndReview();workerRefreshRecovery();restForecastUpgrade();System.out.println("PASS "+checks+" real-controller lifecycle, forecast upgrade, independent-day, stale-callback and unchanged-disk checks (UI doubles)");}
 }

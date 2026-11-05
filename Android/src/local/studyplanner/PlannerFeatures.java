@@ -10,7 +10,7 @@ final class PlannerFeatures {
   if(health.optInt("remainingMinutes")>0){
    LinearLayout box=app.card(app.body);String kind=health.optString("kind");int tint=kind.equals("shortage")?0xffbd3333:kind.equals("scheduled")?0xff126346:0xff874b00;
    box.addView(app.text(ScheduleHealth.title(kind),17,tint));
-   box.addView(app.text(kind.equals("pending")?"尚未找到完整排法，不等于客观上学不完。请查看未排入内容和可调整时段。":kind.equals("shortage")?"已发现总时长或连续空档无法满足的硬约束，请查看具体原因。":"截止日期保持不变；科目混排和倍率会在需要时让步。",15,app.muted));
+   box.addView(app.text(kind.equals("pending")?"尚未找到完整排法，不等于客观上学不完。请查看未排入内容和可调整时段。":kind.equals("shortage")?"已发现总时长、连续空档或课间休息无法满足的硬约束，请查看具体原因。":"截止日期保持不变；科目混排和倍率会在需要时让步。",15,app.muted));
    box.addView(app.text("剩余学习量 "+app.hours(health.optInt("remainingMinutes"))+" · 暂未排入 "+app.hours(health.optInt("unplacedMinutes")),15,app.ink));
    if(health.optInt("pausedMinutes")>0)box.addView(app.text("暂停自动排程 "+app.hours(health.optInt("pausedMinutes"))+"，恢复后再核对。",15,app.muted));
    box.addView(app.text("后续最重一天 "+app.hours(health.optInt("peakMinutes"))+" · 有安排的日均 "+app.hours(health.optInt("averageMinutes"))+"\n"+health.optInt("heavyDays")+" 天超过每日负担提醒线",15,app.ink));
@@ -28,7 +28,8 @@ final class PlannerFeatures {
  void healthDetails(JSONObject health)throws Exception{
   StringBuilder details=new StringBuilder();
   for(JSONObject proof:Planner.list(ScheduleHealth.array(app.state,"androidConflicts"))){details.append(Planner.date(proof.optDouble("windowStart"))).append(" 至 ").append(Planner.date(proof.optDouble("deadline"))).append(" · ").append(DailyConsequencesView.names(proof.optJSONArray("courseNames"))).append("\n");
-   if(proof.has("provenDeficit"))details.append("已证实至少缺少 ").append(proof.optInt("provenDeficit")).append(" 分钟；需要 ").append(proof.optInt("requiredMinutes")).append("，乐观容量上界 ").append(proof.optInt("availableMinutes"));
+   if(proof.has("provenDeficit"))details.append("已证实至少缺少 ").append(proof.optLong("provenDeficit")).append(" 分钟；需要 ").append(proof.optLong("requiredMinutes")).append("，乐观容量上界 ").append(proof.optLong("availableMinutes"));
+   else if(proof.optJSONObject("restConflict")!=null)details.append(ScheduleRestConflict.explanation(proof.optJSONObject("restConflict"))).append("\n").append(ScheduleRestConflict.recovery());
    else details.append("需要连续 ").append(proof.optInt("minimumContinuousMinutes")).append(" 分钟，最长空档只有 ").append(proof.optInt("availableMinutes")).append(" 分钟");details.append("\n\n");}
   for(JSONObject day:Planner.list(health.getJSONArray("recovery")))details.append("待补内容 · ").append(Planner.date(day.optDouble("date"))).append(" · ").append(day.optInt("plannedMinutes")).append(" 分钟\n");
   details.append("\n每日预排 / 可用分钟\n");for(JSONObject day:Planner.list(ScheduleHealth.array(app.state,"androidDayPlans")))if(day.optInt("plannedMinutes")>0)details.append(Planner.date(day.optDouble("date"))).append(" · ").append(day.optInt("plannedMinutes")).append(" / ").append(day.optInt("availableMinutes")).append("\n");
