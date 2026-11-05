@@ -18,17 +18,42 @@ public struct FixedEventOccurrenceEdit: Sendable {
     public let reviewed: FixedEvent
     public let day: Date
     public let skipped: Bool
-    public init(reviewed: FixedEvent, on day: Date, skipped: Bool) {
+    /// Consent to skip only these reviewed occupants while restoring this day.
+    public let reviewedConflicts: [FixedEventConflict]?
+    public init(reviewed: FixedEvent, on day: Date, skipped: Bool,
+                reviewedConflicts: [FixedEventConflict]? = nil) {
         self.reviewed = reviewed; self.day = day; self.skipped = skipped
+        self.reviewedConflicts = reviewedConflicts
     }
     public func apply(to state: inout PlannerState, now: Date, calendar: Calendar = .current) throws {
+        guard !skipped || reviewedConflicts == nil else { throw FixedEventEditError.reviewChanged }
         guard let current = state.fixedEvents.first(where: { $0.id == reviewed.id }),
               current.title == reviewed.title, current.startMinute == reviewed.startMinute,
               current.endMinute == reviewed.endMinute, current.floatingDurationMinutes == reviewed.floatingDurationMinutes,
               current.occurs(on: day, calendar: calendar, includingExcluded: true),
               reviewed.occurs(on: day, calendar: calendar, includingExcluded: true)
         else { throw FixedEventEditError.occurrenceChanged }
-        try state.setFixedEventSkipped(id: reviewed.id, on: day, skipped: skipped, now: now, calendar: calendar)
+        var next = state
+        do {
+            try next.setFixedEventSkipped(id: reviewed.id, on: day, skipped: skipped, now: now, calendar: calendar)
+        } catch let PlannerError.fixedConflict(conflicts) {
+            guard let reviewedConflicts, conflicts == reviewedConflicts else {
+                throw PlannerError.fixedConflict(conflicts)
+            }
+            let date = calendar.startOfDay(for: day)
+            guard !conflicts.isEmpty, conflicts.allSatisfy({ $0.date == date && $0.reason != .activeTask }) else {
+                throw FixedEventEditError.reviewChanged
+            }
+            // Recheck before changing any exclusions, and publish both sides
+            // together. Never split the recurring rule or cancel another day.
+            for conflict in conflicts {
+                try next.setFixedEventSkipped(id: conflict.eventID, on: date, skipped: true, now: now, calendar: calendar)
+            }
+            try next.setFixedEventSkipped(id: reviewed.id, on: date, skipped: false, now: now, calendar: calendar)
+        }
+        // If the conflict has disappeared (or another peer already restored the
+        // occurrence), no reviewed occupant needs to be skipped.
+        state = next
     }
 }
 

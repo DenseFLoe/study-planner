@@ -355,15 +355,27 @@ final class PlannerStore {
         await change { try $0.removeFixedEvent(reviewed: event) }
     }
     func setEventSkipped(_ event: FixedEvent, on day: Date, skipped: Bool) async {
-        let edit = FixedEventOccurrenceEdit(reviewed: event, on: day, skipped: skipped), now = Date()
-        pendingEventConflicts = nil
-        let saved = await commit(state, replan: true, now: now, fixedOccurrenceEdit: edit) {
-            try edit.apply(to: &$0, now: now)
-            return $0.replan(now: now)
-        }
+        let saved = await saveEventOccurrence(.init(reviewed: event, on: day, skipped: skipped))
         if !saved, let conflicts = pendingEventConflicts, !conflicts.isEmpty {
             errorMessage = "本日安排未恢复：" + PlannerError.fixedConflict(conflicts).localizedDescription
             pendingEventConflicts = nil
+        }
+    }
+    func restoreEventOccurrence(_ event: FixedEvent, on day: Date,
+                                reviewedConflicts: [FixedEventConflict]? = nil) async -> Bool {
+        await saveEventOccurrence(.init(reviewed: event, on: day, skipped: false, reviewedConflicts: reviewedConflicts))
+    }
+    private func saveEventOccurrence(_ edit: FixedEventOccurrenceEdit) async -> Bool {
+        pendingEventConflicts = nil
+        let now = Date()
+        if edit.reviewedConflicts != nil {
+            // A refreshed review may already describe newer on-disk occupants
+            // than the UI snapshot. Validate at the transaction boundary.
+            return await commit(state, replan: false, now: now, fixedOccurrenceEdit: edit)
+        }
+        return await commit(state, replan: true, now: now, fixedOccurrenceEdit: edit) {
+            try edit.apply(to: &$0, now: now)
+            return $0.replan(now: now)
         }
     }
     func confirm(_ task: ScheduledTask, minutes: Int, studyDate: Date? = nil, now: Date = Date()) async -> Bool {

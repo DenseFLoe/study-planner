@@ -12,6 +12,7 @@ enum EditorSheet: Identifiable {
     case scheduleSearch
     case websiteSource(UUID)
     case course(Course), lessonOrder(Course), fixed(FixedEvent), completion(ScheduledTask), review, risks, mergeCourses
+    case restoreOccurrence(FixedEvent, Date, [FixedEventConflict])
 
     var id: String {
         switch self {
@@ -20,6 +21,7 @@ enum EditorSheet: Identifiable {
         case .course(let course): "course\(course.id)"
         case .lessonOrder(let course): "lessonOrder\(course.id)"
         case .fixed(let event): "fixed\(event.id)"
+        case .restoreOccurrence(let event, let day, _): "restore\(event.id)-\(day.timeIntervalSince1970)"
         case .completion(let task): "task\(task.id)"
         case .review: "review"
         case .risks: "risks"
@@ -143,6 +145,8 @@ struct MainView: View {
                 case .course(let course): CourseEditor(store: store, course: course)
                 case .lessonOrder(let course): LessonOrderEditor(store: store, course: course)
                 case .fixed(let event): FixedEventEditor(store: store, event: event)
+                case .restoreOccurrence(let event, let day, let conflicts):
+                    FixedOccurrenceConflictReview(store: store, event: event, day: day, conflicts: conflicts)
                 case .completion(let task): CompletionEditor(store: store, task: task)
                 case .review: DailyReviewView(store: store)
                 case .risks:
@@ -523,7 +527,13 @@ struct MainView: View {
                             }
                             Spacer()
                             Button("恢复本日并重排", systemImage: "arrow.uturn.backward") {
-                                Task { await store.setEventSkipped(event, on: selectedDay, skipped: false) }
+                                let day = selectedDay
+                                Task {
+                                    if !(await store.restoreEventOccurrence(event, on: day)),
+                                       let conflicts = store.pendingEventConflicts, !conflicts.isEmpty {
+                                        sheet = .restoreOccurrence(event, day, conflicts)
+                                    }
+                                }
                             }
                             .disabled(!canChangeDayEvents)
                         }

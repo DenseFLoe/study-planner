@@ -76,4 +76,32 @@ final class EventConflictSaveTests: XCTestCase {
         var copy = state
         try copy.setFixedEventSkipped(id: local.id, on: day, skipped: false, now: Date(), calendar: calendar)
     }
+
+    @MainActor func testOccurrenceRecoveryWriteFailureKeepsBothSidesAndCanRetry() async throws {
+        let day = Calendar.current.date(byAdding: .day, value: 1, to: Calendar.current.startOfDay(for: Date()))!
+        let target = FixedEvent(title: "待恢复", startMinute: 540, endMinute: 600,
+                                startDate: day, endDate: day, excludedDates: [day])
+        var original = PlannerState()
+        original.fixedEvents = [target, .init(title: "占用", startMinute: 550, endMinute: 580, startDate: day, endDate: day)]
+        let plan = original.replan(now: Date()), repo = Repository()
+        let store = PlannerStore(state: original, repository: repo, result: plan)
+        let initial = await store.restoreEventOccurrence(target, on: day)
+        XCTAssertFalse(initial)
+        let reviewed = try XCTUnwrap(store.pendingEventConflicts)
+        repo.fails = true
+        let failed = await store.restoreEventOccurrence(target, on: day, reviewedConflicts: reviewed)
+        XCTAssertFalse(failed)
+        XCTAssertEqual(store.state, original)
+        XCTAssertEqual(store.result.tasks, plan.tasks)
+        XCTAssertNil(repo.saved)
+        XCTAssertNil(store.pendingEventConflicts)
+        XCTAssertNotNil(store.errorMessage)
+        repo.fails = false
+        let saved = await store.restoreEventOccurrence(target, on: day, reviewedConflicts: reviewed)
+        XCTAssertTrue(saved)
+        XCTAssertTrue(store.state.fixedEvents[0].excludedDates.isEmpty)
+        XCTAssertEqual(store.state.fixedEvents[1].excludedDates, [day])
+        XCTAssertEqual(repo.saved, store.state)
+        XCTAssertNil(store.errorMessage)
+    }
 }

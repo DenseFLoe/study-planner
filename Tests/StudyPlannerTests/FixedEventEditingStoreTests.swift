@@ -18,12 +18,22 @@ final class FixedEventEditingStoreTests: XCTestCase {
             if let incoming { try local.save(incoming) }
             return try await local.saveFixedEventForInteraction(edit, from: baseline, now: now)
         }
+        @MainActor func saveFixedOccurrenceForInteraction(_ edit: FixedEventOccurrenceEdit,
+                                                         from baseline: PlannerState, now: Date) async throws -> PlannerState {
+            if let incoming { try local.save(incoming) }
+            return try await local.saveFixedOccurrenceForInteraction(edit, from: baseline, now: now)
+        }
     }
     private func fixture() -> PlannerState {
         let day = Calendar.current.date(byAdding: .day, value: 2, to: Calendar.current.startOfDay(for: Date()))!
         var state = PlannerState()
         state.fixedEvents = [FixedEvent(title: "Original", startMinute: 540, endMinute: 600, startDate: day, endDate: day)]
         return state
+    }
+    private func canonical(_ value: PlannerState) -> PlannerState {
+        var result = value
+        result.fixedEvents.sort { $0.id.uuidString < $1.id.uuidString }
+        return result
     }
 
     @MainActor func testOldEditorPreservesRemoteInputsInPublishedAndPersistedState() async throws {
@@ -103,5 +113,60 @@ final class FixedEventEditingStoreTests: XCTestCase {
         XCTAssertTrue(saved)
         XCTAssertEqual(store.state.fixedEvents.count, 2)
         XCTAssertEqual(store.state.fixedEvents.first { $0.id == baseline.fixedEvents[0].id }?.excludedDates, [incoming.startDate])
+    }
+
+    @MainActor func testOccurrenceRecoveryRefreshesDiskConflictsAndAcceptsTheNewReview() async throws {
+        var baseline = fixture()
+        let day = baseline.fixedEvents[0].startDate
+        baseline.fixedEvents[0].excludedDates = [day]
+        baseline.fixedEvents.append(.init(title: "待核对占用", startMinute: 550, endMinute: 580, startDate: day, endDate: day))
+        let target = baseline.fixedEvents[0]
+        let repo = try RacingRepository(baseline)
+        let store = PlannerStore(state: baseline, repository: repo, result: ScheduleEngine().assessSavedPlan(state: baseline, now: Date()))
+        let initial = await store.restoreEventOccurrence(target, on: day)
+        XCTAssertFalse(initial)
+        let reviewed = try XCTUnwrap(store.pendingEventConflicts)
+        XCTAssertNil(store.errorMessage)
+        XCTAssertEqual(store.state, baseline)
+        var remote = baseline
+        remote.fixedEvents[1].title = "同步后的占用"
+        remote.fixedEvents[0].notes = "保留的新备注"
+        repo.incoming = remote
+        let rejected = await store.restoreEventOccurrence(target, on: day, reviewedConflicts: reviewed)
+        XCTAssertFalse(rejected)
+        XCTAssertEqual(canonical(try repo.load()), canonical(remote))
+        XCTAssertEqual(store.state, baseline)
+        let refreshed = try XCTUnwrap(store.pendingEventConflicts)
+        XCTAssertEqual(refreshed.first?.title, "同步后的占用")
+        let accepted = await store.restoreEventOccurrence(target, on: day, reviewedConflicts: refreshed)
+        XCTAssertTrue(accepted)
+        XCTAssertEqual(canonical(try repo.load()), canonical(store.state))
+        let restored = try XCTUnwrap(store.state.fixedEvents.first { $0.id == target.id })
+        XCTAssertEqual(restored.notes, "保留的新备注")
+        XCTAssertTrue(restored.excludedDates.isEmpty)
+        XCTAssertEqual(store.state.fixedEvents.first { $0.id == baseline.fixedEvents[1].id }?.excludedDates, [day])
+        XCTAssertNil(store.pendingEventConflicts)
+        XCTAssertNil(store.errorMessage)
+        XCTAssertFalse(store.orderSaveBusy)
+    }
+
+    @MainActor func testOccurrenceRecoveryRejectsChangedTargetAndPublishesLatestState() async throws {
+        var baseline = fixture()
+        let day = baseline.fixedEvents[0].startDate
+        baseline.fixedEvents[0].excludedDates = [day]
+        baseline.fixedEvents.append(.init(title: "占用", startMinute: 550, endMinute: 580, startDate: day, endDate: day))
+        let repo = try RacingRepository(baseline)
+        let store = PlannerStore(state: baseline, repository: repo, result: ScheduleEngine().assessSavedPlan(state: baseline, now: Date()))
+        let initial = await store.restoreEventOccurrence(baseline.fixedEvents[0], on: day)
+        XCTAssertFalse(initial)
+        let reviewed = try XCTUnwrap(store.pendingEventConflicts)
+        var remote = baseline; remote.fixedEvents[0].startMinute += 5
+        repo.incoming = remote
+        let saved = await store.restoreEventOccurrence(baseline.fixedEvents[0], on: day, reviewedConflicts: reviewed)
+        XCTAssertFalse(saved)
+        XCTAssertEqual(canonical(store.state), canonical(remote))
+        XCTAssertEqual(canonical(try repo.load()), canonical(remote))
+        XCTAssertNil(store.pendingEventConflicts)
+        XCTAssertTrue(store.errorMessage?.contains("这一天的固定事项已更新") == true)
     }
 }

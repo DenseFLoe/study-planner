@@ -3,6 +3,44 @@ import StudyCore
 @testable import StudyPersistence
 
 final class FixedEventTransactionTests: XCTestCase {
+    func testReviewedOccurrenceRecoveryRechecksOccupantsBeforeWritingAnyExclusions() throws {
+        let repository = try LocalRepository(inMemory: true), now = Date()
+        var baseline = fixture()
+        let day = baseline.fixedEvents[0].startDate
+        baseline.fixedEvents[0].excludedDates = [day]
+        baseline.fixedEvents.append(.init(title: "占用", startMinute: 550, endMinute: 580, startDate: day, endDate: day))
+        let target = baseline.fixedEvents[0]
+        var probe = baseline, conflicts: [FixedEventConflict] = []
+        do { try probe.setFixedEventSkipped(id: target.id, on: day, skipped: false, now: now) }
+        catch let PlannerError.fixedConflict(found) { conflicts = found }
+        XCTAssertEqual(conflicts.count, 1)
+        let edit = FixedEventOccurrenceEdit(reviewed: target, on: day, skipped: false, reviewedConflicts: conflicts)
+        var latest = baseline
+        latest.fixedEvents[1].title = "新的占用"
+        try repository.save(latest)
+        let records = try repository.loadLedger().records
+        XCTAssertThrowsError(try repository.saveFixedOccurrence(edit, now: now))
+        XCTAssertEqual(try repository.loadLedger().records, records)
+        XCTAssertEqual(canonical(try repository.load()), canonical(latest))
+
+        // Non-scheduling updates do not invalidate the reviewed occurrence.
+        latest.fixedEvents[1].title = baseline.fixedEvents[1].title
+        latest.fixedEvents[0].notes = "同步的新备注"
+        try repository.save(latest)
+        let saved = try repository.saveFixedOccurrence(edit, now: now)
+        latest.fixedEvents[0].excludedDates = []
+        latest.fixedEvents[1].excludedDates = [day]
+        XCTAssertEqual(canonical(saved), canonical(latest))
+        XCTAssertEqual(canonical(try repository.load()), canonical(saved))
+        XCTAssertEqual(canonical(try repository.loadLedger().materialize()), canonical(saved))
+    }
+
+    private func canonical(_ value: PlannerState) -> PlannerState {
+        var result = value
+        result.fixedEvents.sort { $0.id.uuidString < $1.id.uuidString }
+        return result
+    }
+
     func testOccurrenceTransactionRejectsChangedTimeAndNewRestoreConflict() throws {
         let repository = try LocalRepository(inMemory: true), baseline = fixture(), now = Date()
         let event = baseline.fixedEvents[0], day = event.startDate
