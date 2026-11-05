@@ -9,6 +9,8 @@ public struct DailyConsequenceOutcome: Codable, Equatable, Sendable {
     public var provenDeficit: Int?
     public var continuousMinutes: Int?
     public var courseNames: [String]
+    /// Optional so reports saved before rest proofs remain readable.
+    public var restConflict: ScheduleRestConflict? = nil
 }
 
 public struct DailyConsequenceForecast: Codable, Equatable, Sendable, Identifiable {
@@ -220,7 +222,8 @@ public struct DailyConsequenceAnalyzer: Sendable {
         let proof = result.conflicts.max { ($0.provenDeficit ?? 0) < ($1.provenDeficit ?? 0) }
         return .init(kind: kind, peakMinutes: health?.peakMinutes ?? 0, heavyDays: health?.heavyDays ?? 0,
                      unplacedMinutes: health?.unscheduledMinutes ?? 0, provenDeficit: proof?.provenDeficit,
-                     continuousMinutes: proof?.minimumContinuousMinutes, courseNames: proof?.courseNames ?? [])
+                     continuousMinutes: proof?.minimumContinuousMinutes, courseNames: proof?.courseNames ?? [],
+                     restConflict: proof?.restConflict)
     }
 
     private func credit(_ minutes: Int, courseID: UUID, lessonID: String?, state: inout PlannerState) throws {

@@ -834,17 +834,24 @@ public struct ScheduleEngine: Sendable {
                   (immediate.map { calendar.isDate($0.start, inSameDayAs: day.date) ? $0.durationMinutes : 0 } ?? 0),
                   plannedMinutes: tasks.filter { calendar.isDate($0.start, inSameDayAs: day.date) }.reduce(0) { $0 + $1.durationMinutes })
         }
-        // Ignoring floating occupancy and breaks gives an optimistic upper bound.
-        // Only a deficit against that bound is a proven shortage.
+        // Ignore floating occupancy for an optimistic bound. Count only breaks
+        // that must fall inside the remaining hard windows, never the arbitrary
+        // unbooked amount or rests already reserved around retained history.
         if !courses.contains(where: { calendar.startOfDay(for: $0.deadline) > horizon }) {
             for start in Set([today] + courses.map { max(today, calendar.startOfDay(for: $0.startDate)) }).sorted() {
                 for end in Set(courses.map { calendar.startOfDay(for: $0.deadline) }).sorted() {
                     let group = courses.filter { max(today, calendar.startOfDay(for: $0.startDate)) >= start && calendar.startOfDay(for: $0.deadline) <= end }
                     let needed = group.reduce(0) { $0 + required[$1.id, default: 0] }
-                    let upper = hardDays.filter { $0.date >= start && $0.date <= end }.reduce(0) { $0 + $1.free.reduce(0) { $0 + $1.minutes } }
+                    let windows = hardDays.filter { $0.date >= start && $0.date <= end }.flatMap(\.free).filter { $0.minutes > 0 }
+                    let upper = windows.reduce(0) { $0 + $1.minutes }
                     if needed > upper {
                         result.conflicts.append(.init(windowStart: start, deadline: end, requiredMinutes: needed,
                                                       availableMinutes: upper, courseNames: group.map(\.name)))
+                    } else if let rest = ScheduleRestConflict.diagnose(
+                        studyMinutes: needed, blockCount: group.reduce(0) { $0 + allWork[$1.id, default: []].count },
+                        availableMinutes: upper, windowCount: windows.count) {
+                        result.conflicts.append(.init(windowStart: start, deadline: end, requiredMinutes: needed,
+                                                      availableMinutes: upper, courseNames: group.map(\.name), restConflict: rest))
                     }
                 }
             }

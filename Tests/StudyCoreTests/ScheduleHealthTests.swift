@@ -47,7 +47,12 @@ final class ScheduleHealthTests: XCTestCase {
         XCTAssertEqual(assess(value, threshold: 240).1.status, .scheduled)
     }
     func testUnbookedAmountIsNotAProvenCapacityDeficit() {
-        let (result, health) = assess(state([60,60], end: 600))
+        // Two separate windows have enough total minutes and each can hold a
+        // lesson, but the five-minute external gap cannot supply a full break.
+        // The conservative rest bound deliberately leaves this case unresolved.
+        var value = state([60,60], end: 540)
+        value.settings.availability.append(.init(weekday: 2, startMinute: 545, endMinute: 605))
+        let (result, health) = assess(value)
         XCTAssertEqual(health.unscheduledMinutes, 60)
         XCTAssertTrue(result.conflicts.isEmpty)
         XCTAssertEqual(health.status, .pending)

@@ -7,8 +7,11 @@ public struct ScheduleConstraintConflict: Sendable, Equatable {
     public var availableMinutes: Int
     public var courseNames: [String]
     public var minimumContinuousMinutes: Int? = nil
+    public var restConflict: ScheduleRestConflict? = nil
     /// A lower bound, not the scheduler's arbitrary unbooked amount.
-    public var provenDeficit: Int? { minimumContinuousMinutes == nil ? max(0, requiredMinutes - availableMinutes) : nil }
+    public var provenDeficit: Int? {
+        minimumContinuousMinutes == nil && restConflict == nil ? max(0, requiredMinutes - availableMinutes) : nil
+    }
 }
 
 public struct ScheduleDayPlan: Sendable, Equatable, Identifiable {
@@ -44,7 +47,7 @@ public struct ScheduleHealth: Sendable {
         case .scheduled: "剩余学习量已全部排入，截止日期保持不变。"
         case .heavy: "已有完整课表，但部分日期学习时间较长。请查看每天的负担。"
         case .pending: "尚未找到完整排法，不等于客观上学不完。请查看未排入内容和可调整的时段。"
-        case .shortage: "已发现总时长或连续空档无法满足的硬约束。请查看具体原因。"
+        case .shortage: "已发现总时长、连续空档或课间休息无法满足的硬约束。请查看具体原因。"
         }
     }
 }

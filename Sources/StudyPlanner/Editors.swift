@@ -564,7 +564,12 @@ struct RiskView: View {
                     ForEach(Array(store.result.conflicts.enumerated()), id: \.offset) { _, conflict in
                         VStack(alignment: .leading, spacing: 8) {
                             Text("已确认的约束冲突 · 截止 \(conflict.deadline.formatted(date: .abbreviated, time: .omitted))").font(.headline)
-                            if let continuous = conflict.minimumContinuousMinutes {
+                            if let rest = conflict.restConflict {
+                                Text("核对范围：\(conflict.windowStart.formatted(date: .abbreviated, time: .omitted)) 起")
+                                Text(rest.explanation)
+                                Text(rest.recovery).font(.callout)
+                                Button("查看此日事项与空档") { reviewEvents(conflict.windowStart) }
+                            } else if let continuous = conflict.minimumContinuousMinutes {
                                 Text("有一块内容需要连续 \(continuous) 分钟，现有最长连续空档只有 \(conflict.availableMinutes) 分钟。")
                             } else {
                                 Text("\(conflict.windowStart.formatted(date: .abbreviated, time: .omitted)) 起需要 \(hours(conflict.requiredMinutes))，即使暂不扣除浮动事项和课间休息，最多也只有 \(hours(conflict.availableMinutes))。")
@@ -609,6 +614,8 @@ struct RiskView: View {
                         if !health.dayPlans.isEmpty {
                             GroupBox("未来每日学习量 · 不含课间休息") {
                                 LazyVStack(spacing: 8) {
+                                    Text("负担提醒线只影响提醒；调高它不会增加可用时间，也不会缩短 15 分钟课间休息。")
+                                        .font(.caption).foregroundStyle(.secondary)
                                     ForEach(health.dayPlans) { day in
                                         LabeledContent(day.date.formatted(date: .abbreviated, time: .omitted), value: hours(day.plannedMinutes))
                                             .foregroundStyle(day.plannedMinutes > dailyLoadWarningMinutes ? Color.orange : Color.primary)

@@ -215,10 +215,14 @@ private struct ConsequenceOutcomeText: View {
         case .pending:
             Text("暂未排入 \(hours(outcome.unplacedMinutes))，完整排法仍待确认。").font(.caption).foregroundStyle(.orange)
         case .shortage:
-            if let minutes = outcome.provenDeficit {
+            if let rest = outcome.restConflict {
+                Text(rest.explanation).font(.caption).foregroundStyle(.red)
+            } else if let minutes = outcome.provenDeficit {
                 Text("已证实至少缺少 \(hours(minutes))；涉及 \(outcome.courseNames.joined(separator: "、"))。").font(.caption).foregroundStyle(.red)
+            } else if let minutes = outcome.continuousMinutes {
+                Text("已证实缺少能放下 \(minutes) 分钟内容的连续空档。").font(.caption).foregroundStyle(.red)
             } else {
-                Text("已证实缺少能放下 \(outcome.continuousMinutes ?? 0) 分钟内容的连续空档。").font(.caption).foregroundStyle(.red)
+                Text("已确认存在时间约束冲突，请查看排程情况中的具体原因。").font(.caption).foregroundStyle(.red)
             }
         }
     }
