@@ -145,7 +145,7 @@ public class CourseImportActivity extends Activity {
     void directory(){
         if(directory==null){message("请先读取分享目录。");return;}
         final JSONObject scan=directory;
-        showImportDetails(scan.optString("shareTitle","分享目录"),"搜索文件名、目录路径、视频或不可用条目",()->CourseImportDetails.directory(scan));
+        showImportDetails(scan.optString("shareTitle","分享目录"),"搜索文件名、目录路径、视频或不可用条目",false,()->CourseImportDetails.directory(scan));
     }
     boolean matches(JSONObject snapshot,String term){return CourseImportCatalog.matches(snapshot,term);}
     void selectMatches(boolean select){if(capturing||previewing||delivering||!filterReady())return;Set<String> ids=searchResult.selectableIDs;if(select)selected.addAll(ids);else selected.removeAll(ids);renderResults();}
@@ -240,11 +240,12 @@ public class CourseImportActivity extends Activity {
         previewButton.setEnabled(!capturing&&!previewing&&!delivering&&filterReady()&&!selected.isEmpty());
     }
     void details(JSONObject snapshot){
-        showImportDetails(snapshot.optString("name","课程详情"),"搜索课节、章节、文件路径或识别提示",()->new CourseImportDetails(snapshot));
+        showImportDetails(snapshot.optString("name","课程详情"),"搜索课节、章节、文件路径或识别提示",true,()->new CourseImportDetails(snapshot));
     }
-    void showImportDetails(String title,String searchHint,LatestWork.Work<CourseImportDetails> prepare){
+    void showImportDetails(String title,String searchHint,boolean allowReview,LatestWork.Work<CourseImportDetails> prepare){
         LinearLayout form=column(),rows=column();form.setPadding(dp(16),dp(8),dp(16),dp(8));
         EditText search=field(form,searchHint,"",false);
+        CheckBox reviewOnly=new CheckBox(this);reviewOnly.setText("只看需核对课节");reviewOnly.setEnabled(false);if(allowReview)form.addView(reviewOnly);
         TextView summary=label("正在整理详情…",13),position=label("",12);form.addView(summary);form.addView(position);
         ScrollView scroll=new ScrollView(this);scroll.addView(rows);form.addView(scroll,new LinearLayout.LayoutParams(-1,dp(360)));
         PlannerUi.Flow navigation=new PlannerUi.Flow(this);form.addView(navigation);
@@ -261,15 +262,15 @@ public class CourseImportActivity extends Activity {
         buttons[0]=button("上一页",()->{page[0]--;render.run();});buttons[1]=button("下一页",()->{page[0]++;render.run();});
         for(Button button:buttons){button.setEnabled(false);navigation.addView(button);}
         LatestWork<CourseImportDetails> work=new LatestWork<>(worker,this::runOnUiThread,value->{
-            if(isDestroyed()||!dialog.isShowing())return;details[0]=value;render.run();
+            if(isDestroyed()||!dialog.isShowing())return;details[0]=value;reviewOnly.setEnabled(allowReview&&value.reviewCount>0);render.run();
         },error->{if(!isDestroyed()&&dialog.isShowing())summary.setText("详情暂未读取成功，可关闭后重试；原选择仍保留。");});
         Runnable[] pending={null};
         Runnable load=()->{
             work.clear();if(pending[0]!=null)handler.removeCallbacks(pending[0]);
             details[0]=null;page[0]=0;rows.removeAllViews();position.setText("正在筛选详情…");
             for(Button button:buttons)button.setEnabled(false);
-            final String term=search.getText().toString();
-            pending[0]=()->work.submit(()->{if(catalog[0]==null)catalog[0]=prepare.run();return catalog[0].find(term);});
+            final String term=search.getText().toString();final boolean only=allowReview&&reviewOnly.isChecked();
+            pending[0]=()->work.submit(()->{if(catalog[0]==null)catalog[0]=prepare.run();return catalog[0].find(term,only);});
             handler.postDelayed(pending[0],150);
         };
         search.addTextChangedListener(new TextWatcher(){
@@ -277,7 +278,8 @@ public class CourseImportActivity extends Activity {
             public void onTextChanged(CharSequence value,int start,int before,int count){load.run();}
             public void afterTextChanged(Editable value){}
         });
-        navigation.addView(button("清除筛选",()->search.setText("")));
+        reviewOnly.setOnCheckedChangeListener((button,checked)->load.run());
+        navigation.addView(button("清除筛选",()->{reviewOnly.setChecked(false);search.setText("");}));
         dialog.setOnDismissListener(value->{work.close();if(pending[0]!=null)handler.removeCallbacks(pending[0]);});dialog.show();load.run();
     }
     List<JSONObject> chosen()throws Exception{List<JSONObject> data=new ArrayList<>();for(JSONObject capture:captures)if(selected.contains(WebCourseImport.identity(capture))){if(capture.has("refusal")||WebCourseImport.problem(capture)!=null)throw new IllegalArgumentException("请选择完整课程。");data.add(capture);}if(data.isEmpty())throw new IllegalArgumentException("请先选择课程。");if(netdisk&&mergeSelected.isChecked())return Collections.singletonList(NetdiskImport.merge(data,mergedName.getText().toString()));return data;}

@@ -69,6 +69,29 @@ public final class CourseImportDetailsTests {
         JSONArray directoryRows=new JSONArray();for(int i=0;i<5001;i++)directoryRows.put(new JSONObject().put("name","视频"+i+".mp4").put("relativePath","资料/视频"+i+".mp4"));
         CourseImportDetails largeDirectory=CourseImportDetails.directory(new JSONObject().put("entries",directoryRows));
         check(largeDirectory.pageCount()==201&&largeDirectory.find("视频５０００.mp4").count()==1,"Large directory was truncated or unsearchable");
+        JSONArray reviewLessons=new JSONArray();
+        for(int i=0;i<8;i++)reviewLessons.put(new JSONObject().put("id","review"+i).put("name","检查"+i)
+            .put("published",true).put("requiresDuration",true).put("durationSeconds",60).put("watchedPercent",25));
+        reviewLessons.getJSONObject(0).put("name","名称中含需核对，但数据有效");
+        reviewLessons.getJSONObject(1).remove("watchedPercent");reviewLessons.getJSONObject(1).put("markedFinished",true);
+        reviewLessons.getJSONObject(2).put("published",false).remove("durationSeconds");reviewLessons.getJSONObject(2).remove("watchedPercent");
+        reviewLessons.getJSONObject(3).put("requiresDuration",false).remove("durationSeconds");reviewLessons.getJSONObject(3).remove("watchedPercent");
+        reviewLessons.getJSONObject(4).put("id","duplicate");reviewLessons.getJSONObject(5).put("id","duplicate");
+        reviewLessons.getJSONObject(6).put("durationSeconds",0);reviewLessons.getJSONObject(7).remove("id");
+        JSONObject reviewSnapshot=new JSONObject().put("lessons",reviewLessons);String reviewBefore=SyncLedger.canonical(reviewSnapshot);
+        CourseImportDetails review=new CourseImportDetails(reviewSnapshot),problems=review.find("",true);
+        check(review.reviewCount==5&&problems.count()==5&&problems.totalCount==8,"Review-only mode did not distinguish actual validation problems from lesson names");
+        check(problems.page(0).get(0).startsWith("2. 检查1")&&problems.page(0).get(4).startsWith("8. 检查7"),"Problem filtering changed the original lesson numbers");
+        check(review.find("检查1",true).count()==1&&review.find("检查2",true).count()==0&&review.find("检查3",true).count()==0,"Problem search treated unpublished or non-timed lessons as missing required data");
+        String finished=review.find("检查1",true).page(0).get(0);
+        check(finished.contains("网站标记已完成")&&finished.contains("进度 未知")&&finished.contains("缺少观看进度")&&!finished.contains("100.0%"),"Website completion marker fabricated measured progress");
+        check(review.find("标识重复",true).count()==2&&review.find("时长无效",true).count()==1&&review.find("标识缺失",true).count()==1,"Invalid or duplicate fields were hidden");
+        check(review.find("",false).count()==8&&SyncLedger.canonical(reviewSnapshot).equals(reviewBefore),"Review filtering altered course data or could not restore all rows");
+        check(directory.find("",true).count()==0,"Directory availability was mistaken for a malformed course lesson");
+        for(Object invalid:new Object[]{-1,101,"invalid"}){
+            JSONObject invalidLesson=new JSONObject().put("id","invalid").put("published",false).put("watchedPercent",invalid);
+            check(new CourseImportDetails(new JSONObject().put("lessons",new JSONArray().put(invalidLesson))).find("观看进度无效",true).count()==1,"Invalid optional progress escaped review");
+        }
         System.out.println("Course import details: "+checks+" checks passed");
     }
 }
