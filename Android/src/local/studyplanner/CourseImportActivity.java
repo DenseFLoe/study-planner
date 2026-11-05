@@ -31,7 +31,8 @@ public class CourseImportActivity extends Activity {
     TextView status, selectionSummary, resultPosition;
     ScrollView resultsScroll;
     Button previousResultPage, nextResultPage;
-    int resultPage;
+    int resultPage, groupPage;
+    boolean groupChoicesExpanded;
     List<JSONObject> filteredCaptures=Collections.emptyList();
     CourseImportCatalog.SearchResult searchResult;
     LatestWork<CourseImportCatalog.SearchResult> searchWork;
@@ -95,11 +96,11 @@ public class CourseImportActivity extends Activity {
         actions.addView(autoRefresh);
         if(netdisk)actions.addView(button("分享目录",this::directory));
         root.addView(actions);
-        query=field(root,"搜索课程、课节、路径或网站","",false);query.addTextChangedListener(new TextWatcher(){public void beforeTextChanged(CharSequence s,int start,int count,int after){}public void onTextChanged(CharSequence s,int start,int before,int count){resultPage=0;renderResults();if(resultsScroll!=null)resultsScroll.scrollTo(0,0);}public void afterTextChanged(Editable s){}});
+        query=field(root,"搜索课程、课节、路径或网站","",false);query.addTextChangedListener(new TextWatcher(){public void beforeTextChanged(CharSequence s,int start,int count,int after){}public void onTextChanged(CharSequence s,int start,int before,int count){resultPage=0;groupPage=0;renderResults();if(resultsScroll!=null)resultsScroll.scrollTo(0,0);}public void afterTextChanged(Editable s){}});
         selectionActions=new PlannerUi.Flow(this);
         selectionActions.addView(button("勾选搜索结果",()->selectMatches(true)));
         selectionActions.addView(button("取消搜索结果",()->selectMatches(false)));
-        selectionActions.addView(button("只选搜索结果",()->{if(capturing||previewing||delivering||!filterReady())return;Set<String> ids=CourseImportCatalog.matchingSelectableIDs(filteredCaptures,"");if(ids.isEmpty()){message("当前搜索结果中没有可导入课程，原选择已保留。");return;}selected.clear();selected.addAll(ids);renderResults();}));
+        selectionActions.addView(button("只选搜索结果",()->{if(capturing||previewing||delivering||!filterReady())return;Set<String> ids=searchResult.selectableIDs;if(ids.isEmpty()){message("当前搜索结果中没有可导入课程，原选择已保留。");return;}selected.clear();selected.addAll(ids);renderResults();}));
         clearFilterButton=button("清除筛选",()->query.setText(""));selectionActions.addView(clearFilterButton);
         root.addView(selectionActions);selectionSummary=label("尚未识别课程。",12);root.addView(selectionSummary);resultsScroll=new ScrollView(this);results=column();resultsScroll.addView(results);root.addView(resultsScroll,new LinearLayout.LayoutParams(-1,dp(240)));
         resultPosition=label("",12);root.addView(resultPosition);PlannerUi.Flow resultNavigation=new PlannerUi.Flow(this);
@@ -143,10 +144,33 @@ public class CourseImportActivity extends Activity {
     void resetSession(){generation++;capturing=false;captures=Collections.emptyList();selected.clear();browser.stopLoading();CookieManager.getInstance().removeAllCookies(done->{WebStorage.getInstance().deleteAllData();browser.clearCache(true);browser.clearHistory();open(address.getText().toString());});renderResults();}
     void directory(){if(directory==null){message("请先读取分享目录。");return;}try{StringBuilder text=new StringBuilder(directory.optString("shareTitle"));for(JSONObject entry:Planner.list(directory.getJSONArray("entries")))text.append("\n\n").append(entry.optBoolean("isDirectory")?"目录 · ":"文件 · ").append(entry.optString("relativePath")).append(entry.optBoolean("isDirectory")?"":"\n"+entry.optLong("size")+" 字节"+(entry.has("durationSeconds")?" · "+Math.ceil(entry.optDouble("durationSeconds")/60)+" 分钟":""));message(text.toString());}catch(Exception error){message("目录数据不完整。");}}
     boolean matches(JSONObject snapshot,String term){return CourseImportCatalog.matches(snapshot,term);}
-    void selectMatches(boolean select){if(capturing||previewing||delivering||!filterReady())return;Set<String> ids=CourseImportCatalog.matchingSelectableIDs(filteredCaptures,"");if(select)selected.addAll(ids);else selected.removeAll(ids);renderResults();}
+    void selectMatches(boolean select){if(capturing||previewing||delivering||!filterReady())return;Set<String> ids=searchResult.selectableIDs;if(select)selected.addAll(ids);else selected.removeAll(ids);renderResults();}
     boolean importable(JSONObject snapshot){return CourseImportCatalog.importable(snapshot);}
     void updateSelectionSummary(){if(selectionSummary!=null)selectionSummary.setText(CourseImportCatalog.summary(captures,selected,filteredCaptures));}
-    void groupChoices(){Map<String,List<JSONObject>> groups=new TreeMap<>();groups.put("全部课程",new ArrayList<>());for(JSONObject snapshot:captures)if(importable(snapshot)){groups.get("全部课程").add(snapshot);JSONObject net=snapshot.optJSONObject("netdisk");if(net==null)continue;String path=net.optString("folderPath"),parent="";String[] parts=path.split("/");for(int i=0;i<parts.length-1;i++){parent+= (parent.isEmpty()?"":"/")+parts[i];groups.computeIfAbsent(parent,k->new ArrayList<>()).add(snapshot);}}for(Map.Entry<String,List<JSONObject>> group:groups.entrySet()){if(group.getValue().isEmpty())continue;CheckBox check=new CheckBox(this);check.setText(group.getKey()+" · "+group.getValue().size()+" 门（批量选择）");boolean all=true;for(JSONObject snapshot:group.getValue())all&=selected.contains(WebCourseImport.identity(snapshot));check.setChecked(all);check.setEnabled(!capturing&&!previewing&&!delivering);check.setOnCheckedChangeListener((button,value)->{for(JSONObject snapshot:group.getValue()){if(value)selected.add(WebCourseImport.identity(snapshot));else selected.remove(WebCourseImport.identity(snapshot));}handler.post(this::renderResults);});results.addView(check);}}
+    void groupChoices(){
+        if(!netdisk)return;
+        List<CourseImportCatalog.Group> groups=searchResult.groups;if(groups.isEmpty())return;
+        results.addView(button(groupChoicesExpanded?"收起目录批选":"按目录批选（"+groups.size()+" 类）",()->{groupChoicesExpanded=!groupChoicesExpanded;renderResults();}));
+        if(!groupChoicesExpanded)return;
+        int pages=CourseImportCatalog.groupPageCount(groups);groupPage=Math.max(0,Math.min(groupPage,pages-1));
+        results.addView(label("目录批选 · 仅当前搜索结果 · 第 "+(groupPage+1)+" / "+pages+" 页",12));
+        for(CourseImportCatalog.Group group:CourseImportCatalog.groupPage(groups,groupPage)){
+            CheckBox check=new CheckBox(this);int count=0;for(String id:group.ids)if(selected.contains(id))count++;
+            check.setText(group.title()+" · 已选 "+count+" / "+group.ids.size()+" 门");check.setChecked(count==group.ids.size());
+            check.setEnabled(!capturing&&!previewing&&!delivering);
+            check.setOnCheckedChangeListener((button,value)->{
+                if(capturing||previewing||delivering||!filterReady())return;
+                if(value)selected.addAll(group.ids);else selected.removeAll(group.ids);handler.post(this::renderResults);
+            });results.addView(check);
+        }
+        if(pages>1){
+            PlannerUi.Flow navigation=new PlannerUi.Flow(this);
+            Button previous=button("上一页目录",()->{groupPage--;renderResults();resultsScroll.scrollTo(0,0);});
+            Button next=button("下一页目录",()->{groupPage++;renderResults();resultsScroll.scrollTo(0,0);});
+            previous.setEnabled(groupPage>0);next.setEnabled(groupPage+1<pages);navigation.addView(previous);navigation.addView(next);results.addView(navigation);
+        }
+        results.addView(label("课程列表",13));
+    }
 
     /** Evaluate a Promise in page memory and poll only its completed metadata envelope. */
     void promise(WebView web,String expression,long timeout,Consumer<Object> done) {
@@ -200,7 +224,7 @@ public class CourseImportActivity extends Activity {
             CheckBox choice=new CheckBox(this);String id=WebCourseImport.identity(snapshot),website=CourseImportCatalog.website(snapshot);
             choice.setText(snapshot.optString("name")+" · "+snapshot.optJSONArray("lessons").length()+" 课节"+(website.isEmpty()?"":"\n"+website)+(problem==null?"":"\n"+problem));
             choice.setEnabled(problem==null&&!capturing&&!previewing&&!delivering);choice.setChecked(selected.contains(id));
-            choice.setOnCheckedChangeListener((button,checked)->{if(checked)selected.add(id);else selected.remove(id);updateSelectionSummary();boolean ready=!capturing&&!previewing&&!delivering&&filterReady()&&!selected.isEmpty();importButton.setEnabled(ready);previewButton.setEnabled(ready);});
+            choice.setOnCheckedChangeListener((button,checked)->{if(checked)selected.add(id);else selected.remove(id);handler.post(this::renderResults);});
             results.addView(choice);results.addView(button("查看课节与来源",()->details(snapshot)));
             JSONArray existing=snapshot.optJSONArray("existingCourses");
             if(existing!=null)for(JSONObject course:Planner.list(existing))results.addView(button("查看已有计划 · "+course.optString("name"),()->{setResult(RESULT_OK,new Intent().putExtra("courseID",course.optString("id")));finish();}));

@@ -65,6 +65,25 @@ public final class CourseImportCatalogTests {
         check(!latest.isCurrent(refreshed,"课程252"),"Refreshed catalog reused the old search result");
         work.submit(()->new CourseImportCatalog.SearchResult(refreshed,"课程137"));background.remove().run();work.close();ui.remove().run();
         check(delivered.size()==1&&failures.isEmpty(),"Closed import search updated the screen");
+        List<JSONObject> folders=new ArrayList<>();
+        for(int i=0;i<65;i++)for(int j=0;j<2;j++)folders.add(course("pan.quark.cn").put("packageID","quark:folder:"+i+":"+j)
+            .put("netdisk",new JSONObject().put("folderPath","组"+i+"/课程"+j)));
+        JSONObject refused=course("pan.quark.cn").put("packageID","quark:refused").put("refusal","incomplete")
+            .put("netdisk",new JSONObject().put("folderPath","组42/不完整"));folders.add(refused);
+        CourseImportCatalog.SearchResult grouped=new CourseImportCatalog.SearchResult(folders,"");
+        check(grouped.groups.size()==66&&grouped.selectableIDs.size()==130,"Directory grouping included incomplete captures or omitted valid courses");
+        check(CourseImportCatalog.groupPageCount(grouped.groups)==4&&CourseImportCatalog.groupPage(grouped.groups,0).size()==20,"Directory controls were not bounded");
+        check(CourseImportCatalog.groupPage(grouped.groups,Integer.MAX_VALUE).size()==6&&CourseImportCatalog.groupPage(grouped.groups,Integer.MIN_VALUE).get(0).path.isEmpty(),"Directory page bounds failed");
+        CourseImportCatalog.SearchResult narrow=new CourseImportCatalog.SearchResult(folders,"组42");
+        check(narrow.groups.size()==2&&narrow.selectableIDs.size()==2&&narrow.groups.get(1).path.equals("组42"),"Directory batches escaped the search scope");
+        Set<String> review=new HashSet<>(Collections.singleton(WebCourseImport.identity(folders.get(0))));
+        review.addAll(narrow.groups.get(1).ids);check(review.size()==3,"Directory batch lost a selection outside the search");
+        review.removeAll(narrow.groups.get(1).ids);check(review.equals(Collections.singleton(WebCourseImport.identity(folders.get(0)))),"Removing a directory batch cleared hidden choices");
+        check(CourseImportCatalog.groupPage(Collections.emptyList(),99).isEmpty(),"Empty directory page failed");
+        try{grouped.groups.get(0).ids.clear();throw new AssertionError("Cached group identities are mutable");}catch(UnsupportedOperationException expected){checks++;}
+        JSONObject nested=course("pan.quark.cn").put("netdisk",new JSONObject().put("folderPath","/资料//高数/基础班"));
+        List<CourseImportCatalog.Group> ancestors=CourseImportCatalog.groups(Collections.singletonList(nested));
+        check(ancestors.size()==3&&ancestors.get(2).path.equals("资料/高数"),"Nested directory ancestors or redundant separators were mishandled");
         System.out.println("Course import catalog: "+checks+" checks passed");
     }
 }
