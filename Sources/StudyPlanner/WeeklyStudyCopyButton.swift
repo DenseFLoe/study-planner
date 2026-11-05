@@ -9,7 +9,7 @@ struct WeeklyStudyCopyButton: View {
     @State private var message: String?
 
     var body: some View {
-        Button(copying ? "正在整理…" : "复制本周统计", systemImage: "doc.on.doc") {
+        Button(copying ? "整理中…" : "复制", systemImage: "doc.on.doc") {
             let snapshot = state, date = day, calendar = Calendar.current
             copying = true
             Task {
@@ -25,6 +25,7 @@ struct WeeklyStudyCopyButton: View {
             }
         }
         .disabled(copying)
+        .accessibilityLabel(copying ? "正在整理本周统计" : "复制本周统计")
         .help("复制完整课表的每日和课程汇总，分开列出实际已学与计划，不附带备注或来源链接")
         .alert("周学习统计", isPresented: Binding(get: { message != nil }, set: { if !$0 { message = nil } })) {
             Button("好") { message = nil }

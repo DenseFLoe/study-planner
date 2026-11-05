@@ -11,8 +11,27 @@ enum PlannerTheme {
     static let radius: CGFloat = 20
     static let compactRadius: CGFloat = 14
     static let pagePadding: CGFloat = 26
+    static let referenceWindowWidth: CGFloat = 1280
     static let spring = Animation.spring(response: 0.42, dampingFraction: 0.86)
 }
+
+/// Keep the desktop layout intact in narrow windows. Give scrolling content the
+/// inverse-scaled height so it still fills the viewport and remains scrollable.
+struct PlannerWindowContent<Content: View>: View {
+    @ViewBuilder var content: Content
+
+    var body: some View {
+        GeometryReader { proxy in
+            let width = max(proxy.size.width, 1)
+            let scale = min(1, width / PlannerTheme.referenceWindowWidth)
+            content
+                .frame(width: width / scale, height: proxy.size.height / scale)
+                .scaleEffect(scale, anchor: .topLeading)
+                .frame(width: proxy.size.width, height: proxy.size.height, alignment: .topLeading)
+        }
+    }
+}
+
 /// A quiet wash of color gives transparent surfaces something to refract without
 /// competing with the schedule itself.
 struct PlannerGlassBackdrop: View {
@@ -202,6 +221,7 @@ struct CircularIconButtonStyle: ButtonStyle {
 
 struct SoftButtonStyle: ButtonStyle {
     var prominent = false
+    var horizontalPadding: CGFloat = 15
     @Environment(\.plannerScrollingContent) private var scrollingContent
 
     func makeBody(configuration: Configuration) -> some View {
@@ -209,7 +229,9 @@ struct SoftButtonStyle: ButtonStyle {
 
         configuration.label
             .font(.system(size: 13, weight: .semibold))
-            .padding(.horizontal, 15)
+            .lineLimit(1)
+            .minimumScaleFactor(0.6)
+            .padding(.horizontal, horizontalPadding)
             .frame(height: 34)
             .contentShape(shape)
             .foregroundStyle(prominent ? Color.white : Color.primary.opacity(0.78))
@@ -237,11 +259,15 @@ struct PlannerSectionTitle: View {
         HStack(alignment: .firstTextBaseline) {
             Text(title)
                 .font(.system(size: 19, weight: .bold, design: .rounded))
+                .lineLimit(1)
+                .minimumScaleFactor(0.6)
             Spacer()
             if let detail {
                 Text(detail)
                     .font(.caption)
                     .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.6)
             }
         }
     }

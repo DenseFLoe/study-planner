@@ -42,9 +42,12 @@ struct StudyPlannerApp: App {
     @Environment(\.openWindow) private var openWindow
     var body: some Scene {
         WindowGroup("学习日程", id: "main") {
-            MainView(store: store).frame(minWidth: 1060, minHeight: 700).tint(.blue)
+            PlannerWindowContent {
+                MainView(store: store)
+            }
+                .frame(minWidth: 1060, minHeight: 700).tint(.blue)
                 .onAppear { delegate.connect(store) }
-        }.defaultSize(width: 1280, height: 820)
+        }.defaultSize(width: PlannerTheme.referenceWindowWidth, height: 820)
         .commands {
             CommandGroup(replacing: .appInfo) {
                 Button("关于学习日程") { AppBuildInfo.current.showAboutPanel() }

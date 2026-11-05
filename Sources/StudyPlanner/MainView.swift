@@ -337,9 +337,13 @@ struct MainView: View {
             VStack(alignment: .leading, spacing: 6) {
                 Text(pageTitle)
                     .font(.system(size: 29, weight: .bold, design: .rounded))
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.6)
                     .contentTransition(.numericText())
                 Text(subtitle)
                     .font(.system(size: 13.5))
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.6)
                     .foregroundStyle(.secondary)
             }
 
@@ -461,6 +465,8 @@ struct MainView: View {
                     HStack {
                         Image(systemName: "magnifyingglass")
                         Text("搜索课程或课时，查找安排日期")
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.6)
                         Spacer()
                         Text("⌘F").font(.caption)
                     }
@@ -1023,8 +1029,12 @@ private struct SummaryMetric: View {
 
             VStack(alignment: .leading, spacing: 3) {
                 Text(title).font(.caption).foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.6)
                 Text(value)
                     .font(.system(size: 19, weight: .semibold, design: .rounded))
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.5)
                     .contentTransition(.numericText())
             }
             Spacer(minLength: 4)
@@ -1427,13 +1437,13 @@ private struct WeeklyStudyChart: View {
         let metric = showingActual ? "已学" : "计划"
         VStack(alignment: .leading, spacing: 16) {
             PlannerSectionTitle(title: "周学习统计", detail: summary.totalMinutes.map { "\(metric) \(hours($0))" } ?? "合计超出范围")
-            HStack {
+            HStack(spacing: 6) {
                 Button("上一周") { moveWeek(-1) }
                 Button("本周") { select(Date()) }
                 Button("下一周") { moveWeek(1) }
-                Spacer(minLength: 8)
+                Spacer(minLength: 0)
                 WeeklyStudyCopyButton(day: selectedDay, state: state)
-            }.buttonStyle(SoftButtonStyle())
+            }.buttonStyle(SoftButtonStyle(horizontalPadding: 8))
             Picker("统计内容", selection: $showingActual) {
                 Text("课表计划").tag(false)
                 Text("实际已学").tag(true)

@@ -23,6 +23,8 @@ struct DayAgendaCopyButton: View {
             }
         }
         .disabled(copying)
+        .lineLimit(1)
+        .minimumScaleFactor(0.6)
         .help("复制所选日期的任务、固定事项和完成状态，不附带备注或来源链接")
         .alert("当天安排", isPresented: Binding(get: { message != nil }, set: { if !$0 { message = nil } })) {
             Button("好") { message = nil }
