@@ -13,6 +13,7 @@ enum PlannerTheme {
     static let pagePadding: CGFloat = 26
     static let referenceWindowWidth: CGFloat = 1280
     static let spring = Animation.spring(response: 0.42, dampingFraction: 0.86)
+    static let columnTransition = Animation.smooth(duration: 0.3)
 }
 
 /// Keep the agenda readable by giving up secondary columns before text space.
@@ -32,6 +33,35 @@ struct PlannerWindowLayout: Equatable {
         let agendaWidth = contentWidth - (showsInsights ? Self.insightsWidth + 1 : 0)
         compactContent = contentWidth < 900
         compactAgenda = agendaWidth < 760
+    }
+}
+
+/// Keep the panel at its natural width while its slot opens or closes. Retaining
+/// the content also preserves scroll position and cached summaries on reversal.
+struct PlannerCollapsibleColumn<Content: View>: View {
+    var isExpanded: Bool
+    var width: CGFloat
+    var edge: HorizontalEdge
+    @ViewBuilder var content: Content
+
+    var body: some View {
+        HStack(spacing: 0) {
+            if edge == .trailing { divider }
+            content.frame(width: width)
+            if edge == .leading { divider }
+        }
+        .frame(width: width + 1)
+        .frame(width: isExpanded ? width + 1 : 0,
+               alignment: edge == .leading ? .trailing : .leading)
+        .clipped()
+        .opacity(isExpanded ? 1 : 0)
+        .allowsHitTesting(isExpanded)
+        .accessibilityHidden(!isExpanded)
+        .disabled(!isExpanded)
+    }
+
+    private var divider: some View {
+        Rectangle().fill(PlannerTheme.hairline).frame(width: 1)
     }
 }
 

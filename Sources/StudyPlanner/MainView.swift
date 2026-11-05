@@ -80,6 +80,9 @@ struct MainView: View {
             if newLayout.showsInsights { showingInsights = false }
         }
         .background { PlannerGlassBackdrop() }
+        // One transaction keeps the column slots, agenda and header in step.
+        // Geometry still publishes only presentation changes, never animation frames.
+        .animation(reduceMotion ? nil : PlannerTheme.columnTransition, value: layout)
         .animation(reduceMotion ? nil : PlannerTheme.spring, value: page)
         .animation(reduceMotion ? nil : PlannerTheme.spring, value: selectedDay)
         .onChange(of: page) { _, _ in showingNavigation = false; showingInsights = false }
@@ -167,10 +170,8 @@ struct MainView: View {
 
     private func windowContent(_ layout: PlannerWindowLayout) -> some View {
         HStack(spacing: 0) {
-            if layout.showsSidebar {
-                sidebar.frame(width: PlannerWindowLayout.sidebarWidth)
-                Rectangle().fill(PlannerTheme.hairline).frame(width: 1)
-            }
+            PlannerCollapsibleColumn(isExpanded: layout.showsSidebar,
+                                     width: PlannerWindowLayout.sidebarWidth, edge: .leading) { sidebar }
             VStack(spacing: 0) {
                 header(layout)
                 if store.orderSaveBusy {
@@ -230,10 +231,8 @@ struct MainView: View {
             HStack(spacing: 0) {
                 agenda.frame(maxWidth: .infinity, maxHeight: .infinity)
                     .environment(\.plannerCompactContent, layout.compactAgenda)
-                if layout.showsInsights {
-                    Rectangle().fill(PlannerTheme.hairline).frame(width: 1)
-                    insightsPanel.frame(width: PlannerWindowLayout.insightsWidth)
-                }
+                PlannerCollapsibleColumn(isExpanded: layout.showsInsights,
+                                         width: PlannerWindowLayout.insightsWidth, edge: .trailing) { insightsPanel }
             }
         case .courses: courseList
         case .fixed: fixedList
