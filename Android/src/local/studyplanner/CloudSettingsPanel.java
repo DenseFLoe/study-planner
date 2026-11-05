@@ -55,7 +55,7 @@ final class CloudSettingsPanel {
         sshToken=secret(sshFields,"服务访问码（留空沿用 SSH 方式已保存的值）");
         sshFields.addView(app.text("密钥用于 SSH 登录；服务访问码用于日程同步，两者不同。连接后访问服务器内部的18090端口，无需安装组网软件。",13,app.muted));
         app.cloudLabel=app.text(CloudSync.summary(app),13,app.muted);box.addView(app.cloudLabel);
-        box.addView(app.text("两种方式分别保存配置，点击保存后生效。完整课表按记录修改时间合并，保留最近十版；修改、打开和恢复联网时同步，后台约每小时检查，可能因系统省电延迟。",13,app.muted));
+        box.addView(app.text("两种方式分别保存配置，点击保存后生效。云端课表的最新修改时间晚于手机时，先备份手机日程，再以云端完整课表覆盖；手机较新、时间相同或旧记录时间不完整时按记录合并。本机备份可在数据与备份中恢复。修改、打开和恢复联网时同步，后台约每小时检查，可能因系统省电延迟。",13,app.muted));
         // Move sync/save actions to the top: side-by-side row inserted under the title.
         // Created after fields and listeners so the button callbacks can use them.
         LinearLayout actions=app.row();

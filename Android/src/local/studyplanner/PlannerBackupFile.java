@@ -73,7 +73,7 @@ public final class PlannerBackupFile {
     public String summary() throws Exception {
         JSONObject state = envelope.getJSONObject("state");
         String time = legacy ? "旧版 Android 备份" : "备份时间：" + Planner.date(envelope.getDouble("createdAt")) + " " + Planner.clock(envelope.getDouble("createdAt"));
-        return time + "\n" + counts(state);
+        return time + (legacy ? "" : "\n" + envelope.getString("reason")) + "\n" + counts(state);
     }
     public static String counts(JSONObject state) throws Exception {
         return state.getJSONArray("courses").length() + " 门课程、" + state.getJSONArray("fixedEvents").length() + " 条固定规则、" +

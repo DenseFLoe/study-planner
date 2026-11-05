@@ -38,8 +38,22 @@ public final class PlannerDatabase extends SQLiteOpenHelper implements StateMuta
         commit(l,true);
     }
     public synchronized void commit(SyncLedger l,boolean enqueueCloud)throws Exception{
+        commit(l,enqueueCloud,false);
+    }
+    synchronized boolean commitCloud(SyncLedger candidate,JSONObject checkpoint,boolean replace)throws Exception{
+        if(!SyncLedger.equivalent(checkpoint,metadata()))return false;
+        candidate.materialize();
+        if(replace){
+            try{backups.save(ledger().materialize(),Planner.now(),"云端较新课表覆盖前的手机日程",null);}
+            catch(Exception error){throw new IllegalStateException("覆盖前的本机备份未完成，已保留手机课表。请检查可用存储空间后重试。",error);}
+        }
+        commit(candidate,false,replace);
+        return true;
+    }
+    private void commit(SyncLedger l,boolean enqueueCloud,boolean replace)throws Exception{
         long previous=metadata().optLong("sequence");
         l.materialize();SQLiteDatabase db=getWritableDatabase();db.beginTransaction();try{
+            if(replace)db.delete("records",null,null);
             JSONObject rows=l.value.getJSONObject("records");java.util.Iterator<String> it=rows.keys();while(it.hasNext()){String key=it.next();ContentValues v=new ContentValues();v.put("id",key);v.put("body",CourseSourcePrivacy.record(rows.getJSONObject(key)).toString());if(db.insertWithOnConflict("records",null,v,SQLiteDatabase.CONFLICT_REPLACE)<0)throw new android.database.SQLException("记录保存失败");}
             JSONObject meta=l.metadata();ContentValues v=new ContentValues();v.put("id","sync");v.put("body",meta.toString());if(db.insertWithOnConflict("metadata",null,v,SQLiteDatabase.CONFLICT_REPLACE)<0)throw new android.database.SQLException("同步状态保存失败");db.setTransactionSuccessful();
         }finally{db.endTransaction();}

@@ -120,6 +120,8 @@ mkdir -p Android/build/controller-tests
 
 "$JDK/bin/javac" -cp Android/tools/json.jar:Android/build/tests -d Android/build/tests Android/tests/CourseEditingTests.java
 "$JDK/bin/java" -cp Android/tools/json.jar:Android/build/tests local.studyplanner.CourseEditingTests
+"$JDK/bin/javac" -cp Android/tools/json.jar:Android/build/tests -d Android/build/tests Android/src/local/studyplanner/CloudReplacement.java Android/src/local/studyplanner/CloudOutbox.java Android/src/local/studyplanner/CloudSyncEngine.java Android/tests/CloudSyncEngineTests.java
+"$JDK/bin/java" -cp Android/tools/json.jar:Android/build/tests local.studyplanner.CloudSyncEngineTests
 
 "$JDK/bin/javac" -cp Android/tools/json.jar:Android/build/tests -d Android/build/tests Android/tests/FixedEventEditingTests.java
 "$JDK/bin/java" -cp Android/tools/json.jar:Android/build/tests local.studyplanner.FixedEventEditingTests

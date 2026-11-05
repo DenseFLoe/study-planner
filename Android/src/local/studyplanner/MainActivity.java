@@ -77,9 +77,12 @@ public class MainActivity extends Activity {
         worker.execute(()->{try{
             JSONObject loaded;
             synchronized(database){
-            if(database.initialized())loaded=database.load();
+            boolean keepCloudSchedule=database.initialized()&&CloudSettings.enabled(this);
+            if(database.initialized())loaded=keepCloudSchedule?database.ledger().materialize():database.load();
             else{if(storage.getBaseFile().exists()||new File(storage.getBaseFile()+".bak").exists())loaded=PlannerBackupFile.readLegacyState(storage.openRead());else loaded=PlannerBackupFile.readLegacyState(getAssets().open("initial-state.json"));}
-            Planner.prepareForOpen(loaded,Planner.now());database.save(loaded);
+            // Opening an old phone must not manufacture newer edits before cloud comparison.
+            if(keepCloudSchedule)Planner.refreshDiagnostics(loaded,Planner.now());
+            else{Planner.prepareForOpen(loaded,Planner.now());database.save(loaded);}
             }
             JSONObject finalState=loaded;String summary=syncSummary(database.metadata());runOnUiThread(()->{if(isDestroyed())return;state=finalState;syncSummary=summary;ready=true;render();resumeSyncRefresh();handler.postDelayed(ticker,1000);syncServer.start(false,false);CloudSync.get(this).start();WebsiteUpdates.schedule(this);});
         }catch(Exception e){runOnUiThread(()->errorScreen(e));}});
@@ -651,7 +654,7 @@ public class MainActivity extends Activity {
             });
         }catch(Exception error){runOnUiThread(()->{busy=false;progress.dismiss();if(!isDestroyed()){alert("读取失败",error.getMessage()+"\n未保存输入仍保留。");resumeSyncRefresh();}});}});
     }
-    final BroadcastReceiver syncReceiver=new BroadcastReceiver(){public void onReceive(Context c,Intent i){if(CloudSync.ACTION.equals(i.getAction())){if(cloudLabel!=null)cloudLabel.setText(CloudSync.summary(c));refreshSyncData();return;}syncStatus=SyncWindowService.lastStatus;updateSyncLabel();updateSyncProgress();if(i.getBooleanExtra("changed",false))refreshSyncData();}};
+    final BroadcastReceiver syncReceiver=new BroadcastReceiver(){public void onReceive(Context c,Intent i){if(CloudSync.ACTION.equals(i.getAction())){if(cloudLabel!=null)cloudLabel.setText(CloudSync.summary(c));updateSyncProgress();if(i.getBooleanExtra("changed",false))refreshSyncData();return;}syncStatus=SyncWindowService.lastStatus;updateSyncLabel();updateSyncProgress();if(i.getBooleanExtra("changed",false))refreshSyncData();}};
     void updateSyncProgress(){if(syncProgress!=null)syncProgress.setVisibility(CloudSync.get(this).isRunning()||(syncRefresh!=null&&syncRefresh.isRunning())||SyncWindowService.transferring()?View.VISIBLE:View.GONE);}
     void refreshSyncData(){if(syncRefresh!=null)syncRefresh.request();updateSyncProgress();}
     void resumeSyncRefresh(){resumeCourseResult();if(syncRefresh!=null)syncRefresh.resume();}
