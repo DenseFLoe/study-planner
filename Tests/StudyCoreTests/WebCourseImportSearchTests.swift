@@ -59,6 +59,20 @@ final class WebCourseImportSearchTests: XCTestCase {
         XCTAssertEqual(WebCourseImportSelection.refreshed(selected: [], previouslyOffered: ["a", "b"], offered: ["a", "b"]), [])
     }
 
+    func testNetdiskRefreshKeepsManualChoicesAndOnlyAppliesDefaultsToNewDirectories() {
+        let old: Set<String> = ["high-old", "manual-old"]
+        let offered: Set<String> = old.union(["high-new", "review-new"])
+        let defaults: Set<String> = ["high-old", "high-new", "unavailable"]
+        XCTAssertEqual(WebCourseImportSelection.refreshed(selected: ["manual-old", "removed"], previouslyOffered: old,
+            offered: offered, automaticallySelected: defaults), ["manual-old", "high-new"])
+        XCTAssertEqual(WebCourseImportSelection.refreshed(selected: [], previouslyOffered: [], offered: offered,
+            automaticallySelected: defaults), ["high-old", "high-new"])
+        XCTAssertEqual(WebCourseImportSelection.refreshed(selected: ["manual-old"], previouslyOffered: old,
+            offered: [], automaticallySelected: defaults), [])
+        XCTAssertEqual(WebCourseImportSelection.refreshed(selected: ["manual-old"], previouslyOffered: old,
+            offered: ["different-share"], automaticallySelected: ["different-share"]), ["different-share"])
+    }
+
     func testIncompleteCoursesStayVisibleForReview() {
         var incomplete = snapshot("待核对课程")
         incomplete.fetchedOutlines = 0

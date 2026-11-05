@@ -25,7 +25,9 @@ public enum WebCourseImportSearch {
 
 public enum WebCourseImportSelection {
     /// Keep deliberate deselection on refresh; only newly offered courses get selected automatically.
-    public static func refreshed(selected: Set<String>, previouslyOffered: Set<String>, offered: Set<String>) -> Set<String> {
-        selected.intersection(offered).union(offered.subtracting(previouslyOffered))
+    public static func refreshed(selected: Set<String>, previouslyOffered: Set<String>, offered: Set<String>,
+                                 automaticallySelected: Set<String>? = nil) -> Set<String> {
+        let defaults = (automaticallySelected ?? offered).intersection(offered)
+        return selected.intersection(offered).union(defaults.subtracting(previouslyOffered))
     }
 }

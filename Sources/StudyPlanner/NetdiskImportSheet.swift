@@ -169,6 +169,7 @@ struct NetdiskImportSheet: View {
     @Environment(\.dismiss) private var dismiss
     @State private var reader = NetdiskImportReader()
     @State private var selected = Set<String>()
+    @State private var previouslyOffered = Set<String>()
     @State private var searchText = ""
     @State private var expandedGroups = Set<String>()
     @State private var mergeSelected = false
@@ -261,12 +262,16 @@ struct NetdiskImportSheet: View {
                 .filter { !$0.requiresReview }.map(\.droppedPackageID))
             let alreadyPresent = Set(result.duplicates.existingCourseMatches
                 .filter { $0.overlapRatio >= 0.9 }.map(\.packageID))
-            selected = Set(result.courses.filter { candidate in
+            let defaults = Set(result.courses.filter { candidate in
                 candidate.refusal == nil && !autoDropped.contains(candidate.packageID)
                     && !alreadyPresent.contains(candidate.packageID)
                     && (result.scan.packages.first { $0.packageID == candidate.packageID }?.signal.score ?? 0)
                         >= NetdiskDigest.Limits.standard.autoSelectScore
             }.map(\.packageID))
+            let offered = Set(result.courses.filter { $0.refusal == nil }.map(\.packageID))
+            selected = WebCourseImportSelection.refreshed(selected: selected, previouslyOffered: previouslyOffered,
+                                                         offered: offered, automaticallySelected: defaults)
+            previouslyOffered = offered
             let groups = NetdiskCourseBrowser(courses: result.courses, packages: result.scan.packages)
                 .grouped(result.courses)
             expandedGroups = groups.children.count <= 3 ? Set(groups.children.map(\.path)) : []
