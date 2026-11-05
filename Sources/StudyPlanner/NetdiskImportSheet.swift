@@ -17,8 +17,10 @@ final class NetdiskImportReader: NSObject, WKNavigationDelegate {
     private var pendingRead = false
     private var generation = UUID()
     private var crawlTask: Task<Void, Never>?
+    private let directTransport: any NetdiskTransport
 
-    override init() {
+    init(directTransport: any NetdiskTransport = PlainNetdiskTransport()) {
+        self.directTransport = directTransport
         super.init()
         transport.webView.navigationDelegate = self
     }
@@ -26,13 +28,11 @@ final class NetdiskImportReader: NSObject, WKNavigationDelegate {
     func open(existingCourses: [Course]) { self.existingCourses = existingCourses }
 
     func load() {
+        stop()
         guard let link = NetdiskLink.parse(address) else {
             status = NetdiskAPIError.badLink.localizedDescription
             return
         }
-        generation = UUID()
-        crawlTask?.cancel()
-        result = nil
         currentLink = link
         pendingRead = true
         busy = true
@@ -73,17 +73,25 @@ final class NetdiskImportReader: NSObject, WKNavigationDelegate {
 
     func refresh() {
         guard let link = currentLink else { load(); return }
+        startRead(link)
+    }
+
+    func startRead(_ link: NetdiskLink) {
+        currentLink = link
+        pendingRead = false
         generation = UUID()
         let current = generation
         crawlTask?.cancel()
+        result = nil
         busy = true
         status = "正在读取分享目录…"
         let code = passcode.isEmpty ? link.inAppPasscode : passcode
+        let knownCourses = existingCourses
         crawlTask = Task { [weak self] in
             guard let self else { return }
             let progress: @Sendable (NetdiskCrawler.Progress) -> Void = { [weak self] progress in
                 Task { @MainActor [weak self] in
-                    guard let self, self.generation == current else { return }
+                    guard let self, self.generation == current, self.busy else { return }
                     self.status = "\(progress.detail) 已见 \(progress.videosSeen) 个视频。"
                 }
             }
@@ -92,16 +100,17 @@ final class NetdiskImportReader: NSObject, WKNavigationDelegate {
                 do {
                     // Public shares can be read directly. This also avoids waiting for the
                     // embedded page's login overlay before starting a large directory scan.
-                    value = try await NetdiskCrawler(transport: PlainNetdiskTransport(), onProgress: progress)
+                    value = try await NetdiskCrawler(transport: directTransport, onProgress: progress)
                         .crawl(link: link, passcode: code,
-                               existingCourses: existingCourses, now: Date())
+                               existingCourses: knownCourses, now: Date())
                 } catch let error as NetdiskAPIError {
+                    guard generation == current, !Task.isCancelled else { return }
                     switch error {
                     case .notLoggedIn, .http(401, _), .http(403, _):
                         status = "此分享需要登录，正在使用右侧页面的会话重试…"
                         value = try await NetdiskCrawler(transport: transport, onProgress: progress)
                             .crawl(link: link, passcode: code,
-                                   existingCourses: existingCourses, now: Date())
+                                   existingCourses: knownCourses, now: Date())
                     default: throw error
                     }
                 }
@@ -110,7 +119,8 @@ final class NetdiskImportReader: NSObject, WKNavigationDelegate {
                 revision = UUID()
                 status = "读取完成：\(value.scan.packages.count) 门课程候选，\(value.scan.totalVideoCount) 个视频。"
             } catch is CancellationError {
-                return
+                guard generation == current else { return }
+                status = "读取已取消，请重新读取。"
             } catch {
                 guard generation == current else { return }
                 status = "读取失败：\(error.localizedDescription)"
@@ -123,6 +133,9 @@ final class NetdiskImportReader: NSObject, WKNavigationDelegate {
         generation = UUID()
         crawlTask?.cancel()
         transport.stop()
+        pendingRead = false
+        currentLink = nil
+        result = nil
         busy = false
     }
 }
@@ -145,6 +158,7 @@ struct NetdiskImportSheet: View {
     @State private var showMergedPreview = false
     @State private var deadline = Calendar.current.date(byAdding: .day, value: 90, to: Date())!
     @State private var message = ""
+    @State private var saving = false
 
     private var chosen: [NetdiskSnapshotBuilder.Course] {
         reader.result?.courses.filter { selected.contains($0.packageID) && $0.refusal == nil } ?? []
@@ -202,6 +216,7 @@ struct NetdiskImportSheet: View {
             }
             .frame(maxHeight: .infinity)
             HStack {
+                if saving { ProgressView("正在导入并保存计划…").controlSize(.small) }
                 Text(message).font(.caption).foregroundStyle(.red)
                 Spacer()
                 Text(mergeSelected ? "将 \(chosen.count) 门合并导入为 1 门" : "已选 \(chosen.count) 门")
@@ -213,6 +228,8 @@ struct NetdiskImportSheet: View {
         }
         .padding(20)
         .frame(width: width, height: height)
+        .disabled(saving)
+        .interactiveDismissDisabled(saving)
         .onAppear { reader.open(existingCourses: store.state.courses) }
         .onDisappear { reader.stop() }
         .onChange(of: reader.revision) { _, _ in
@@ -349,16 +366,21 @@ struct NetdiskImportSheet: View {
     }
 
     private func save() {
+        guard !saving, !reader.busy, let result = reader.result else { return }
+        let courses = importCandidates
+        guard !courses.isEmpty else {
+            message = mergeSelected ? "请至少勾选两门课程并填写有效的合并名称。" : "请勾选要导入的课程。"
+            return
+        }
+        let importDeadline = deadline
+        let importTime = Date()
+        saving = true
+        message = ""
         Task {
-            guard let result = reader.result else { return }
-            let courses = importCandidates
-            guard !courses.isEmpty else {
-                message = mergeSelected ? "请至少勾选两门课程并填写有效的合并名称。" : "请勾选要导入的课程。"
-                return
-            }
+            defer { saving = false }
             let success = await store.change { state in
                 try state.importNetdiskCourses(courses, scan: result.scan, duplicates: result.duplicates,
-                                               deadline: deadline, now: Date())
+                                               deadline: importDeadline, now: importTime)
             }
             if success { dismiss() } else { message = store.errorMessage ?? "保存失败" }
         }
