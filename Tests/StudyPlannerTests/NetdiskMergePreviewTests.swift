@@ -2,6 +2,10 @@ import XCTest
 @testable import StudyCore
 @testable import StudyPlanner
 
+// Sample the caller's thread synchronously, before crossing the probe actor.
+// Foundation marks Thread.isMainThread unavailable directly in async contexts.
+private func mergePreviewIsOnMainThread() -> Bool { Thread.isMainThread }
+
 private actor MergeWorkProbe {
     private(set) var calls = 0
     private(set) var cancelled = false
@@ -70,7 +74,7 @@ final class NetdiskMergePreviewTests: XCTestCase, @unchecked Sendable {
 
     func testRepeatedReadsReuseMergeAndNameWhitespaceDoesNotRestartIt() async throws {
         let (scan, courses) = fixture(), probe = MergeWorkProbe()
-        let preview = NetdiskMergePreview { await probe.prepare($0, name: $1, scan: $2, onMainThread: Thread.isMainThread) }
+        let preview = NetdiskMergePreview { await probe.prepare($0, name: $1, scan: $2, onMainThread: mergePreviewIsOnMainThread()) }
         defer { preview.cancel() }
         let input = NetdiskMergePreview.Request(revision: UUID(), selected: ["course1", "course2"], name: "合并")
         preview.update(input, courses: courses, scan: scan)
@@ -121,7 +125,7 @@ final class NetdiskMergePreviewTests: XCTestCase, @unchecked Sendable {
 
     func testReturningToSameInputCannotPublishAnOlderCancelledWorker() async throws {
         let (scan, courses) = fixture(), probe = MergeWorkProbe(holdFirst: true)
-        let preview = NetdiskMergePreview { await probe.prepare($0, name: $1, scan: $2, onMainThread: Thread.isMainThread) }
+        let preview = NetdiskMergePreview { await probe.prepare($0, name: $1, scan: $2, onMainThread: mergePreviewIsOnMainThread()) }
         defer { preview.cancel() }
         let first = NetdiskMergePreview.Request(revision: UUID(), selected: ["course1", "course2"], name: "合并")
         preview.update(first, courses: courses, scan: scan)
@@ -142,7 +146,7 @@ final class NetdiskMergePreviewTests: XCTestCase, @unchecked Sendable {
 
     func testClosingOrDisablingPreviewCancelsWorkerAndDiscardsLateResult() async throws {
         let (scan, courses) = fixture(), probe = MergeWorkProbe(holdFirst: true)
-        let preview = NetdiskMergePreview { await probe.prepare($0, name: $1, scan: $2, onMainThread: Thread.isMainThread) }
+        let preview = NetdiskMergePreview { await probe.prepare($0, name: $1, scan: $2, onMainThread: mergePreviewIsOnMainThread()) }
         let input = NetdiskMergePreview.Request(revision: UUID(), selected: ["course1", "course2"], name: "合并")
         preview.update(input, courses: courses, scan: scan)
         try await waitUntil { await probe.isHeld() }
@@ -181,7 +185,7 @@ final class NetdiskMergePreviewTests: XCTestCase, @unchecked Sendable {
     func testReleasingPreviewCancelsWorkerWithoutRetainingTheWindowModel() async throws {
         let (scan, courses) = fixture(), probe = MergeWorkProbe(holdFirst: true)
         var preview: NetdiskMergePreview? = NetdiskMergePreview {
-            await probe.prepare($0, name: $1, scan: $2, onMainThread: Thread.isMainThread)
+            await probe.prepare($0, name: $1, scan: $2, onMainThread: mergePreviewIsOnMainThread())
         }
         weak var released = preview
         let input = NetdiskMergePreview.Request(revision: UUID(), selected: ["course1", "course2"], name: "合并")
