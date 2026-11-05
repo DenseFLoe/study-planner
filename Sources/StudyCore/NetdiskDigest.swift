@@ -136,7 +136,8 @@ public enum NetdiskDigest {
             child.fid = entry.fid
             child.shareToken = entry.shareToken
             var parent = node(path: entry.parentPath)
-            if !parent.children.contains(path) { parent.children.append(path) }
+            // Files are counted by kind below; only folders belong in the directory tree.
+            if entry.isDirectory, !parent.children.contains(path) { parent.children.append(path) }
             nodes[entry.parentPath] = parent
             nodes[path] = child
         }

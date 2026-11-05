@@ -157,6 +157,61 @@ final class NetdiskDigestTests: XCTestCase {
 
     // MARK: - 课程判定
 
+    func testDirectoryTreeCountsFilesSeparatelyFromChildFolders() throws {
+        let entries = [NetdiskFixtures.folder("课程"),
+                       NetdiskFixtures.folder("讲义", in: "课程"),
+                       NetdiskFixtures.video("第1讲.mp4", in: "课程", size: 100, duration: 60),
+                       NetdiskFixtures.video("第2讲.mp4", in: "课程", size: 200, duration: 120),
+                       NetdiskFixtures.pdf("说明.pdf", in: "课程"),
+                       NetdiskFixtures.pdf("笔记.pdf", in: "课程/讲义")]
+        let outcome = NetdiskFixtures.digest(entries)
+        XCTAssertEqual(outcome.root.flattened.map(\.path), ["", "课程", "课程/讲义"])
+        XCTAssertEqual(outcome.root.fileCount, 0)
+        XCTAssertEqual(outcome.root.folderCount, 1)
+        let course = try XCTUnwrap(outcome.root.children.first)
+        XCTAssertEqual(course.fileCount, 3)
+        XCTAssertEqual(course.folderCount, 1)
+        XCTAssertEqual(course.itemCount, 4)
+        XCTAssertEqual(course.documentCount, 2)
+        XCTAssertEqual(course.children.first?.fileCount, 1)
+        XCTAssertEqual(course.children.first?.folderCount, 0)
+        XCTAssertEqual(outcome.totalVideoCount, 2)
+        XCTAssertEqual(outcome.totalBytes, 300)
+        XCTAssertEqual(outcome.totalSeconds, 180)
+        XCTAssertEqual(outcome.packages.first?.videoCount, 2)
+    }
+
+    func testRootVideosRemainFilesAndExplainDirectLessonPlacement() throws {
+        let videos = (1...3).map { NetdiskFixtures.video("第\($0)讲.mp4") }
+        let outcome = NetdiskFixtures.digest(videos + [NetdiskFixtures.pdf("讲义.pdf")])
+        XCTAssertTrue(outcome.root.children.isEmpty)
+        XCTAssertEqual(outcome.root.folderCount, 0)
+        XCTAssertEqual(outcome.root.fileCount, 4)
+        XCTAssertEqual(outcome.root.itemCount, 4)
+        let course = try XCTUnwrap(outcome.packages.first)
+        XCTAssertEqual(course.path, "")
+        XCTAssertEqual(course.videoCount, 3)
+        XCTAssertTrue(course.signal.notes.contains("课节视频直接放在这一层"))
+    }
+
+    func testDirectoryTreePreservesEmptyFoldersAndListingOrderIndependence() {
+        let entries = [NetdiskFixtures.folder("课程"),
+                       NetdiskFixtures.folder("第10章", in: "课程"),
+                       NetdiskFixtures.folder("第2章", in: "课程"),
+                       NetdiskFixtures.folder("第3章", in: "课程"),
+                       NetdiskFixtures.video("第1讲.mp4", in: "课程/第2章"),
+                       NetdiskFixtures.pdf("讲义.pdf", in: "课程/第10章")]
+        let forward = NetdiskFixtures.digest(entries)
+        let reversed = NetdiskFixtures.digest(entries.reversed())
+        XCTAssertEqual(forward.root, reversed.root)
+        XCTAssertEqual(forward.root.flattened.map(\.path),
+                       ["", "课程", "课程/第2章", "课程/第3章", "课程/第10章"])
+        XCTAssertEqual(forward.root.children.first?.folderCount, 3)
+        XCTAssertEqual(forward.root.flattened.first { $0.path == "课程/第3章" }?.itemCount, 0)
+        XCTAssertEqual(forward.totalVideoCount, 1)
+        XCTAssertEqual(forward.root.documentCount, 1)
+    }
+
     func testCourseFolderWithNumberedVideosIsDetected() throws {
         var entries = [NetdiskFixtures.folder("02 课程【视频课在这里】")]
         entries.append(NetdiskFixtures.folder("01 视频【视频课在这里】", in: "02 课程【视频课在这里】"))
