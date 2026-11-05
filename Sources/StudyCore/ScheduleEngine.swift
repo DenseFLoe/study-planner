@@ -24,6 +24,7 @@ public struct ScheduleResult: Sendable {
     public var conflicts: [ScheduleConstraintConflict] = []
     public var dayPlans: [ScheduleDayPlan] = []
     public var adjustments: [String] = []
+    public var floatingIssues: [FloatingScheduleIssue] = []
 }
 
 /// Pure, minute-based local scheduling. No persistence, UI, system Calendar, or EventKit dependencies.
@@ -102,6 +103,7 @@ public struct ScheduleEngine: Sendable {
         let priorities = state.settings.schedulePriorities
         let defaultOrder = priorities.usesDefaultOrder
         var diagnostics: [String] = []
+        var floatingIssues: [FloatingScheduleIssue] = []
         var validEvents = state.fixedEvents.filter {
             let valid = $0.validDuration && $0.startMinute >= 0 && $0.endMinute <= 1440 && $0.endMinute > $0.startMinute && $0.endDate >= calendar.startOfDay(for: $0.startDate)
             if !valid { diagnostics.append("固定事项「\($0.title)」的时间无效，请修改。") }
@@ -196,6 +198,7 @@ public struct ScheduleEngine: Sendable {
                 blocks += reservations
             } else {
                 diagnostics.append("浮动事项的连续时长无法排入，或组合过于复杂；请调整时段。")
+                floatingIssues.append(.diagnose(events: events, on: day, calendar: calendar))
                 blocks += regions
             }
             // Only retained history reserves time; a planned start is not evidence of actual study.
@@ -563,6 +566,7 @@ public struct ScheduleEngine: Sendable {
             }
             missing = Dictionary(uniqueKeysWithValues: courses.map { ($0.id, 0) })
             diagnostics.removeAll { $0.hasPrefix("浮动事项的连续时长") }
+            floatingIssues.removeAll()
             adjustments.append("已联合调整浮动事项在原窗口内的位置与课程分配，保持截止日期和整节课顺序。")
         }
         // Rebuild the feasible allocation day by day. Unlike merely shuffling one interval,
@@ -823,6 +827,7 @@ public struct ScheduleEngine: Sendable {
                                unscheduledMinutes: absent, courseNames: group.filter { missing[$0.id, default: 0] > 0 }.map(\.name)))
         }
         var result = ScheduleResult(tasks: tasks, risks: risks, demands: demands, diagnostics: Array(Set(diagnostics)).sorted())
+        result.floatingIssues = floatingIssues
         result.adjustments = adjustments
         result.dayPlans = originalDays.map { day in
             .init(date: day.date, availableMinutes: day.free.reduce(0) { $0 + $1.minutes } +

@@ -149,7 +149,10 @@ struct MainView: View {
                     RiskView(
                         store: store,
                         adjustSettings: { sheet = nil; page = .settings },
-                        editCourse: { sheet = .course($0) }
+                        editCourse: { sheet = .course($0) },
+                        reviewEvents: { day in
+                            selectedDay = day; month = day; page = .calendar; sheet = nil
+                        }
                     )
                 }
             }.disabled(store.orderSaveBusy)

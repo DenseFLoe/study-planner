@@ -543,6 +543,7 @@ struct RiskView: View {
     @Bindable var store: PlannerStore
     var adjustSettings: () -> Void
     var editCourse: (Course) -> Void
+    var reviewEvents: (Date) -> Void
     @AppStorage("dailyStudyLoadWarningMinutes") private var dailyLoadWarningMinutes = 480
     @Environment(\.dismiss) private var dismiss
     private var health: ScheduleHealth? {
@@ -550,7 +551,7 @@ struct RiskView: View {
     }
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
-            Text(health?.title ?? "当前没有待排课程").font(.title2.bold())
+            Text(health?.title ?? (store.result.floatingIssues.isEmpty ? "当前没有待排课程" : "事项安排需要检查")).font(.title2.bold())
             Text("截止日期保持不变。先核对补回安排和每天的负担，再决定是否调整可学习时段。")
                 .font(.callout).foregroundStyle(.secondary)
             ScrollView {
@@ -572,7 +573,15 @@ struct RiskView: View {
                             Text("涉及：" + conflict.courseNames.joined(separator: "、")).font(.caption)
                         }.foregroundStyle(.red)
                     }
-                    ForEach(store.result.diagnostics, id: \.self) { Text($0).foregroundStyle(.orange) }
+                    ForEach(store.result.floatingIssues.prefix(20)) { issue in
+                        FloatingScheduleIssueCard(issue: issue, reviewEvents: reviewEvents)
+                    }
+                    if store.result.floatingIssues.count > 20 {
+                        Text("另有 \(store.result.floatingIssues.count - 20) 天需要核对；先调整重复规则，再查看更新后的结果。").font(.callout)
+                    }
+                    ForEach(store.result.diagnostics.filter {
+                        store.result.floatingIssues.isEmpty || !$0.hasPrefix("浮动事项的连续时长")
+                    }, id: \.self) { Text($0).foregroundStyle(.orange) }
                     ForEach(store.result.risks) { risk in
                         VStack(alignment: .leading, spacing: 8) {
                             Text("截止 \(risk.deadline.formatted(date: .abbreviated, time: .omitted)) · 暂未排入 \(hours(risk.unscheduledMinutes))").font(.headline)

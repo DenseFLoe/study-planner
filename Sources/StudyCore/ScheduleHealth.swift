@@ -60,7 +60,7 @@ public struct ScheduleHealthAnalyzer: Sendable {
         let paused = courses.filter { !$0.autoScheduleEnabled }.reduce(0) { $0 + state.remainingMinutes(for: $1) }
         let days = result.dayPlans.filter { $0.plannedMinutes > 0 }
         let heavy = days.filter { $0.plannedMinutes > max(30, heavyDayMinutes) }.count
-        let status: ScheduleHealth.Status = !result.conflicts.isEmpty ? .shortage
+        let status: ScheduleHealth.Status = !result.conflicts.isEmpty || result.floatingIssues.contains(where: \.isProvenConflict) ? .shortage
             : (missing > 0 || paused > 0 || !result.diagnostics.isEmpty ? .pending : (heavy > 0 ? .heavy : .scheduled))
         let reviewed = state.tasks.filter { $0.confirmedAt.map { calendar.isDate($0, inSameDayAs: now) } ?? false }
         struct DebtKey: Hashable { var course: UUID; var lesson: String? }
