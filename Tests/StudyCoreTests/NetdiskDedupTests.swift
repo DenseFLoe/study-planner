@@ -141,6 +141,55 @@ final class NetdiskDedupTests: XCTestCase {
         XCTAssertTrue(report.droppedPackages.isEmpty)
     }
 
+    func testSharedNamedLessonsDoNotHideDifferentGenericLessons() throws {
+        var entries = [NetdiskFixtures.folder("A"), NetdiskFixtures.folder("B")]
+        for folder in ["A", "B"] {
+            for title in ["第1讲 函数", "第2讲 极限", "第3讲 导数"] {
+                entries.append(NetdiskFixtures.video(title + ".mp4", in: folder, duration: 600))
+            }
+            // These uninformative names disappear from the loose identity set. Equal sets
+            // therefore cannot establish that the complete lesson lists are identical.
+            entries.append(NetdiskFixtures.video(folder == "A" ? "第4讲.mp4" : "第5讲.mp4",
+                                                 in: folder, duration: 600))
+        }
+        let packages = NetdiskFixtures.digest(entries).packages
+        XCTAssertEqual(packages.count, 2)
+        let report = NetdiskDedup.scan(packages: packages)
+        XCTAssertEqual(report.droppedPackages.count, 1, "共有的已命名课节仍需提示核对")
+        XCTAssertTrue(try XCTUnwrap(report.droppedPackages.first).requiresReview)
+        XCTAssertEqual(NetdiskDedup.applied(packages, report: report), packages)
+    }
+
+    func testDifferentOccurrencesAcrossChaptersRequireReview() throws {
+        var packages = twinPackages("")
+        let titles = [["第1讲 函数", "第1讲 函数", "第2讲 极限", "第3讲 导数"],
+                      ["第1讲 函数", "第2讲 极限", "第2讲 极限", "第3讲 导数"]]
+        for index in packages.indices {
+            packages[index].videos = titles[index].enumerated().map { lesson, title in
+                NetdiskFixtures.video(title + ".mp4", in: packages[index].path + "/第\(lesson + 1)章",
+                                      size: 200_000_000, duration: 600)
+            }
+        }
+        let report = NetdiskDedup.scan(packages: packages)
+        XCTAssertTrue(report.withinCourses.isEmpty, "不同章节重名的课节不是课内副本")
+        XCTAssertTrue(try XCTUnwrap(report.droppedPackages.first).requiresReview)
+        XCTAssertEqual(NetdiskDedup.applied(packages, report: report), packages)
+    }
+
+    func testIdenticalRepeatedLessonsRemainEligibleForAutomaticDeduplication() throws {
+        var packages = twinPackages("")
+        for index in packages.indices {
+            packages[index].videos = ["第1讲 函数", "第1讲 函数", "第2讲 极限", "第3讲 导数"]
+                .enumerated().map { lesson, title in
+                    NetdiskFixtures.video(title + ".mp4", in: packages[index].path + "/第\(lesson + 1)章",
+                                          size: 200_000_000, duration: 600)
+                }
+        }
+        let report = NetdiskDedup.scan(packages: packages)
+        XCTAssertFalse(try XCTUnwrap(report.droppedPackages.first).requiresReview)
+        XCTAssertEqual(NetdiskDedup.applied(packages, report: report).count, 1)
+    }
+
     func testSubsetIsNotAutoMerged() throws {
         var entries: [NetdiskEntry] = [NetdiskFixtures.folder("全量"), NetdiskFixtures.folder("试看")]
         for index in 1...8 {

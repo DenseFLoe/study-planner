@@ -161,12 +161,17 @@ public enum NetdiskDedup {
         return NetdiskTitles.similarity(lhs.name, rhs.name) >= looseNameThreshold
     }
 
-    /// True only when both courses list exactly the same lessons: the signature of a real duplicate.
+    /// Every video needs an informative identity, and repeated titles must occur equally often.
+    /// A set alone hides unnamed lessons and different occurrences across chapters.
     public static func hasIdenticalLessons(_ lhs: Candidate, _ rhs: Candidate) -> Bool {
-        let left = Set(lhs.looseIdentities.filter { !$0.isEmpty })
-        let right = Set(rhs.looseIdentities.filter { !$0.isEmpty })
-        guard !left.isEmpty, !right.isEmpty else { return false }
-        return left == right
+        guard !lhs.videos.isEmpty, lhs.videos.count == rhs.videos.count,
+              lhs.looseIdentities.count == lhs.videos.count,
+              rhs.looseIdentities.count == rhs.videos.count,
+              !lhs.looseIdentities.contains(""), !rhs.looseIdentities.contains("") else { return false }
+        func occurrences(_ identities: [String]) -> [String: Int] {
+            identities.reduce(into: [:]) { $0[$1, default: 0] += 1 }
+        }
+        return occurrences(lhs.looseIdentities) == occurrences(rhs.looseIdentities)
     }
 
     /// How much of the smaller course also appears in the larger one, by loose lesson identity.
