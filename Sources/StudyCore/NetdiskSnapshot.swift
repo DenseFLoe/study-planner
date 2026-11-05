@@ -244,10 +244,14 @@ extension PlannerState {
     public mutating func importNetdiskCourses(_ candidates: [NetdiskSnapshotBuilder.Course],
                                               scan: NetdiskScan, duplicates: NetdiskDuplicateReport,
                                               deadline: Date, now: Date) throws {
+        guard scan.unreadFolders == 0 else {
+            throw WebCourseImportError.invalid("分享目录未读完，请使用更具体的子目录链接重新读取；原课程和学习记录已保留。")
+        }
         let availableIDs = Set(scan.packages.map(\.packageID))
         for candidate in candidates {
             let sourceIDs = candidate.sourcePackageIDs.isEmpty ? [candidate.packageID] : candidate.sourcePackageIDs
-            guard Set(sourceIDs).isSubset(of: availableIDs) else {
+            guard Set(sourceIDs).isSubset(of: availableIDs),
+                  !scan.packages.contains(where: { sourceIDs.contains($0.packageID) && $0.unreadFolders != 0 }) else {
                 throw WebCourseImportError.invalid(candidate.name + "：来源目录不完整，请重新读取分享。")
             }
         }
