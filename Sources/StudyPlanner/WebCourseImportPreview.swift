@@ -25,10 +25,18 @@ struct WebCourseImportPreview: View {
                 LessonSchedulePreview(state: preview, course: course)
             case .unavailable(let reason):
                 Text("暂不能试排：\(reason)").font(.caption).foregroundStyle(.orange)
-                ForEach(snapshot.lessons) { lesson in
-                    Text("\(lesson.name) · \(lesson.durationSeconds.map(WebLessonTiming.clock) ?? "时长待定")")
-                        .font(.caption)
+                Text("课程目录共 \(snapshot.lessons.count) 节，可滚动查看。")
+                    .font(.caption2).foregroundStyle(.secondary)
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: 6) {
+                        ForEach(snapshot.lessons) { lesson in
+                            Text("\(lesson.name) · \(lesson.durationSeconds.map(WebLessonTiming.clock) ?? "时长待定")")
+                                .font(.caption)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                        }
+                    }
                 }
+                .frame(height: min(CGFloat(max(snapshot.lessons.count, 1)) * 36, 240))
             case nil:
                 ProgressView("正在准备导入预览…").controlSize(.small)
             }

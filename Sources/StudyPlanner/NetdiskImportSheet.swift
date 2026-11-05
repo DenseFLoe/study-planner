@@ -386,10 +386,15 @@ struct NetdiskImportSheet: View {
                 }
                 if !result.unassignedVideos.isEmpty {
                     DisclosureGroup("未归入课程的视频（\(result.unassignedVideos.count)）") {
-                        ForEach(result.unassignedVideos, id: \.fid) { video in
-                            Text(video.relativePath).font(.caption2)
-                                .frame(maxWidth: .infinity, alignment: .leading)
+                        ScrollView {
+                            LazyVStack(alignment: .leading, spacing: 6) {
+                                ForEach(result.unassignedVideos, id: \.fid) { video in
+                                    Text(video.relativePath).font(.caption2)
+                                        .frame(maxWidth: .infinity, alignment: .leading)
+                                }
+                            }
                         }
+                        .frame(height: min(CGFloat(result.unassignedVideos.count) * 36, 180))
                     }
                     .font(.caption).foregroundStyle(.orange)
                 }
