@@ -11,9 +11,9 @@ let checks = 0;
 const verify = (value, message) => { checks++; assert.ok(value, message); };
 const source = readCrawler('QuarkScan').toString();
 const envelope = data => ({ok:true,status:200,text:JSON.stringify(data)});
-async function run(detail, folders = 60, files = 2000, host = 'pan.quark.cn') {
+async function run(detail, folders = 60, files = 2000, host = 'pan.quark.cn', hash = '') {
   const calls=[];
-  const context={window:{},location:{hostname:host,pathname:'/s/synthetic'},URLSearchParams,document:{title:'Synthetic course'},Date,Set,Number,String,Error};
+  const context={window:{},location:{hostname:host,pathname:'/s/synthetic',hash},URLSearchParams,document:{title:'Synthetic course'},Date,Set,Number,String,Error};
   context.studyQuarkCrawler={post:async(path,query,body)=>{calls.push({path,body});return envelope({code:0,data:{stoken:'PLACEHOLDER_TRANSIENT',title:'Synthetic course'}})},get:async(path,query)=>{calls.push({path,query});return envelope(await detail(query));}};
   vm.createContext(context);vm.runInContext(source,context);
   return {value:await context.window.studyQuarkScan('PLACEHOLDER_PASSCODE',folders,files),calls};
@@ -27,6 +27,13 @@ async function run(detail, folders = 60, files = 2000, host = 'pan.quark.cn') {
   const serialized=JSON.stringify(result.value);
   verify(!serialized.includes('PLACEHOLDER')&&!serialized.includes('stoken')&&!serialized.includes('share_fid_token'),'Share credentials escaped into result');
   verify(result.calls.every(c=>c.path.includes('/share/sharepage/')),'Unexpected mutation API');
+  verify(result.value.rootFID===''&&result.value.sourceURL==='https://pan.quark.cn/s/synthetic','Share root identity changed');
+  for (const fid of ['aaaa0001','bbbb0002']) {
+    const linked=await run(query=>({code:0,data:{list:[item(fid+'video','第一讲.mp4')]},metadata:{_count:1}}),60,2000,'pan.quark.cn','#/list/share/'+fid);
+    verify(linked.value.rootFID===fid,'Subdirectory identity lost');
+    verify(linked.value.sourceURL==='https://pan.quark.cn/s/synthetic#/list/share/'+fid,'Subdirectory locator lost');
+    verify(linked.calls.filter(c=>c.query).every(c=>c.query.pdir_fid===fid),'Subdirectory scan read a different root');
+  }
   const paged=await run(query=>({code:0,data:{list:query._page===1?[item('one','第一讲.mp4')]:[item('two','第二讲.mp4')]},metadata:{_count:2,_size:1}}));
   verify(paged.value.entries.length===2,'Shrunken provider page size stopped traversal early');
   for(const [detail,folders,files,host,pattern] of [

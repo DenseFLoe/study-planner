@@ -28,6 +28,14 @@ public final class CourseSourcePrivacy {
             return "https://pan.quark.cn/s/"+share+(folder==null?"":"#/list/share/"+folder);
         } catch(Exception invalid) { return ""; }
     }
+    static String netdiskShare(String value) {
+        String safe=netdiskURL(value);if(safe.isEmpty())return "";
+        String path=URI.create(safe).getPath();return path.substring(path.lastIndexOf('/')+1);
+    }
+    static String netdiskFolder(String value) {
+        String safe=netdiskURL(value);if(safe.isEmpty())return "";
+        String fragment=URI.create(safe).getFragment();return fragment==null?"":fragment.substring(fragment.lastIndexOf('/')+1);
+    }
 
     private static JSONObject metadata(JSONObject source,boolean netdisk)throws Exception {
         JSONObject result=SyncLedger.shallowCopy(source);boolean changed=false;

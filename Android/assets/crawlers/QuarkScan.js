@@ -54,5 +54,6 @@ window.studyQuarkScan = async (passcode, maxFolders, maxFiles) => {
       if (++page > 500) throw Error('目录页数超过上限。');
     }
   }
-  return {pwdID, shareTitle: String(token.title || document.title || '网盘课程'), sourceURL: 'https://pan.quark.cn/s/' + pwdID, fetchedAt: Date.now()/1000 - 978307200, entries};
+  const rootFID = fragment?.[1] || '';
+  return {pwdID, rootFID, shareTitle: String(token.title || document.title || '网盘课程'), sourceURL: 'https://pan.quark.cn/s/' + pwdID + (rootFID ? '#/list/share/' + rootFID : ''), fetchedAt: Date.now()/1000 - 978307200, entries};
 };
