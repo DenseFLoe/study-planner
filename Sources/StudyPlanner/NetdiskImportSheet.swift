@@ -291,6 +291,9 @@ struct NetdiskImportSheet: View {
             if let result = reader.result {
                 let browser = NetdiskCourseBrowser(courses: result.courses, packages: result.scan.packages)
                 let matches = browser.matching(searchText)
+                let selectableIDs = browser.selectableIDs
+                let matchingSelectableIDs = Set(matches.filter { $0.refusal == nil }.map(\.packageID))
+                let hiddenSelectionCount = selected.intersection(selectableIDs).subtracting(matchingSelectableIDs).count
                 let searchActive = !searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
                 let scores = Dictionary(result.scan.packages.map { ($0.packageID, $0.signal.score) },
                                         uniquingKeysWith: { first, _ in first })
@@ -302,21 +305,29 @@ struct NetdiskImportSheet: View {
                     Text(searchActive ? "找到 \(matches.count) 门课程" : "按网盘目录分类")
                         .font(.caption).foregroundStyle(.secondary)
                     Spacer()
-                    Button("全部勾选") { selected.formUnion(browser.selectableIDs) }
-                        .disabled(browser.selectableIDs.isEmpty || browser.selectableIDs.isSubset(of: selected))
-                    Button("全部不勾选") { selected.subtract(browser.selectableIDs) }
-                        .disabled(selected.isDisjoint(with: browser.selectableIDs))
+                    Button("全部勾选") { selected.formUnion(selectableIDs) }
+                        .disabled(selectableIDs.isEmpty || selectableIDs.isSubset(of: selected))
+                        .help("勾选所有可导入目录，包括当前搜索结果之外的目录")
+                    Button("全部不勾选") { selected.subtract(selectableIDs) }
+                        .disabled(selected.isDisjoint(with: selectableIDs))
                 }
                 .controlSize(.small)
                 if searchActive {
                     HStack(spacing: 8) {
-                        Button("勾选搜索结果") {
-                            selected.formUnion(matches.filter { $0.refusal == nil }.map(\.packageID))
-                        }
-                        Button("取消搜索结果") { selected.subtract(matches.map(\.packageID)) }
+                        Button("勾选搜索结果") { selected.formUnion(matchingSelectableIDs) }
+                            .disabled(matchingSelectableIDs.isEmpty || matchingSelectableIDs.isSubset(of: selected))
+                        Button("取消搜索结果") { selected.subtract(matchingSelectableIDs) }
+                            .disabled(selected.isDisjoint(with: matchingSelectableIDs))
+                        Button("只选搜索结果") { selected = matchingSelectableIDs }
+                            .disabled(matchingSelectableIDs.isEmpty || selected == matchingSelectableIDs)
+                        Button("清除筛选") { searchText = "" }
                         Spacer()
                     }
                     .controlSize(.small)
+                    if hiddenSelectionCount > 0 {
+                        Text("另有 \(hiddenSelectionCount) 门已选课程不在当前搜索结果中，导入时会一并保存；可清除筛选核对，或点“只选搜索结果”。")
+                            .font(.caption).foregroundStyle(.orange)
+                    }
                 }
                 VStack(alignment: .leading, spacing: 7) {
                     Toggle("将已选课程合并为一门", isOn: $mergeSelected)
