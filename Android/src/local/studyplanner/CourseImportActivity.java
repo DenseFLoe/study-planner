@@ -282,15 +282,17 @@ public class CourseImportActivity extends Activity {
         navigation.addView(button("清除筛选",()->{reviewOnly.setChecked(false);search.setText("");}));
         dialog.setOnDismissListener(value->{work.close();if(pending[0]!=null)handler.removeCallbacks(pending[0]);});dialog.show();load.run();
     }
-    List<JSONObject> chosen()throws Exception{List<JSONObject> data=new ArrayList<>();for(JSONObject capture:captures)if(selected.contains(WebCourseImport.identity(capture))){if(capture.has("refusal")||WebCourseImport.problem(capture)!=null)throw new IllegalArgumentException("请选择完整课程。");data.add(capture);}if(data.isEmpty())throw new IllegalArgumentException("请先选择课程。");if(netdisk&&mergeSelected.isChecked())return Collections.singletonList(NetdiskImport.merge(data,mergedName.getText().toString()));return data;}
+    CourseImportRequest importRequest(){return new CourseImportRequest(captures,selected,
+        netdisk&&mergeSelected.isChecked()?mergedName.getText().toString():null,importDeadline());}
     double importDeadline(){return Planner.at(LocalDate.parse(deadline.getText().toString()),0);}
     void preview(){
         if(previewing||capturing||delivering||!filterReady())return;
         try{
-            List<JSONObject> data=chosen();double date=importDeadline();int current=generation;previewing=true;
+            CourseImportRequest request=importRequest();int current=generation;previewing=true;
             ProgressDialog progress=ProgressDialog.show(this,"","正在预览…",true,false);
             worker.execute(()->{try{
-                JSONObject state=PlannerRuntime.get(this).database.load();double now=Planner.now();WebCourseImport.save(state,data,date,now);Planner.replan(state,now);
+                List<JSONObject> data=request.prepare();
+                JSONObject state=PlannerRuntime.get(this).database.load();double now=Planner.now();WebCourseImport.save(state,data,request.deadline,now);Planner.replan(state,now);
                 Set<String> packages=new HashSet<>(),courseIDs=new HashSet<>();for(JSONObject snapshot:data)packages.add(WebCourseImport.identity(snapshot));
                 for(JSONObject course:Planner.list(state.getJSONArray("courses"))){JSONObject web=course.optJSONObject("webCourse");if(!course.optBoolean("isArchived")&&web!=null&&packages.contains(WebCourseImport.identity(web)))courseIDs.add(course.getString("id"));}
                 SchedulePreview result=SchedulePreview.fromPlan(state,courseIDs,"导入编排预览",now);
@@ -312,10 +314,10 @@ public class CourseImportActivity extends Activity {
     void deliver(){
         if(capturing||previewing||delivering||!filterReady())return;
         try{
-            List<JSONObject> data=chosen();double date=importDeadline();int current=generation;delivering=true;importButton.setEnabled(false);
+            CourseImportRequest request=importRequest();int current=generation;delivering=true;importButton.setEnabled(false);
             ProgressDialog progress=ProgressDialog.show(this,"","正在准备导入文件…",true,false);
             worker.execute(()->{try{
-                File file=CourseImportReceipt.stage(getCacheDir(),data,date);
+                File file=CourseImportReceipt.stage(getCacheDir(),request.prepare(),request.deadline);
                 runOnUiThread(()->{delivering=false;progress.dismiss();if(isDestroyed())return;renderResults();if(current!=generation)return;setResult(RESULT_OK,new Intent().putExtra("captureFile",file.getAbsolutePath()));finish();});
             }catch(Exception error){runOnUiThread(()->{delivering=false;progress.dismiss();if(isDestroyed())return;renderResults();if(current!=generation)return;message("导入文件未生成："+error.getMessage()+"\n当前选择仍保留，可重试。");});}});
         }catch(Exception error){delivering=false;renderResults();message(error.getMessage());}
