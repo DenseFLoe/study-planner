@@ -38,7 +38,7 @@ struct AssistantView: View {
                         }.frame(maxWidth: 340)
                     }
                     Toggle("在证据中包含课程名称", isOn: $includeNames)
-                    Text("默认用课程编号替代名称；你在问题中自行输入的名称仍会发送。事项名称、备注、网址、账号和完整历史不加入证据。")
+                    Text("默认使用课程编号；问题中识别到的完整课程名会先在本机替换，发送前请核对。同名、范围不符需重新选择；简称或别名不自动推断，其余文字原样发送。事项名称、备注、网址、账号和完整历史不加入证据。")
                         .font(.caption).foregroundStyle(.secondary)
                     HStack {
                         Button("解释排课") { session.question = "为什么这样安排？请区分已确认事实、可能解释与缺失信息。" }
@@ -123,7 +123,8 @@ struct AssistantView: View {
 
     private func evidence(_ preview: AssistantPreview) -> some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text("本次问题：\(preview.question)").font(.headline)
+            Text(preview.resolutionNotice).font(.callout).foregroundStyle(.secondary)
+            Text("实际发送问题：\(preview.question)").font(.headline)
             Text("仅本机对应关系：" + preview.evidence.courseAliases.joined(separator: "；"))
                 .font(.caption).foregroundStyle(.secondary)
             Text(verbatim: preview.evidence.text).font(.system(size: 12, design: .monospaced)).textSelection(.enabled)

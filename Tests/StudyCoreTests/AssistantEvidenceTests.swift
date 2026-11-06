@@ -25,7 +25,7 @@ final class AssistantEvidenceTests: XCTestCase {
         for secret in ["机密课程名称", "秘密备注", "秘密事项", "private.example", state.courses[0].id.uuidString] {
             XCTAssertFalse(evidence.text.contains(secret), secret)
         }
-        XCTAssertEqual(evidence.courseAliases, ["课程1 = 机密课程名称"])
+        XCTAssertEqual(evidence.courseAliases, ["课程1 = \"机密课程名称\""])
         XCTAssertTrue(evidence.text.contains("总量300分钟"))
         XCTAssertTrue(evidence.text.contains("有效完成60分钟"))
         XCTAssertTrue(evidence.text.contains("剩余240分钟"))

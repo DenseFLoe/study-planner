@@ -43,6 +43,8 @@ enum AssistantVault {
 struct AssistantPreview: Equatable, Sendable {
     var configuration: AssistantConfiguration
     var question: String
+    var originalQuestion: String
+    var resolutionNotice: String
     var evidence: AssistantEvidence
     // Only used locally to invalidate confirmation after sync/edit; never serialized.
     var source: PlannerState
@@ -91,19 +93,28 @@ final class AssistantSession {
         guard !value.isEmpty, value.utf8.count <= 6000 else { message = "请输入问题，最多6000字节（约2000个汉字）。"; return }
         let token = generation, config = configuration
         preparing = true
-        let evidence = await Task.detached(priority: .userInitiated) {
-            AssistantEvidence.build(state: state, day: day, courseID: courseID, includeNames: includeNames,
-                                    result: result, dailyWarningMinutes: dailyWarningMinutes)
-        }.value
-        guard token == generation, !Task.isCancelled else { return }
-        preparing = false
-        preview = .init(configuration: config, question: value, evidence: evidence, source: state)
+        do {
+            let (resolution, evidence) = try await Task.detached(priority: .userInitiated) {
+                let resolution = try AssistantQuestionResolution.resolve(value, state: state, courseID: courseID)
+                let evidence = AssistantEvidence.build(state: state, day: day, courseID: courseID, includeNames: includeNames,
+                                                      result: result, dailyWarningMinutes: dailyWarningMinutes)
+                return (resolution, evidence)
+            }.value
+            guard token == generation, !Task.isCancelled else { return }
+            preparing = false
+            preview = .init(configuration: config, question: resolution.question, originalQuestion: value,
+                            resolutionNotice: resolution.notice, evidence: evidence, source: state)
+        } catch {
+            guard token == generation, !Task.isCancelled else { return }
+            preparing = false
+            message = (error as? AssistantQuestionError)?.localizedDescription ?? "本地课程解析失败，请重新选择课程后预览。"
+        }
     }
 
     func send(currentState: PlannerState) {
         guard !busy, !preparing, let approved = preview else { return }
         guard approved.source == currentState, approved.configuration == configuration,
-              approved.question == question.trimmingCharacters(in: .whitespacesAndNewlines) else {
+              approved.originalQuestion == question.trimmingCharacters(in: .whitespacesAndNewlines) else {
             invalidate(); message = "数据或配置已变化，请重新预览后发送。"; return
         }
         do {

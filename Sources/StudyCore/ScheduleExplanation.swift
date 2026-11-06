@@ -3,6 +3,17 @@ import Foundation
 /// A read-only explanation of the last generated plan, using saved settings.
 public enum ScheduleExplanation {
     public static let deadlineFallback = "为守住截止日期，已适当放宽每天的科目混排和学习倍率偏好。"
+    static let deadlineFallbackDetail = "初始混排尝试没能保留原方案已排入的学习量，曾将整份课表退回截止日期优先的排法，随后继续按权重尝试局部优化。仍有集中安排不代表只有集中排课才能按期完成。"
+    static let floatingAdjustment = "已联合调整浮动事项在原窗口内的位置与课程分配，保持截止日期和整节课顺序。"
+    static let weightRelaxation = "为保留截止日前已排入的整节课，自定义权重在空间不足处已让步。"
+    static let weightedOptimization = "已在保留每门课程已排入学习量的前提下，按权重逐级优化跨日分配与当天顺序。"
+    static let immediateAdjustment = "已将所选课程从当前时间开始安排，其余课程在满足日期、固定事项、课间休息与课节顺序后重排。"
+
+    /// Export only engine-owned reasons; diagnostics or future free-form labels may contain private names.
+    static func recordedAdjustment(_ value: String) -> String? {
+        if value == deadlineFallback { return deadlineFallbackDetail }
+        return [floatingAdjustment, weightRelaxation, weightedOptimization, immediateAdjustment].contains(value) ? value : nil
+    }
 
     public static func lines(state: PlannerState, result: ScheduleResult,
                              calendar: Calendar = .current) -> [String] {
@@ -12,7 +23,7 @@ public enum ScheduleExplanation {
         guard !courses.isEmpty else { return ["当前没有需要自动排课的剩余课程。"] }
         var lines: [String] = []
         if result.adjustments.contains(deadlineFallback) {
-            lines.append("初始混排尝试没能保留原方案已排入的学习量，曾将整份课表退回截止日期优先的排法，随后继续按权重尝试局部优化。仍有集中安排不代表只有集中排课才能按期完成。")
+            lines.append(deadlineFallbackDetail)
             let other = result.adjustments.filter { $0 != deadlineFallback }
             if !other.isEmpty { lines.append("后续调整：" + other.joined(separator: "\n")) }
         } else if !result.adjustments.isEmpty {

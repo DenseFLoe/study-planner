@@ -567,7 +567,7 @@ public struct ScheduleEngine: Sendable {
             missing = Dictionary(uniqueKeysWithValues: courses.map { ($0.id, 0) })
             diagnostics.removeAll { $0.hasPrefix("浮动事项的连续时长") }
             floatingIssues.removeAll()
-            adjustments.append("已联合调整浮动事项在原窗口内的位置与课程分配，保持截止日期和整节课顺序。")
+            adjustments.append(ScheduleExplanation.floatingAdjustment)
         }
         // Rebuild the feasible allocation day by day. Unlike merely shuffling one interval,
         // this gives equal-priority courses a share of days that were filled by a single course.
@@ -690,7 +690,7 @@ public struct ScheduleEngine: Sendable {
                     days[index].free = subtract(occupied, from: originalDays[index].free)
                 }
             } else if !defaultOrder {
-                adjustments.append("为保留截止日前已排入的整节课，自定义权重在空间不足处已让步。")
+                adjustments.append(ScheduleExplanation.weightRelaxation)
             }
         }
         let dateIndices = Dictionary(uniqueKeysWithValues: days.enumerated().map { ($0.element.date, $0.offset) })
@@ -762,7 +762,7 @@ public struct ScheduleEngine: Sendable {
             }, priorities: priorities, calendar: calendar)
         tasks = optimized.tasks
         if optimized.improved {
-            adjustments.append("已在保留每门课程已排入学习量的前提下，按权重逐级优化跨日分配与当天顺序。")
+            adjustments.append(ScheduleExplanation.weightedOptimization)
         }
         // A recorded start should produce a usable timetable from the first free
         // window, even if daily balancing emptied earlier windows. Pull today's
@@ -815,7 +815,7 @@ public struct ScheduleEngine: Sendable {
         if let immediate {
             tasks.append(immediate)
             tasks.sort { $0.start < $1.start }
-            adjustments.append("已将所选课程从当前时间开始安排，其余课程在满足日期、固定事项、课间休息与课节顺序后重排。")
+            adjustments.append(ScheduleExplanation.immediateAdjustment)
         }
         var risks: [ScheduleRisk] = []
         for cutoff in Set(courses.map { calendar.startOfDay(for: $0.deadline) }).sorted() {
@@ -846,12 +846,12 @@ public struct ScheduleEngine: Sendable {
                     let upper = windows.reduce(0) { $0 + $1.minutes }
                     if needed > upper {
                         result.conflicts.append(.init(windowStart: start, deadline: end, requiredMinutes: needed,
-                                                      availableMinutes: upper, courseNames: group.map(\.name)))
+                                                      availableMinutes: upper, courseNames: group.map(\.name), courseIDs: group.map(\.id)))
                     } else if let rest = ScheduleRestConflict.diagnose(
                         studyMinutes: needed, blockCount: group.reduce(0) { $0 + allWork[$1.id, default: []].count },
                         availableMinutes: upper, windowCount: windows.count) {
                         result.conflicts.append(.init(windowStart: start, deadline: end, requiredMinutes: needed,
-                                                      availableMinutes: upper, courseNames: group.map(\.name), restConflict: rest))
+                                                      availableMinutes: upper, courseNames: group.map(\.name), restConflict: rest, courseIDs: group.map(\.id)))
                     }
                 }
             }
@@ -860,7 +860,7 @@ public struct ScheduleEngine: Sendable {
                 if let blocked = allWork[course.id]?.first(where: { $0.minutes > longest }) {
                     result.conflicts.append(.init(windowStart: max(today, calendar.startOfDay(for: course.startDate)), deadline: course.deadline,
                                                   requiredMinutes: blocked.minutes, availableMinutes: longest, courseNames: [course.name],
-                                                  minimumContinuousMinutes: blocked.minutes))
+                                                  minimumContinuousMinutes: blocked.minutes, courseIDs: [course.id]))
                 }
             }
         }
