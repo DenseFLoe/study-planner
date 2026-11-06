@@ -26,6 +26,7 @@ app="$dist_dir/学习日程.app"
 sha="$(/usr/libexec/PlistBuddy -c 'Print :StudyPlannerSourceIdentifier' "$app/Contents/Info.plist")"
 base="学习日程-macOS-$sha"
 if [[ "${STUDYPLANNER_AGENT_PROTOTYPE:-0}" == 1 ]]; then base="$base-agent-prototype"; fi
+if [[ "${STUDYPLANNER_ASSISTANT:-0}" == 1 ]]; then base="$base-assistant"; fi
 dmg="$dist_dir/$base.dmg"
 checksum="$dmg.sha256"
 

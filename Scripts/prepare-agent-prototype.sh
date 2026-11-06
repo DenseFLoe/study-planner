@@ -1,5 +1,5 @@
 #!/bin/bash
-# Optional, synthetic-only prototype. Downloads public packages, never model APIs.
+# Optional local SDK bridges. Downloads public packages, never model APIs.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 root="$PWD"
@@ -39,6 +39,7 @@ mkdir -p "$work/payload"
 cp "$node" "$work/payload/node"
 cp "$work/$release/LICENSE" "$work/payload/NODE-LICENSE"
 cp Experiments/AgentPrototype/out/helper.cjs "$work/payload/helper.cjs"
+cp Experiments/AgentPrototype/out/assistant-helper.cjs "$work/payload/assistant-helper.cjs"
 python3 - "$work/payload" <<'PY'
 from pathlib import Path
 import hashlib, json, sys
@@ -54,9 +55,11 @@ if not licenses:
 (target / 'DEPENDENCY-LICENSES.txt').write_text('\n\n'.join(licenses))
 manifest = {'protocol': 1, 'syntheticOnly': True, 'node': '26.7.0',
             'dependencies': package['dependencies'],
-            'helperSHA256': hashlib.sha256((target / 'helper.cjs').read_bytes()).hexdigest()}
+            'helperSHA256': hashlib.sha256((target / 'helper.cjs').read_bytes()).hexdigest(),
+            'assistantProtocol': 2,
+            'assistantSHA256': hashlib.sha256((target / 'assistant-helper.cjs').read_bytes()).hexdigest()}
 (target / 'manifest.json').write_text(json.dumps(manifest, indent=2) + '\n')
 PY
 # Inner executable is signed before the containing application.
 codesign --force --sign - "$work/payload/node"
-echo "Synthetic agent payload prepared ($architecture)"
+echo "Local SDK bridges prepared ($architecture)"

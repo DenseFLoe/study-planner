@@ -6,6 +6,7 @@ import Network
 
 @MainActor @Observable
 final class PlannerStore {
+    let assistantWindow = AssistantWindowController()
     let settingsDraft = SettingsDraft()
     private(set) var state = PlannerState() {
         didSet { compressedPlan.update(state: state) }

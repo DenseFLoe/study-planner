@@ -37,6 +37,20 @@ macOS 的「学习日程 → 关于学习日程」显示当前运行应用的版
 
 可选的智能客服合成验证使用独立入口，不读取正式数据、不接入真实 API。运行 `bash Scripts/test-agent-prototype.sh` 验证本机查询、发送审批和两种 SDK 请求格式；使用 `STUDYPLANNER_AGENT_PROTOTYPE=1 ./Scripts/build-dmg.sh` 生成带运行时的实验 DMG。普通打包不包含该运行时。范围、局限与成品验收命令见 [合成验证说明](Experiments/AgentPrototype/README.md)。
 
+macOS 的「智能助手」从工具栏或「学习计划 → 智能助手」（⇧⌘J）打开独立双栏窗口，可调整大小、创建和切换本机对话。左下角 API 设置默认折叠；支持 OpenAI 兼容 Chat Completions（含 DeepSeek）与 Anthropic Messages，模型须支持工具调用。助手只读查询课程、课节、课表、学习进度、规则和冲突，计算由现有软件引擎及证据数值工具完成；不修改日程。每次请求都先在本机显示接收地址、数据类别及实际待发送正文，确认仅使用一次、两分钟过期；新增工具结果也需再次确认。停止、切换、关闭、修改内容或服务配置会作废待发送确认。已发出的请求不能撤回，重试可能再次计费，程序不自动重试。
+
+聊天与非敏感配置保存在本机 `StudyPlannerAssistant/workspace-v2.json`，不进入课表备份或云同步。旧 `conversations-v1.json` 仅导入本机查看，原文件不改动；旧设置与凭证保留，不自动读入。新密钥仅在主动点击后存取独立的本机钥匙串项目，按服务地址隔离；关闭助手清空密钥输入，更换服务地址须重新提供。模型回答和引用仍需对照本机证据核验；当前为逐轮非流式回答。
+
+构建带助手运行时的可辨识安装包及合成验收：
+
+```sh
+bash Scripts/test-assistant.sh
+STUDYPLANNER_ASSISTANT=1 ./Scripts/build-dmg.sh
+python3 Scripts/test-assistant-package.py dist/学习日程-macOS-<源码标识>-assistant.dmg
+```
+
+合成界面验收入口是成品可执行程序的 `--assistant-preview` 参数，后台成品探针是 `--assistant-check`；二者均在正式数据、同步及凭证初始化之前分流，只使用固定合成课表与本机模拟服务。模拟器的固定回答只检验流程，不代表真实模型推理能力。真实服务、真实凭证、macOS 14 和 Intel 成品需另行验收。辅助 Node 进程不接触密钥，没有网络、文件写入或子进程权限；外发由原生程序在一次性确认后执行。这是固定辅助程序的限制措施，并非经审计的恶意代码安全沙箱。[AI SDK ToolLoopAgent 文档](https://ai-sdk.dev/docs/reference/ai-sdk-core/tool-loop-agent)说明了多轮工具调用接口。
+
 每一轮改动（一个明确的修改目标，或一轮用户反馈，而不是每次保存文件）都作为独立 Git 提交推送到已有 `origin`，提交前检查 diff、只显式添加本轮文件，不提交个人数据、密钥、日志和构建产物；推送失败时保留本地提交并如实报告，不强制推送，也不覆盖既有工作。完整的开发流程、DSH 委派规则与发布边界见 [AGENTS.md](AGENTS.md)。
 
 已有命令：

@@ -91,6 +91,9 @@ struct MainView: View {
             if value != nil { showingNavigation = false; showingInsights = false }
         }
         .toolbar {
+            ToolbarItem {
+                Button { store.assistantWindow.show(store: store) } label: { Label("智能助手", systemImage: "bubble.left.and.bubble.right") }
+            }
             if store.demo {
                 ToolbarItem {
                     Text("示例预览 · 不保存").font(.caption).foregroundStyle(.secondary)

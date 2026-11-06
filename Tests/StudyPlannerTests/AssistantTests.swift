@@ -1,0 +1,284 @@
+import XCTest
+import StudyCore
+@testable import StudyPlanner
+
+final class AssistantTests: XCTestCase {
+    private func runtime() throws -> URL {
+        let url = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent(".build/agent-prototype/payload")
+        guard FileManager.default.fileExists(atPath: url.appendingPathComponent("assistant-helper.cjs").path) else {
+            throw XCTSkip("Optional SDK runtime absent; run bash Scripts/test-assistant.sh for required bridge coverage")
+        }
+        return url
+    }
+    private func request(id: String = "r1", body: String? = nil, config: AssistantConfiguration = AssistantSimulation.configuration()) throws -> AssistantRequest {
+        .init(id: id, configuration: config, url: try config.endpoint().absoluteString,
+              body: body ?? "{\"model\":\"synthetic-chat\",\"messages\":[{\"role\":\"user\",\"content\":\"合成问题\"}]}")
+    }
+    private func history() throws -> AssistantHistoryStore {
+        let directory = FileManager.default.temporaryDirectory.resolvingSymlinksInPath().appendingPathComponent("assistant-tests-" + UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        addTeardownBlock { try? FileManager.default.removeItem(at: directory) }
+        return .init(url: directory.appendingPathComponent("workspace.json"))
+    }
+    @MainActor private func waitUntil(_ condition: @MainActor () -> Bool, file: StaticString = #filePath, line: UInt = #line) async throws {
+        for _ in 0..<800 {
+            if condition() { return }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        XCTFail("Timed out", file: file, line: line); throw AssistantError.protocolError
+    }
+    @MainActor private func session(_ transport: AssistantMockTransport? = nil,
+                                   history: AssistantHistoryStore? = nil,
+                                   snapshot: AssistantSnapshot = AssistantSimulation.snapshot()) throws -> AssistantSession {
+        let value = AssistantSession(historyStore: history, directory: try runtime(), simulated: true, snapshot: { snapshot },
+            transportFactory: { transport ?? AssistantMockTransport(script: Array(AssistantSimulation.script.prefix(2))) })
+        value.configuration = AssistantSimulation.configuration(); value.question = "合成问题"; return value
+    }
+    @MainActor private func complete(_ session: AssistantSession) async throws {
+        while session.busy {
+            try await waitUntil { session.approval != nil || !session.busy }
+            if let approval = session.approval { session.decide(approval.id, allow: true) }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+    }
+
+    func testExactApprovalExpiryRefusalReplayAndChange() throws {
+        let request = try request(), now = Date(timeIntervalSince1970: 100)
+        for mode in ["approve", "reject", "expire", "body", "recipient", "snapshot"] {
+            var gate = AssistantApprovalGate()
+            let approval = try gate.prepare(request, snapshotID: "s1", simulated: true, now: now)
+            var changed = request
+            if mode == "body" { changed = try self.request(body: request.body + " ") }
+            if mode == "recipient" {
+                var config = request.configuration; config.baseURL = "https://other.invalid/v1"; changed = try self.request(config: config)
+            }
+            if ["approve", "reject"].contains(mode) {
+                XCTAssertEqual(try gate.decide(id: approval.id, request: changed, snapshotID: "s1", allow: mode == "approve", now: now), mode == "approve")
+            } else {
+                XCTAssertThrowsError(try gate.decide(id: approval.id, request: changed, snapshotID: mode == "snapshot" ? "s2" : "s1", allow: true, now: mode == "expire" ? now.addingTimeInterval(120) : now))
+            }
+            XCTAssertNil(gate.pending)
+            XCTAssertThrowsError(try gate.decide(id: approval.id, request: request, snapshotID: "s1", allow: true, now: now))
+            XCTAssertThrowsError(try gate.prepare(request, snapshotID: "s1", simulated: true, now: now))
+        }
+    }
+    func testBodyCategoriesAreParsedFromActualToolBlocks() throws {
+        let body = "{\"model\":\"synthetic-chat\",\"messages\":[{\"role\":\"user\",\"content\":\"category:假类别\"},{\"role\":\"tool\",\"content\":\"{\\\"category\\\":\\\"课程名称\\\"}\"}]}"
+        let value = try request(body: body)
+        XCTAssertEqual(value.categories, ["课程名称"])
+        XCTAssertTrue(value.details.hasSuffix(body))
+        XCTAssertFalse(value.details.contains("Bearer test"))
+    }
+    func testEndpointAndSecretGuards() throws {
+        for url in ["http://example.com/v1", "https://u:p@example.com/v1", "https://example.com/v1?token=x", "https://example.com/v1#x"] {
+            var config = AssistantSimulation.configuration(); config.baseURL = url
+            XCTAssertThrowsError(try config.endpoint())
+        }
+        XCTAssertThrowsError(try AssistantSecrets.check("sk-syntheticabcdefgh"))
+        XCTAssertThrowsError(try AssistantSecrets.check("prefix fake-credential suffix", key: "fake-credential"))
+        XCTAssertThrowsError(try request(body: "{\"model\":\"wrong\",\"messages\":[]}").validate())
+    }
+    func testAllToolsUseSnapshotAndKeepDataReadOnly() throws {
+        let snapshot = AssistantSimulation.snapshot(), original = try assistantJSON(snapshot.state)
+        let results = try AssistantSimulation.script.enumerated().map { try AssistantTools.execute(name: $0.element.0, input: $0.element.1, snapshot: snapshot, id: "E\($0.offset + 1)") }
+        XCTAssertEqual(results.count, 6)
+        XCTAssertTrue(results[1].json.contains("\"remaining_minutes\":120"))
+        XCTAssertTrue(results[4].json.contains("\"break_minutes\":15"))
+        XCTAssertTrue(results[5].json.contains("\"minimum_rest_minutes\":15"))
+        XCTAssertTrue(results[5].json.contains("\"unscheduled_minutes\":60"))
+        XCTAssertTrue(results[5].json.contains("\"proven_capacity_deficit\":null"))
+        XCTAssertEqual(try assistantJSON(snapshot.state), original)
+        for name in ["write_file", "replan", "preview_schedule_change", "read_file"] {
+            XCTAssertThrowsError(try AssistantTools.execute(name: name, input: [:], snapshot: snapshot, id: "E1"))
+        }
+        XCTAssertThrowsError(try AssistantTools.execute(name: "list_courses", input: ["offset": "0", "path": "/tmp"], snapshot: snapshot, id: "E1"))
+        XCTAssertThrowsError(try AssistantTools.execute(name: "inspect_schedule", input: ["date": "2026-02-30", "offset": "0"], snapshot: snapshot, id: "E1"))
+    }
+    func testToolPrivacyPaginationAndMissingData() throws {
+        let basis = AssistantSimulation.snapshot()
+        var state = basis.state
+        state.courses[0].notes = "private-note-must-not-leak"
+        for i in 0..<25 { state.courses.append(Course(name: "课程\(i)", totalMinutes: 20, startDate: basis.now, deadline: basis.now)) }
+        let snapshot = AssistantSnapshot(state: state, now: basis.now, calendar: basis.calendar)
+        let first = try AssistantTools.execute(name: "list_courses", input: ["offset": "0"], snapshot: snapshot, id: "E1")
+        XCTAssertTrue(first.json.contains("\"next_offset\":\"20\""))
+        for item in AssistantSimulation.script {
+            XCTAssertFalse(try AssistantTools.execute(name: item.0, input: item.1, snapshot: snapshot, id: "E1").json.contains("private-note"))
+        }
+        let empty = AssistantSnapshot(state: PlannerState(), now: basis.now)
+        XCTAssertTrue(try AssistantTools.execute(name: "list_courses", input: ["offset": "0"], snapshot: empty, id: "E1").json.contains("\"total\":0"))
+    }
+    func testArithmeticUsesOnlyExistingNumericEvidenceAndMissingFactsAreExplicit() throws {
+        let snapshot = AssistantSimulation.snapshot()
+        let course = try AssistantTools.execute(name: "inspect_course", input: ["course": AssistantSimulation.courseID.uuidString, "offset": "0"], snapshot: snapshot, id: "E1")
+        let calculated = try AssistantTools.execute(name: "calculate", input: ["left": "E1.data.total_minutes", "right": "E1.data.completed_minutes", "operation": "subtract"], snapshot: snapshot, id: "E2", previous: [course])
+        XCTAssertTrue(calculated.json.contains("\"result\":120"))
+        for path in ["120", "E9.data.total_minutes", "E1.data.auto_schedule", "E1.data.untrusted_name"] {
+            XCTAssertThrowsError(try AssistantTools.execute(name: "calculate", input: ["left": path, "right": "E1.data.total_minutes", "operation": "add"], snapshot: snapshot, id: "E2", previous: [course]))
+        }
+        let missing = try AssistantTools.query(name: "inspect_course", input: ["course": UUID().uuidString, "offset": "0"], snapshot: snapshot, id: "E2", previous: [])
+        XCTAssertTrue(missing.json.contains("没有可用事实"))
+    }
+    func testHistoryRoundtripMigrationAndCorruptionPreservesFile() throws {
+        let store = try history()
+        let conversation = AssistantConversation(entries: [.init(role: "你", text: "仅合成历史", status: "完成")])
+        let workspace = AssistantWorkspace(conversations: [conversation], selectedID: conversation.id)
+        try store.save(workspace)
+        XCTAssertEqual(try store.load().selectedID, conversation.id)
+        let permissions = try FileManager.default.attributesOfItem(atPath: store.url.path)[.posixPermissions] as? Int
+        XCTAssertEqual(permissions, 0o600)
+        try Data("corrupt".utf8).write(to: store.url)
+        XCTAssertThrowsError(try store.load())
+        XCTAssertEqual(try String(contentsOf: store.url, encoding: .utf8), "corrupt")
+        let legacy = store.url.deletingLastPathComponent().appendingPathComponent("legacy.json")
+        let data = try assistantJSON([conversation]); try data.write(to: legacy)
+        let migrated = AssistantHistoryStore(url: store.url.deletingLastPathComponent().appendingPathComponent("new.json"), legacyURL: legacy)
+        XCTAssertEqual(try migrated.load().conversations[0].entries[0].status, "旧版记录 · 仅本机查看")
+        XCTAssertEqual(try Data(contentsOf: legacy), data)
+    }
+    func testHistoryRejectsSymlinkAndDuplicateIDs() throws {
+        let store = try history(), target = store.url.deletingLastPathComponent().appendingPathComponent("target.json")
+        try Data("untouched".utf8).write(to: target)
+        try FileManager.default.createSymbolicLink(at: store.url, withDestinationURL: target)
+        XCTAssertThrowsError(try store.save(AssistantWorkspace()))
+        XCTAssertEqual(try String(contentsOf: target, encoding: .utf8), "untouched")
+        let clean = try history(), conversation = AssistantConversation()
+        XCTAssertThrowsError(try clean.save(.init(conversations: [conversation, conversation])))
+    }
+    @MainActor func testSDKSerializersExecuteAllSixReadOnlyToolsAndRequireEveryApproval() async throws {
+        let snapshot = AssistantSimulation.snapshot()
+        for provider in [AssistantProvider.openai, .anthropic, .deepseek] {
+            let runner = AssistantRunner(), mock = AssistantMockTransport()
+            var approvals: [AssistantApproval] = [], results: [AssistantToolEvidence] = []
+            let answer = try await runner.run(configuration: AssistantSimulation.configuration(provider: provider),
+                messages: [.init(role: "user", content: "合成问题")], snapshot: snapshot, key: "", directory: try runtime(),
+                transport: mock, currentSnapshotID: { snapshot.id }, approve: { approvals.append($0); return true },
+                activity: { _ in }, evidence: { results.append($0) })
+            XCTAssertEqual(approvals.count, 7); XCTAssertEqual(results.count, 6); XCTAssertFalse(answer.isEmpty)
+            XCTAssertTrue(approvals[0].request.categories.isEmpty)
+            XCTAssertEqual(approvals[1].request.categories, [results[0].category])
+            XCTAssertEqual(approvals.last?.request.categories.count, 6)
+            let captured = await mock.requests
+            XCTAssertEqual(captured, approvals.map(\.request))
+            XCTAssertFalse(captured[0].body.contains("合成课程 A"))
+            XCTAssertTrue(captured[1].body.contains("合成课程 A"))
+        }
+    }
+    @MainActor func testRefusalAfterToolNeverTransmitsToolResult() async throws {
+        let mock = AssistantMockTransport(), session = try session(mock)
+        session.send(); try await waitUntil { session.approval != nil }
+        session.decide(session.approval!.id, allow: true)
+        try await waitUntil { session.approval != nil }
+        XCTAssertEqual(session.evidence.count, 1)
+        session.decide(session.approval!.id, allow: false)
+        try await waitUntil { !session.busy }
+        let requests = await mock.requests
+        XCTAssertEqual(requests.count, 1); XCTAssertFalse(requests[0].body.contains("合成课程 A"))
+        XCTAssertFalse(session.entries.contains { $0.role == "助手" })
+    }
+    @MainActor func testSDKCalculationUsesNativeEvidenceAndIsSeparatelyApproved() async throws {
+        let snapshot = AssistantSimulation.snapshot(), runner = AssistantRunner()
+        let mock = AssistantMockTransport(script: [
+            ("inspect_course", ["course": AssistantSimulation.courseID.uuidString, "offset": "0"]),
+            ("calculate", ["left": "E1.data.total_minutes", "right": "E1.data.completed_minutes", "operation": "subtract"])
+        ])
+        var approvals: [AssistantApproval] = []
+        _ = try await runner.run(configuration: AssistantSimulation.configuration(), messages: [.init(role: "user", content: "合成计算")],
+            snapshot: snapshot, key: "", directory: try runtime(), transport: mock, currentSnapshotID: { snapshot.id },
+            approve: { approvals.append($0); return true }, activity: { _ in }, evidence: { _ in })
+        XCTAssertEqual(approvals.count, 3)
+        XCTAssertTrue(approvals[2].request.categories.contains("软件核算的数值与计算依据"))
+        XCTAssertTrue(approvals[2].request.body.contains("result"))
+    }
+    @MainActor func testRefuseRetryAndDuplicateDecisions() async throws {
+        let session = try session()
+        session.send(); try await waitUntil { session.approval != nil }
+        let old = session.approval!.id
+        session.decide(old, allow: false); session.decide(old, allow: true)
+        try await waitUntil { !session.busy }
+        session.retry(); try await waitUntil { session.approval != nil }
+        let next = session.approval!.id; XCTAssertNotEqual(next, old)
+        session.decide(old, allow: true); XCTAssertEqual(session.approval?.id, next)
+        try await complete(session)
+        XCTAssertEqual(session.entries.filter { $0.role == "助手" }.count, 1)
+        XCTAssertEqual(session.entries.filter { $0.role == "你" && $0.status == "完成" }.count, 1)
+    }
+    @MainActor func testQuestionRecipientModelAndKeyChangesInvalidatePendingApproval() async throws {
+        for kind in ["question", "recipient", "model", "key"] {
+            let mock = AssistantMockTransport(), session = try session(mock)
+            session.send(); try await waitUntil { session.approval != nil }
+            let id = session.approval!.id
+            switch kind {
+            case "question": session.question = "变化后的问题"
+            case "recipient": session.configuration.baseURL = "https://changed.invalid/v1"
+            case "model": session.configuration.model = "different-model"
+            default: session.key = "synthetic-value"
+            }
+            session.decide(id, allow: true)
+            XCTAssertNil(session.approval); XCTAssertFalse(session.busy)
+            let requests = await mock.requests; XCTAssertTrue(requests.isEmpty)
+        }
+    }
+    @MainActor func testSnapshotChangesBeforeApprovalSendNothing() async throws {
+        var snapshot = AssistantSimulation.snapshot()
+        let mock = AssistantMockTransport()
+        let session = AssistantSession(historyStore: nil, directory: try runtime(), simulated: true, snapshot: { snapshot }, transportFactory: { mock })
+        session.configuration = AssistantSimulation.configuration(); session.question = "合成"; session.send()
+        try await waitUntil { session.approval != nil }
+        var state = snapshot.state; state.courses[0].name = "已变化"
+        snapshot = .init(state: state, now: snapshot.now, calendar: snapshot.calendar)
+        session.decide(session.approval!.id, allow: true)
+        try await waitUntil { !session.busy }
+        let requests = await mock.requests; XCTAssertTrue(requests.isEmpty)
+        XCTAssertEqual(session.message, AssistantError.changed.rawValue)
+    }
+    @MainActor func testSwitchAndCloseCancelPendingApprovalsAndPreserveHistory() async throws {
+        let store = try history(), mock = AssistantMockTransport(), session = try session(mock, history: store)
+        let original = session.selectedID
+        session.send(); try await waitUntil { session.approval != nil }
+        let id = session.approval!.id
+        session.newConversation(); session.decide(id, allow: true)
+        XCTAssertFalse(session.busy); XCTAssertNotEqual(original, session.selectedID)
+        session.select(original); XCTAssertEqual(session.entries.first?.text, "合成问题")
+        session.retry(); try await waitUntil { session.approval != nil }
+        session.close(); XCTAssertNil(session.approval); XCTAssertEqual(session.key, "")
+        let reopened = try self.session(history: store)
+        XCTAssertEqual(reopened.selectedID, original)
+        XCTAssertEqual(reopened.conversations.count, 2)
+        XCTAssertTrue(reopened.entries.allSatisfy { $0.status != "处理中" })
+        let requests = await mock.requests; XCTAssertTrue(requests.isEmpty)
+    }
+    @MainActor func testStoppingInFlightIgnoresLateResponse() async throws {
+        let mock = AssistantMockTransport(delay: .seconds(3)), session = try session(mock)
+        session.send(); try await waitUntil { session.approval != nil }
+        session.decide(session.approval!.id, allow: true)
+        try await Task.sleep(for: .milliseconds(100)); session.stop()
+        try await Task.sleep(for: .milliseconds(100))
+        XCTAssertFalse(session.busy); XCTAssertTrue(session.evidence.isEmpty)
+        XCTAssertFalse(session.entries.contains { $0.role == "助手" })
+    }
+    @MainActor func testContinuousFollowupUsesCompletedConversationOnly() async throws {
+        let snapshot = AssistantSimulation.snapshot()
+        var mocks: [AssistantMockTransport] = []
+        let session = AssistantSession(historyStore: nil, directory: try runtime(), simulated: true, snapshot: { snapshot }, transportFactory: {
+            let value = AssistantMockTransport(script: Array(AssistantSimulation.script.prefix(2))); mocks.append(value); return value
+        })
+        session.configuration = AssistantSimulation.configuration(); session.question = "第一问"; session.send(); try await complete(session)
+        session.question = "那下一节呢？"; session.send(); try await complete(session)
+        let requests = await mocks[1].requests
+        XCTAssertTrue(requests[0].body.contains("第一问")); XCTAssertTrue(requests[0].body.contains("那下一节呢"))
+        XCTAssertTrue(requests[0].body.contains("合成演示完成"))
+        XCTAssertEqual(session.entries.filter { $0.role == "助手" }.count, 2)
+    }
+    @MainActor func testFailureIsNotRetriedAndCorruptHistoryDisablesWrites() async throws {
+        let mock = AssistantMockTransport(failAt: 1), session = try session(mock)
+        session.send(); try await complete(session)
+        let requests = await mock.requests; XCTAssertEqual(requests.count, 1)
+        XCTAssertEqual(session.message, AssistantError.network.rawValue)
+        let store = try history(); try Data("corrupt".utf8).write(to: store.url)
+        let broken = try self.session(history: store); broken.send()
+        XCTAssertFalse(broken.busy); XCTAssertNotNil(broken.historyMessage)
+        XCTAssertEqual(try String(contentsOf: store.url, encoding: .utf8), "corrupt")
+    }
+}

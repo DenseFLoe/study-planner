@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "Synthetic-only local AI SDK integration probe; no live transport or credentials",
+  "description": "Local AI SDK bridges: synthetic probe and consent-gated assistant; helpers have no network or credentials",
   "scripts": {
     "build": "node build.mjs"
   },

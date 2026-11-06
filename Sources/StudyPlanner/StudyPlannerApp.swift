@@ -53,6 +53,7 @@ struct StudyPlannerApp: App {
             }
             CommandGroup(replacing: .newItem) {}
             CommandMenu("学习计划") {
+                Button("智能助手") { store.assistantWindow.show(store: store) }.keyboardShortcut("j", modifiers: [.command, .shift])
                 Button("重新计算未来计划") { Task { await store.replan() } }.keyboardShortcut("r")
                 Button("确认学习完成情况") { store.showDailyReview = true }.keyboardShortcut("d", modifiers: [.command, .shift])
             }
@@ -83,6 +84,14 @@ struct StudyPlannerApp: App {
             return
         }
         // These isolated branches run before PlannerStore / the real database is initialized.
+        if arguments.contains("--assistant-check") {
+            let passed = await AssistantSimulation.probe()
+            exit(passed ? 0 : 2)
+        }
+        if arguments.contains("--assistant-preview") {
+            AssistantSimulation.preview()
+            return
+        }
         if arguments.contains("--agent-prototype-check") {
             let passed = await AgentPrototypeProbe.run()
             exit(passed ? 0 : 2)
