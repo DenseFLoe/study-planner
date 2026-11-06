@@ -31,9 +31,11 @@ struct AssistantConfiguration: Codable, Equatable, Sendable {
 
 enum AssistantError: Error, LocalizedError, Equatable {
     case endpoint, model, key, unauthorized, rateLimited, unavailable, network, timeout, cancelled
-    case invalidResponse, empty, incomplete, tooLarge, rejected, keychain
+    case invalidResponse, empty, incomplete, tooLarge, rejected, keychain, sensitive, history
     var errorDescription: String? {
         switch self {
+        case .sensitive: "本机检测到疑似密钥、密码或令牌，已阻止发送。请移除敏感内容后再试。"
+        case .history: "聊天记录未能安全读写（最多100个对话、8MB）。原文件保留，请检查空间或删除不需要的对话。"
         case .endpoint: "请输入完整 HTTPS API 地址，不含账号、密码、查询参数或片段。"
         case .model: "请填写服务商支持的模型名称（最多128个字符）。"
         case .key: "请填写 API 密钥，或从此服务地址的钥匙串记录载入。"

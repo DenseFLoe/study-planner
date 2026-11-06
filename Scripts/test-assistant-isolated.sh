@@ -15,7 +15,7 @@ import sys
 
 target = Path(sys.argv[1])
 files = list(Path("Sources/StudyCore").glob("*.swift"))
-files += [Path("Sources/StudyPlanner") / name for name in ("AssistantAPI.swift", "AssistantSession.swift", "AssistantAgentWire.swift", "AssistantTools.swift")]
+files += [Path("Sources/StudyPlanner") / name for name in ("AssistantAPI.swift", "AssistantSession.swift", "AssistantAgentWire.swift", "AssistantTools.swift", "AssistantPrivacy.swift", "AssistantHistory.swift", "AssistantProposal.swift")]
 files += list(Path("Tests/StudyCoreTests").glob("Assistant*.swift"))
 files += list(Path("Tests/StudyPlannerTests").glob("Assistant*.swift"))
 files += [Path("Tests/StudyCoreTests") / name for name in (

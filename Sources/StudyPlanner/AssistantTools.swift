@@ -68,6 +68,8 @@ struct AssistantToolResult: Identifiable, Equatable, Sendable {
     var content: String
     var privateData: Bool
     var denied = false
+    var category = ""
+    var scope = ""
 }
 
 enum AssistantTools {
@@ -100,6 +102,7 @@ enum AssistantTools {
         var fields: [String: String] = [:]
     }
     static let definitions: [Definition] = [
+        .init(name: "preview_schedule_change", title: "计算日程修改预览", description: "仅在用户明确要求调整日程时生成本机草稿，不保存。action为replan、deadline、auto_schedule或daily_weight；course为课程N，replan时为空；value分别为空、yyyy-MM-dd、true/false、1至3的倍率。必须等待用户点击本机确认按钮；工具无权执行。其他修改请引导到原编辑器。", fields: ["action": "修改类型", "course": "课程N或空字符串", "value": "对应的新值"]),
         .init(name: "search_help", title: "查阅软件功能说明", description: "查询应用内功能说明和操作入口。query 填功能词或问题；空字符串返回全部功能目录。无个人数据。", fields: ["query": "功能关键词；可为空"]),
         .init(name: "list_courses", title: "查找课程", description: "分页列出未归档课程的编号、名称、类型及来源状态，定位用户自然语言提到的课程。同名需澄清，不可猜测。每页20门。", fields: ["offset": "从0开始的偏移量"]),
         .init(name: "inspect_course", title: "查看课程与课节", description: "查看单门课程总量、有效进度、截止及课节顺序、名称、剩余量，每页20节。用于查下一节课、目录和进度；不含来源网址或备注。", fields: ["course": "list_courses返回的课程N，不能为空", "offset": "从0开始的偏移量"]),
@@ -134,7 +137,7 @@ enum AssistantTools {
         ("学习监督", "监督 播放 通知 提示音 声音 后台 绑定 权限", "学习监督仅macOS支持；在监督设置中绑定观看软件、授予检测与通知权限及设置提示音。绑定监督或开启网站自动更新后，关闭窗口仍可能后台运行；学习监督菜单中可退出应用。Android不提供这些能力。助手只能读取安全的状态摘要，不能判断未提供的权限或播放原因。"),
         ("极限压缩", "极限 压缩 最快 结束", "Mac计算极限压缩方案用于参考，不等于正式课表。Android仅展示Mac同步的结果，不运行算法、不提供算法参数、不写入正式日程；输入变化后旧结果需标为待更新。助手只读现有结果，不发起计算。"),
         ("备份与恢复", "备份 恢复 删除 数据", "在备份界面查看恢复点并核对内容；恢复、删除等高风险操作需由用户在原界面确认。助手不读取备份内容，不执行恢复或删除。"),
-        ("助手与隐私", "助手 API 密钥 OpenAI Grok xAI DeepSeek 隐私", "助手通过用户配置的OpenAI、xAI/Grok或DeepSeek API回答，模型需支持工具调用。问题原文和本窗口已同意的上下文会发送到配置的地址；每批新增个人数据发送前会展示确认。只读工具不能写数据或运行命令。密钥可选存本机钥匙串，关闭窗口清除内存对话；API配置不参与云同步和备份。")
+        ("助手与隐私", "助手 API 密钥 OpenAI Grok xAI DeepSeek 隐私", "助手通过用户配置的OpenAI、xAI/Grok或DeepSeek API回答，模型需支持工具调用。问题原文和本窗口已同意的上下文会发送到配置的地址；每批新增个人数据发送前会展示确认。只读工具不能写数据或运行命令。密钥可选存本机钥匙串，可在独立窗口查看本机聊天记录；工具续接与授权仅保留在当前窗口；API配置不参与云同步和备份。")
     ]
 
     static func execute(_ call: AssistantToolCall, context: AssistantContext, id: String) -> AssistantToolResult {
@@ -147,7 +150,8 @@ enum AssistantTools {
                              content: "[\(id)] {\"error\":\"无法安全编码查询结果，未提供数据。\"}", privateData: false, denied: true)
             }
             return .init(id: id, callID: call.id, title: definition?.title ?? "拒绝不支持的操作",
-                         content: "[\(id)] " + text, privateData: privateData, denied: denied)
+                         content: "[\(id)] " + text, privateData: privateData, denied: denied,
+                         category: AssistantPrivacy.category(call.name), scope: AssistantPrivacy.scope(call))
         }
         func failure(_ text: String) -> AssistantToolResult { result(["error": text], privateData: false, denied: true) }
         guard let definition else { return failure("不支持此工具。只允许提供的只读查询，不允许修改、删除、文件、网络或命令操作。") }

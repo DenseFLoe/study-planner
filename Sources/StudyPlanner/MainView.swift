@@ -9,7 +9,6 @@ enum Page: String, CaseIterable {
     case settings = "学习设置"
 }
 enum EditorSheet: Identifiable {
-    case assistant(Date, UUID?)
     case scheduleSearch
     case websiteSource(UUID)
     case course(Course), lessonOrder(Course), fixed(FixedEvent), completion(ScheduledTask), review, risks, mergeCourses
@@ -17,7 +16,6 @@ enum EditorSheet: Identifiable {
 
     var id: String {
         switch self {
-        case .assistant(let day, let course): "assistant\(day.timeIntervalSince1970)-\(course?.uuidString ?? "all")"
         case .scheduleSearch: "scheduleSearch"
         case .websiteSource(let id): "websiteSource\(id)"
         case .course(let course): "course\(course.id)"
@@ -102,7 +100,6 @@ struct MainView: View {
         .sheet(item: $sheet, onDismiss: { store.showDailyReview = false }) { selection in
             Group {
                 switch selection {
-                case .assistant(let day, let course): AssistantView(store: store, day: day, courseID: course)
                 case .websiteSource(let id): WebsiteCourseSourceSheet(store: store, courseID: id)
                 case .scheduleSearch:
                     ScheduleSearchView(tasks: store.state.tasks, courses: store.state.courses) { date in
@@ -329,7 +326,7 @@ struct MainView: View {
 
             Spacer(minLength: 0)
 
-            Button { sheet = .assistant(selectedDay, nil) } label: {
+            Button { store.assistantWindow.show(store: store, day: selectedDay) } label: {
                 Label("智能助手", systemImage: "bubble.left.and.text.bubble.right")
             }
             .labelStyle(.iconOnly).buttonStyle(SoftButtonStyle())
@@ -479,7 +476,7 @@ struct MainView: View {
                         websiteStatus: store.websiteUpdater.sources[course.id].map { $0.needsAttention ? "网站更新待处理" : ($0.enabled ? "网站自动更新已开启" : "") }
                     ).disabled(store.orderSaveBusy)
                         .contextMenu {
-                            Button("向助手询问这门课") { sheet = .assistant(selectedDay, course.id) }
+                            Button("向助手询问这门课") { store.assistantWindow.show(store: store, day: selectedDay, courseID: course.id) }
                         }
                 }
 
