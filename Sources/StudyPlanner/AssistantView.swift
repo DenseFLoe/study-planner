@@ -130,7 +130,7 @@ struct AssistantView: View {
                             Text("今天想了解什么？").font(.title2.bold())
                             Text("查课表、看进度，或一起理清排程冲突。").foregroundStyle(.secondary)
                             Button("今天安排了哪些课程？") { session.question = "今天安排了哪些课程？" }
-                            Text("本轮课表内容只确认一次。敏感或不确定的内容会单独询问；本机判断可能有遗漏，请留意发送范围。")
+                            Text("每轮开始时统一确认发送范围，后续范围内查询不再重复询问。请留意文字中的隐私内容；疑似密钥一律阻止发送。")
                                 .font(.caption).foregroundStyle(.secondary)
                         }.padding(.vertical, 32)
                     }
