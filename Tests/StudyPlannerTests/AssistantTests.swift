@@ -21,6 +21,10 @@ final class AssistantTests: XCTestCase {
         addTeardownBlock { try? FileManager.default.removeItem(at: directory) }
         return .init(url: directory.appendingPathComponent("workspace.json"))
     }
+    private func payload(_ evidence: AssistantToolEvidence) throws -> [String: Any] {
+        let object = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(evidence.json.utf8)) as? [String: Any])
+        return try XCTUnwrap(object["data"] as? [String: Any])
+    }
     @MainActor private func waitUntil(_ condition: @MainActor () -> Bool, file: StaticString = #filePath, line: UInt = #line) async throws {
         for _ in 0..<800 {
             if condition() { return }
@@ -109,6 +113,82 @@ final class AssistantTests: XCTestCase {
         let empty = AssistantSnapshot(state: PlannerState(), now: basis.now)
         XCTAssertTrue(try AssistantTools.execute(name: "list_courses", input: ["offset": "0"], snapshot: empty, id: "E1").json.contains("\"total\":0"))
     }
+    func testScheduleIdentifiesSavedLessonAndMatchesCourseDespiteReorderingOrRename() throws {
+        let basis = AssistantSimulation.snapshot()
+        var state = basis.state
+        // Equal durations and duplicate names cannot be used to infer identity.
+        state.courses[0].manualLessons![0].name = "同名课节"
+        state.courses[0].manualLessons![1].name = "同名课节"
+        state.courses[0].lessonOrder = ["demo-1", "demo-0"]
+        let taskID = try XCTUnwrap(state.tasks.first?.id)
+        var rows: [[String: Any]] = []
+        for (id, position) in [("demo-0", 2), ("demo-1", 1)] {
+            state.tasks[0].lessonID = id
+            state.tasks[0].lessonName = "排课时的名称"
+            let snapshot = AssistantSnapshot(state: state, now: basis.now, calendar: basis.calendar)
+            let original = try assistantJSON(snapshot.state)
+            let schedule = try payload(AssistantTools.execute(name: "inspect_schedule", input: ["date": "2026-09-14", "offset": "0"], snapshot: snapshot, id: "E1"))
+            let row = try XCTUnwrap((schedule["rows"] as? [[String: Any]])?.first)
+            let course = try payload(AssistantTools.execute(name: "inspect_course", input: ["course": AssistantSimulation.courseID.uuidString, "offset": "0"], snapshot: snapshot, id: "E2"))
+            let reference = try XCTUnwrap(row["lesson_id"] as? String)
+            let lesson = try XCTUnwrap((course["lessons"] as? [[String: Any]])?.first { $0["lesson_id"] as? String == reference })
+            XCTAssertEqual(row["task_id"] as? String, taskID.uuidString)
+            XCTAssertEqual(row["lesson_match"] as? String, "matched")
+            XCTAssertEqual(row["untrusted_lesson_name"] as? String, "排课时的名称")
+            XCTAssertEqual(lesson["position"] as? Int, position)
+            XCTAssertEqual(lesson["untrusted_name"] as? String, "同名课节")
+            XCTAssertEqual(try assistantJSON(snapshot.state), original)
+            rows.append(row)
+        }
+        XCTAssertNotEqual(rows[0]["lesson_id"] as? String, rows[1]["lesson_id"] as? String)
+        XCTAssertEqual(rows[0]["start"] as? String, rows[1]["start"] as? String)
+    }
+    func testScheduleMissingLessonFactsAreExplicitAndNamesNeverResolveIdentity() throws {
+        let basis = AssistantSimulation.snapshot()
+        let cases: [(String?, String?, String)] = [(nil, nil, "not_recorded"), (nil, "合成课节1", "not_recorded"),
+                                                 ("", "合成课节1", "not_recorded"), ("removed", "合成课节1", "not_found"),
+                                                 ("demo-0", nil, "matched")]
+        for (id, name, expected) in cases {
+            var state = basis.state
+            state.tasks[0].lessonID = id; state.tasks[0].lessonName = name
+            let snapshot = AssistantSnapshot(state: state, now: basis.now, calendar: basis.calendar)
+            let result = try payload(AssistantTools.execute(name: "inspect_schedule", input: ["date": "2026-09-14", "offset": "0"], snapshot: snapshot, id: "E1"))
+            let row = try XCTUnwrap((result["rows"] as? [[String: Any]])?.first)
+            XCTAssertEqual(row["lesson_match"] as? String, expected)
+            XCTAssertEqual(row["lesson_id"] is NSNull, id == nil || id == "")
+            XCTAssertEqual(row["untrusted_lesson_name"] is NSNull, name == nil)
+            XCTAssertEqual(row["untrusted_lesson_name"] as? String, name)
+            XCTAssertTrue((result["note"] as? String)?.contains("不按名称或顺序猜测") == true)
+        }
+    }
+    func testLessonReferencesAreStableAcrossPagesAndHideSourceIdentifiers() throws {
+        let basis = AssistantSimulation.snapshot()
+        var state = basis.state
+        state.courses[0].totalMinutes = 25 * 60
+        state.courses[0].manualLessons = (0..<25).map {
+            .init(id: "quark:synthetic-private-share-id:file-\($0)", name: "课节\($0 + 1)", durationMinutes: 60)
+        }
+        state.tasks[0].lessonID = state.courses[0].manualLessons![20].id
+        state.tasks[0].lessonName = "课节21"
+        let snapshot = AssistantSnapshot(state: state, now: basis.now, calendar: basis.calendar)
+        let schedule = try AssistantTools.execute(name: "inspect_schedule", input: ["date": "2026-09-14", "offset": "0"], snapshot: snapshot, id: "E1")
+        let page = try AssistantTools.execute(name: "inspect_course", input: ["course": AssistantSimulation.courseID.uuidString, "offset": "20"], snapshot: snapshot, id: "E2")
+        let row = try XCTUnwrap((payload(schedule)["rows"] as? [[String: Any]])?.first)
+        let lesson = try XCTUnwrap((payload(page)["lessons"] as? [[String: Any]])?.first)
+        let reference = try XCTUnwrap(lesson["lesson_id"] as? String)
+        XCTAssertEqual(reference, row["lesson_id"] as? String)
+        XCTAssertEqual(lesson["position"] as? Int, 21)
+        XCTAssertEqual(reference.count, 64)
+        XCTAssertFalse(page.json.contains("synthetic-private-share-id"))
+        XCTAssertFalse(schedule.json.contains("synthetic-private-share-id"))
+        state.courses[0].manualLessons![20].name = "修改后的名称"
+        state.courses[0].lessonOrder = state.courses[0].manualLessons!.map(\.id).reversed()
+        let changed = AssistantSnapshot(state: state, now: basis.now, calendar: basis.calendar)
+        let first = try payload(AssistantTools.execute(name: "inspect_course", input: ["course": AssistantSimulation.courseID.uuidString, "offset": "0"], snapshot: changed, id: "E3"))
+        let renamed = try XCTUnwrap((first["lessons"] as? [[String: Any]])?.first { $0["lesson_id"] as? String == reference })
+        XCTAssertEqual(renamed["position"] as? Int, 5)
+        XCTAssertEqual(renamed["untrusted_name"] as? String, "修改后的名称")
+    }
     func testArithmeticUsesOnlyExistingNumericEvidenceAndMissingFactsAreExplicit() throws {
         let snapshot = AssistantSimulation.snapshot()
         let course = try AssistantTools.execute(name: "inspect_course", input: ["course": AssistantSimulation.courseID.uuidString, "offset": "0"], snapshot: snapshot, id: "E1")
@@ -163,6 +243,40 @@ final class AssistantTests: XCTestCase {
             XCTAssertEqual(captured, approvals.map(\.request))
             XCTAssertFalse(captured[0].body.contains("合成课程 A"))
             XCTAssertTrue(captured[1].body.contains("合成课程 A"))
+        }
+    }
+    @MainActor func testDirectQueryPrivacySummaryMatchesActuallyApprovedToolData() async throws {
+        let basis = AssistantSimulation.snapshot()
+        var state = basis.state
+        state.courses[0].name = "合成敏感课程名称"
+        state.settings.actualStudyStart = basis.now
+        let snapshot = AssistantSnapshot(state: state, now: basis.now, calendar: basis.calendar)
+        let cases: [(String, [String: String], [String], [String])] = [
+            ("inspect_conflicts", ["offset": "0"], ["课程名称", "开始及截止日期", "未排入量"], ["合成敏感课程名称", "start_date", "deadline", "2026-09-14"]),
+            ("inspect_schedule", ["date": "2026-09-14", "offset": "0"], ["课节名称及编号", "课表日期与时间", "课程及任务编号"], ["合成课节1", "lesson_id", "task_id", "2026-09-14"]),
+            ("inspect_course", ["course": AssistantSimulation.courseID.uuidString, "offset": "0"], ["课程名称及编号", "课节名称及编号与顺序", "开始及截止日期"], ["合成敏感课程名称", "合成课节1", "lesson_id", "position", "start_date", "deadline"]),
+            ("inspect_rules", [:], ["实际学习起始日期与时间", "休息间隔"], ["actual_study_start", "2026-09-14 08:00:00"])
+        ]
+        for provider in [AssistantProvider.openai, .anthropic, .deepseek] {
+            for (tool, input, summaryTerms, bodyTerms) in cases {
+                let runner = AssistantRunner(), mock = AssistantMockTransport(script: [(tool, input)])
+                var approvals: [AssistantApproval] = [], results: [AssistantToolEvidence] = []
+                _ = try await runner.run(configuration: AssistantSimulation.configuration(provider: provider),
+                    messages: [.init(role: "user", content: "合成单项查询")], snapshot: snapshot, key: "", directory: try runtime(),
+                    transport: mock, currentSnapshotID: { snapshot.id }, approve: { approvals.append($0); return true },
+                    activity: { _ in }, evidence: { results.append($0) })
+                XCTAssertEqual(approvals.count, 2); XCTAssertEqual(results.count, 1)
+                let first = try XCTUnwrap(approvals.first), outgoing = try XCTUnwrap(approvals.last)
+                XCTAssertTrue(first.request.categories.isEmpty)
+                XCTAssertFalse(first.request.body.contains("合成敏感课程名称"))
+                XCTAssertFalse(first.request.body.contains("合成课节1"))
+                XCTAssertEqual(outgoing.request.categories, [try XCTUnwrap(results.first).category])
+                for term in summaryTerms { XCTAssertTrue(outgoing.summary.contains(term), "\(tool): missing summary \(term)") }
+                for term in bodyTerms { XCTAssertTrue(outgoing.request.body.contains(term), "\(tool): missing actual data \(term)") }
+                XCTAssertTrue(outgoing.request.details.hasSuffix(outgoing.request.body))
+                let captured = await mock.requests
+                XCTAssertEqual(captured, approvals.map(\.request))
+            }
         }
     }
     @MainActor func testRefusalAfterToolNeverTransmitsToolResult() async throws {

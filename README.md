@@ -49,7 +49,7 @@ STUDYPLANNER_ASSISTANT=1 ./Scripts/build-dmg.sh
 python3 Scripts/test-assistant-package.py dist/学习日程-macOS-<源码标识>-assistant.dmg
 ```
 
-合成界面验收入口是成品可执行程序的 `--assistant-preview` 参数，后台成品探针是 `--assistant-check`；二者均在正式数据、同步及凭证初始化之前分流，只使用固定合成课表与本机模拟服务。模拟器的固定回答只检验流程，不代表真实模型推理能力。真实服务、真实凭证、macOS 14 和 Intel 成品需另行验收。辅助 Node 进程不接触密钥，没有网络、文件写入或子进程权限；外发由原生程序在一次性确认后执行。这是固定辅助程序的限制措施，并非经审计的恶意代码安全沙箱。[AI SDK ToolLoopAgent 文档](https://ai-sdk.dev/docs/reference/ai-sdk-core/tool-loop-agent)说明了多轮工具调用接口。
+合成界面验收入口是成品可执行程序的 `--assistant-preview` 参数，后台成品探针是 `--assistant-check`；二者均在正式数据、同步及凭证初始化之前分流，只使用固定合成课表与本机模拟服务。成品探针还核对审批与发送内容相同、隐私摘要包含冲突课程名称及日期、课表与课程课节关联一致。课节引用由本机生成，不发送原始来源编号；找不到关联或未保存课节信息时明确标注，排课时保存的名称可能与当前名称不同。模拟器的固定回答只检验流程，不代表真实模型推理能力。真实服务、真实凭证、macOS 14 和 Intel 成品需另行验收。辅助 Node 进程不接触密钥，没有网络、文件写入或子进程权限；外发由原生程序在一次性确认后执行。这是固定辅助程序的限制措施，并非经审计的恶意代码安全沙箱。[AI SDK ToolLoopAgent 文档](https://ai-sdk.dev/docs/reference/ai-sdk-core/tool-loop-agent)说明了多轮工具调用接口。
 
 每一轮改动（一个明确的修改目标，或一轮用户反馈，而不是每次保存文件）都作为独立 Git 提交推送到已有 `origin`，提交前检查 diff、只显式添加本轮文件，不提交个人数据、密钥、日志和构建产物；推送失败时保留本地提交并如实报告，不强制推送，也不覆盖既有工作。完整的开发流程、DSH 委派规则与发布边界见 [AGENTS.md](AGENTS.md)。
 

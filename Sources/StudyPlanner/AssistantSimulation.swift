@@ -95,17 +95,29 @@ enum AssistantSimulation {
             let snapshot = snapshot()
             for provider in [AssistantProvider.openai, .anthropic, .deepseek] {
                 let runner = AssistantRunner(), transport = AssistantMockTransport()
-                var confirmations = 0
+                var approvals: [AssistantApproval] = [], evidence: [AssistantToolEvidence] = []
                 _ = try await runner.run(configuration: configuration(provider: provider),
                     messages: [.init(role: "user", content: "合成查询")], snapshot: snapshot, key: "", directory: directory,
                     transport: transport, currentSnapshotID: { snapshot.id }, approve: { approval in
-                        confirmations += 1
-                        guard confirmations == 1 || !approval.request.categories.isEmpty else { throw AssistantError.protocolError }
+                        approvals.append(approval)
+                        guard approvals.count == 1 || !approval.request.categories.isEmpty else { throw AssistantError.protocolError }
                         return true
-                    }, activity: { _ in }, evidence: { _ in })
-                guard confirmations == 7, runner.toolCount == 6, runner.sentRequests == 7 else { return false }
+                    }, activity: { _ in }, evidence: { evidence.append($0) })
+                guard approvals.count == 7, evidence.count == 6, runner.toolCount == 6, runner.sentRequests == 7,
+                      let summary = approvals.last?.summary,
+                      summary.contains("冲突涉及的课程名称、开始及截止日期"), summary.contains("课节名称及编号"),
+                      summary.contains("实际学习起始日期与时间") else { return false }
+                let captured = await transport.requests
+                guard captured == approvals.map(\.request),
+                      let course = try JSONSerialization.jsonObject(with: Data(evidence[1].json.utf8)) as? [String: Any],
+                      let courseData = course["data"] as? [String: Any], let lessons = courseData["lessons"] as? [[String: Any]],
+                      let schedule = try JSONSerialization.jsonObject(with: Data(evidence[2].json.utf8)) as? [String: Any],
+                      let scheduleData = schedule["data"] as? [String: Any], let rows = scheduleData["rows"] as? [[String: Any]],
+                      let task = rows.first, let reference = task["lesson_id"] as? String,
+                      task["lesson_match"] as? String == "matched", task["untrusted_lesson_name"] as? String == "合成课节1",
+                      lessons.first?["lesson_id"] as? String == reference, lessons.first?["position"] as? Int == 1 else { return false }
             }
-            print("ASSISTANT_PACKAGE_PROBE_PASS protocols=3 queries=18 externalRequests=0 credentialsUsed=0")
+            print("ASSISTANT_PACKAGE_PROBE_PASS protocols=3 queries=18 externalRequests=0 credentialsUsed=0 privacy=verified lessonLinks=verified")
             return true
         } catch { print("ASSISTANT_PACKAGE_PROBE_FAIL: \(AssistantError.safe(error).rawValue)"); return false }
     }
