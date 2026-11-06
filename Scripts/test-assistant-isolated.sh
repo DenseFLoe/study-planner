@@ -3,7 +3,7 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 # No app entry point, production database, keychain call or external request.
-# The one existing persistent UserDefaults test is deliberately excluded.
+# All assistant tests use defaults:nil and synthetic data.
 assistant_test_dir=$(mktemp -d "${TMPDIR:-/tmp}/study-assistant-tests.XXXXXX")
 echo "Isolated test package and logs: $assistant_test_dir"
 python3 - "$assistant_test_dir" <<'PY'
@@ -15,7 +15,7 @@ import sys
 
 target = Path(sys.argv[1])
 files = list(Path("Sources/StudyCore").glob("*.swift"))
-files += [Path("Sources/StudyPlanner") / name for name in ("AssistantAPI.swift", "AssistantSession.swift")]
+files += [Path("Sources/StudyPlanner") / name for name in ("AssistantAPI.swift", "AssistantSession.swift", "AssistantAgentWire.swift", "AssistantTools.swift")]
 files += list(Path("Tests/StudyCoreTests").glob("Assistant*.swift"))
 files += list(Path("Tests/StudyPlannerTests").glob("Assistant*.swift"))
 files += [Path("Tests/StudyCoreTests") / name for name in (
@@ -44,7 +44,7 @@ PY
 export CLANG_MODULE_CACHE_PATH="$assistant_test_dir/clang-cache"
 export SWIFTPM_MODULECACHE_OVERRIDE="$assistant_test_dir/swift-cache"
 swift test --disable-sandbox --package-path "$assistant_test_dir" \
-    --skip 'AssistantSessionTests.testConfigurationPersistenceContainsNoKeyQuestionAnswerOrData' "$@" \
+    "$@" \
     2>&1 | tee "$assistant_test_dir/tests.log"
 
 python3 - "$assistant_test_dir" <<'PY'

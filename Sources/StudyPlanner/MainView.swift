@@ -330,10 +330,10 @@ struct MainView: View {
             Spacer(minLength: 0)
 
             Button { sheet = .assistant(selectedDay, nil) } label: {
-                Label("日程助手", systemImage: "bubble.left.and.text.bubble.right")
+                Label("智能助手", systemImage: "bubble.left.and.text.bubble.right")
             }
             .labelStyle(.iconOnly).buttonStyle(SoftButtonStyle())
-            .help("询问排课原因与学习量").accessibilityIdentifier("openAssistant")
+            .help("让助手查阅软件功能、课表和当前状态").accessibilityIdentifier("openAssistant")
 
             if !store.result.risks.isEmpty || !store.result.diagnostics.isEmpty {
                 Button { sheet = .risks } label: {

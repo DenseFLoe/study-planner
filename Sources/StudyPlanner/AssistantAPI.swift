@@ -146,9 +146,15 @@ private final class AssistantNoRedirect: NSObject, URLSessionTaskDelegate, Senda
                     completionHandler: @escaping @Sendable (URLRequest?) -> Void) { completionHandler(nil) }
 }
 
-struct AssistantHTTPTransport: AssistantTransport {
+struct AssistantHTTPTransport: AssistantTransport, AssistantAgentTransport {
     var makeConfiguration: @Sendable () -> URLSessionConfiguration = { .ephemeral }
     func send(_ request: URLRequest, provider: AssistantProvider) async throws -> String {
+        try AssistantWire.answer(data: await receive(request, provider: provider), status: 200, provider: provider)
+    }
+    func turn(_ request: URLRequest, provider: AssistantProvider) async throws -> AssistantReply {
+        try AssistantAgentWire.reply(data: await receive(request, provider: provider), provider: provider)
+    }
+    private func receive(_ request: URLRequest, provider: AssistantProvider) async throws -> Data {
         let configuration = makeConfiguration()
         configuration.urlCache = nil; configuration.httpCookieStorage = nil; configuration.urlCredentialStorage = nil
         configuration.timeoutIntervalForRequest = 60; configuration.timeoutIntervalForResource = 90
@@ -158,7 +164,8 @@ struct AssistantHTTPTransport: AssistantTransport {
             let (bytes, response) = try await session.bytes(for: request)
             guard let http = response as? HTTPURLResponse else { throw AssistantError.invalidResponse }
             guard (200...299).contains(http.statusCode) else {
-                return try AssistantWire.answer(data: Data(), status: http.statusCode, provider: provider)
+                _ = try AssistantWire.answer(data: Data(), status: http.statusCode, provider: provider)
+                throw AssistantError.invalidResponse
             }
             guard http.mimeType?.lowercased() != "text/event-stream" else { throw AssistantError.incomplete }
             guard http.expectedContentLength <= 1_048_576 else { throw AssistantError.tooLarge }
@@ -169,7 +176,7 @@ struct AssistantHTTPTransport: AssistantTransport {
                 data.append(byte)
             }
             try Task.checkCancellation()
-            return try AssistantWire.answer(data: data, status: http.statusCode, provider: provider)
+            return data
         } catch { throw AssistantError.safe(error) }
     }
 }

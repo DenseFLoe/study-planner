@@ -4,99 +4,147 @@ import StudyCore
 struct AssistantView: View {
     @Bindable var store: PlannerStore
     @State private var session: AssistantSession
-    @State private var day: Date
-    @State private var courseID: UUID?
-    @State private var includeNames = false
-    @State private var showConfiguration = true
+    private let day: Date
+    private let courseID: UUID?
+    @State private var showConfiguration = false
     @AppStorage("dailyStudyLoadWarningMinutes") private var dailyWarningMinutes = 480
     @Environment(\.dismiss) private var dismiss
 
     init(store: PlannerStore, day: Date, courseID: UUID? = nil) {
-        self.store = store
-        _day = State(initialValue: day); _courseID = State(initialValue: courseID)
+        self.store = store; self.day = day; self.courseID = courseID
         _session = State(initialValue: AssistantSession(defaults: store.demo ? nil : .standard))
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
+        VStack(alignment: .leading, spacing: 12) {
             HStack {
-                Label("日程助手", systemImage: "bubble.left.and.text.bubble.right")
-                    .font(.title2.bold())
+                Label("智能助手", systemImage: "bubble.left.and.text.bubble.right").font(.title2.bold())
                 Spacer()
+                Button("新对话") { session.reset() }
                 Button("关闭") { session.close(); dismiss() }.keyboardShortcut(.cancelAction)
             }
-            Text("依据本地数据解释排课与学习量。只读，不会更改日程。每次独立问答，不发送之前的对话。")
+            Text("直接说出问题，我会按需要查看软件功能、课表和当前状态，找到依据后回答。")
                 .font(.callout).foregroundStyle(.secondary)
-            ScrollView {
-                VStack(alignment: .leading, spacing: 16) {
-                    configuration
-                    HStack {
-                        DatePicker("查看日期", selection: $day, displayedComponents: .date)
-                        Picker("课程", selection: $courseID) {
-                            Text("课程概览（最多12门）").tag(nil as UUID?)
-                            ForEach(store.courses) { course in Text(course.name).tag(Optional(course.id)) }
-                        }.frame(maxWidth: 340)
-                    }
-                    Toggle("在证据中包含课程名称", isOn: $includeNames)
-                    Text("默认使用课程编号；完整课程名会先在本机替换为「课程1」这类引用，发送前请核对。名称与编号冲突时需明确选择课程；也可用「课程1」明确引用编号。简称或别名不自动推断，其余文字原样发送。事项名称、备注、网址、账号和完整历史不加入证据。")
-                        .font(.caption).foregroundStyle(.secondary)
-                    HStack {
-                        Button("解释排课") { session.question = "为什么这样安排？请区分已确认事实、可能解释与缺失信息。" }
-                        Button("核对超标") { session.question = "所选课程为什么看起来超标？请核对安排、有效完成和剩余量，区分每日均摊与硬上限。" }
-                        Button("检查未排入") { session.question = "还有多少学习量未排入？这些数据能否证明截止前无法完成？" }
-                    }.buttonStyle(.bordered).disabled(session.busy)
-                    TextEditor(text: $session.question).font(.body)
-                        .frame(height: 80).padding(6)
-                        .overlay(RoundedRectangle(cornerRadius: 8).stroke(.quaternary))
-                        .accessibilityLabel("助手问题")
-                    HStack {
-                        Button("预览本次发送内容") {
-                            Task { await session.prepare(state: store.state, day: day, courseID: courseID, includeNames: includeNames,
-                                                         result: store.result, dailyWarningMinutes: dailyWarningMinutes) }
-                        }.disabled(session.busy || session.preparing || !store.isReady)
-                            .accessibilityIdentifier("assistantPreview")
-                        if session.preparing { ProgressView().controlSize(.small); Text("正在本地整理证据…") }
-                        if session.busy {
-                            ProgressView().controlSize(.small)
-                            Text("等待回答…")
-                            Button("取消请求") { session.invalidate() }
+            configuration
+            Divider()
+            ScrollViewReader { proxy in
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 14) {
+                        if session.entries.isEmpty {
+                            VStack(alignment: .leading, spacing: 10) {
+                                Text("想了解什么？").font(.headline)
+                                suggestion("今天为什么安排这么多？帮我查一下。")
+                                suggestion("我这周实际学了多少？和计划差多少？")
+                                suggestion("关掉窗口后还会监督学习吗？看看我现在的状态。")
+                                suggestion("手机上的极限压缩结果是怎么来的？")
+                            }.padding(.vertical, 10)
                         }
-                    }
-                    if let preview = session.preview {
-                        evidence(preview)
-                        Text("将把以上问题、证据和助手规则发送至 \(preview.configuration.provider.title) 的 \(preview.configuration.endpoint)。服务商按自己的数据政策处理，可能产生 API 费用。")
-                            .font(.callout).foregroundStyle(.secondary)
-                        Button("同意发送本次内容") { session.send(currentState: store.state) }
-                            .buttonStyle(.borderedProminent).disabled(store.demo)
-                            .accessibilityIdentifier("assistantSend")
-                        if store.demo { Text("示例预览禁用外部请求和钥匙串操作。").font(.caption) }
-                    }
-                    if let message = session.message { Text(message).foregroundStyle(.orange).textSelection(.enabled) }
-                    if !session.answer.isEmpty {
-                        Divider()
-                        Label("助手回答 · 请对照证据核验", systemImage: "text.bubble").font(.headline)
-                        // Verbatim text: model output cannot open links or execute actions.
-                        Text(verbatim: session.answer).textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading)
-                        if let answered = session.answeredPreview {
-                            DisclosureGroup("查看这次回答依据的快照") { evidence(answered) }
+                        ForEach(session.entries) { entry in
+                            VStack(alignment: .leading, spacing: 6) {
+                                Text(entry.role).font(.caption.bold()).foregroundStyle(.secondary)
+                                Text(verbatim: entry.text).textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading)
+                            }.padding(12).background(entry.role == "你" ? Color.accentColor.opacity(0.08) : Color.secondary.opacity(0.06), in: RoundedRectangle(cornerRadius: 10))
                         }
-                    }
-                }.padding(2)
+                        if !session.evidence.isEmpty {
+                            DisclosureGroup("已查询的依据（\(session.evidence.count)项）") {
+                                ForEach(session.evidence) { result in
+                                    DisclosureGroup("[\(result.id)] \(result.title)\(result.denied ? " · 未提供" : "")") {
+                                        Text(verbatim: result.content).font(.system(size: 12, design: .monospaced)).textSelection(.enabled)
+                                    }.padding(.vertical, 4)
+                                }
+                            }
+                        }
+                        if let approval = session.approval { approvalView(approval) }
+                        if let message = session.message { Text(message).foregroundStyle(.orange).textSelection(.enabled) }
+                        Color.clear.frame(height: 1).id("bottom")
+                    }.padding(2)
+                }
+                .onChange(of: session.entries.count) { _, _ in proxy.scrollTo("bottom", anchor: .bottom) }
+                .onChange(of: session.approval?.id) { _, _ in proxy.scrollTo("bottom", anchor: .bottom) }
             }
-        }.padding(24).frame(minWidth: 620, idealWidth: 760, minHeight: 580, idealHeight: 760)
+            if session.busy || !session.activity.isEmpty {
+                HStack {
+                    if session.busy { ProgressView().controlSize(.small) }
+                    Text(session.activity).font(.callout).foregroundStyle(.secondary)
+                    Spacer()
+                    Button("停止") { session.stop() }
+                }
+            }
+            TextEditor(text: $session.question).font(.body).frame(height: 66).padding(6)
+                .overlay(RoundedRectangle(cornerRadius: 8).stroke(.quaternary))
+                .accessibilityLabel("助手问题")
+                .disabled(session.busy || session.approval?.question == nil && session.approval != nil)
+            HStack {
+                Text("只读查询 · 发送个人资料前确认 · 对话仅留在本窗口")
+                    .font(.caption).foregroundStyle(.secondary)
+                Spacer()
+                Button("发送问题…") { session.prepare { context } }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(session.busy || session.approval != nil || !store.isReady || session.question.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    .accessibilityIdentifier("assistantPreview")
+            }
+        }.padding(24).frame(minWidth: 620, idealWidth: 780, minHeight: 620, idealHeight: 820)
+            .onAppear { showConfiguration = session.configuration.model.isEmpty }
             .onDisappear { session.close() }
-            .onChange(of: day) { _, _ in session.invalidate() }
-            .onChange(of: courseID) { _, _ in session.invalidate() }
-            .onChange(of: includeNames) { _, _ in session.invalidate() }
-            .onChange(of: dailyWarningMinutes) { _, _ in session.invalidate() }
-            .onChange(of: session.question) { _, _ in session.invalidate() }
+            .onChange(of: dailyWarningMinutes) { _, _ in session.contextChanged() }
+            .onChange(of: session.question) { _, _ in session.questionChanged() }
             .onChange(of: session.configuration) { old, new in
                 if old.endpoint != new.endpoint || old.provider != new.provider { session.key = "" }
-                session.invalidate()
+                session.reset()
             }
-            .onChange(of: store.state) { _, _ in
-                session.invalidate(); session.message = "日程已更新，请重新预览最新数据。"
+            .onChange(of: store.state) { _, _ in session.contextChanged() }
+    }
+
+    private var context: AssistantContext {
+        .init(state: store.state, result: store.result,
+              runtime: .init(ready: store.isReady, saving: store.orderSaveBusy, syncing: store.syncBusy,
+                             cloudEnabled: store.cloudEnabled, hasError: store.errorMessage != nil,
+                             supervisionBound: store.playbackSupervisor.hasBindings,
+                             supervisedTasks: store.playbackSupervisor.activeTaskIDs.count,
+                             websiteAutoUpdate: store.websiteUpdater.hasEnabledSources,
+                             websiteUpdating: store.websiteUpdater.updating != nil,
+                             compressionCalculating: store.compressedPlan.calculating,
+                             backupCount: store.backupEntries.count,
+                             cloudOutcome: AssistantRuntime.syncOutcome(store.cloudStatus),
+                             deviceOutcome: AssistantRuntime.syncOutcome(store.syncStatus),
+                             supervisionPaused: store.playbackSupervisor.summary == "屏幕休眠或会话未激活，监督已暂停"),
+              selectedDay: day, selectedCourseID: courseID, dailyWarningMinutes: dailyWarningMinutes)
+    }
+
+    private func suggestion(_ text: String) -> some View {
+        Button(text) { session.question = text }.buttonStyle(.link).disabled(session.busy || session.approval != nil)
+    }
+
+    private func approvalView(_ approval: AssistantApproval) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Label(approval.question != nil ? "确认发送问题" : "查到了这些资料，是否发给助手分析？", systemImage: "hand.raised").font(.headline)
+            if let question = approval.question {
+                Text(verbatim: question).textSelection(.enabled)
+                Text(approval.context.questionContext).font(.caption).foregroundStyle(.secondary)
+                Text("问题按原文发送，可能包含你输入的个人信息。此次还会携带本窗口已确认发送的对话和资料（\(approval.historyCount)条上下文）。")
+                    .font(.caption).foregroundStyle(.secondary)
             }
+            ForEach(approval.results) { result in
+                DisclosureGroup("[\(result.id)] \(result.title)") {
+                    Text(verbatim: result.content).font(.system(size: 12, design: .monospaced)).textSelection(.enabled)
+                }
+            }
+            Text("发送至 \(approval.configuration.provider.title) · \(approval.configuration.endpoint)\n模型：\(approval.configuration.model)。每轮最多8次API请求，可能产生费用；服务商按自己的数据政策处理。确认的资料会随本窗口后续追问再次发送。")
+                .font(.caption).foregroundStyle(.secondary).textSelection(.enabled)
+            DisclosureGroup("查看助手规则和查询能力") {
+                Text(AssistantAgentWire.instructions).font(.caption).textSelection(.enabled)
+                ForEach(AssistantTools.definitions, id: \.name) { Text($0.title + "：" + $0.description).font(.caption) }
+            }
+            HStack {
+                Button(approval.question != nil ? "同意发送并查询" : "同意发送这些资料") { session.approve(approval.id) }
+                    .buttonStyle(.borderedProminent).disabled(store.demo).accessibilityIdentifier("assistantSend")
+                if approval.question == nil {
+                    Button("不发送，按已有信息回答") { session.approve(approval.id, includePrivateData: false) }.disabled(store.demo)
+                }
+                Button("取消") { session.stop() }
+            }
+            if store.demo { Text("示例模式禁用外部API和钥匙串操作。").font(.caption) }
+        }.padding(12).background(Color.accentColor.opacity(0.06), in: RoundedRectangle(cornerRadius: 10))
     }
 
     private var configuration: some View {
@@ -119,18 +167,6 @@ struct AssistantView: View {
                     .font(.caption).foregroundStyle(.secondary)
             }.textFieldStyle(.roundedBorder).padding(.top, 8)
         }
-    }
-
-    private func evidence(_ preview: AssistantPreview) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text(preview.resolutionNotice).font(.callout).foregroundStyle(.secondary)
-            Text("实际发送问题：\(preview.question)").font(.headline)
-            Text("仅本机对应关系：" + preview.evidence.courseAliases.joined(separator: "；"))
-                .font(.caption).foregroundStyle(.secondary)
-            Text(verbatim: preview.evidence.text).font(.system(size: 12, design: .monospaced)).textSelection(.enabled)
-            DisclosureGroup("随请求发送的助手规则") { Text(AssistantWire.instructions).font(.caption).textSelection(.enabled) }
-        }.frame(maxWidth: .infinity, alignment: .leading).padding(12)
-            .background(.quaternary.opacity(0.4), in: RoundedRectangle(cornerRadius: 10))
     }
 
     private func vault(_ operation: () throws -> String) {

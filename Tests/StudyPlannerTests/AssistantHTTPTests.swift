@@ -17,6 +17,7 @@ private final class AssistantFixtureProtocol: URLProtocol, @unchecked Sendable {
         client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
         let data: Data
         switch scenario {
+        case "tool": data = Data(#"{"choices":[{"finish_reason":"tool_calls","message":{"role":"assistant","content":null,"tool_calls":[{"id":"call_fixture","type":"function","function":{"name":"inspect_runtime","arguments":"{}"}}]}}]}"#.utf8)
         case "oversized": data = Data(repeating: 32, count: 1_048_577)
         case "broken": data = Data("{partial".utf8)
         case "unauthorized": data = Data("secret must not appear".utf8)
@@ -42,6 +43,10 @@ final class AssistantHTTPTests: XCTestCase, @unchecked Sendable {
     func testTransportDecodesBoundedCompleteResponse() async throws {
         let value = try await transport().send(request("success"), provider: .deepSeek)
         XCTAssertEqual(value, "mock [E1]")
+    }
+    func testTransportDecodesToolCallsWithoutTreatingThemAsEmptyAnswers() async throws {
+        let reply = try await transport().turn(request("tool"), provider: .deepSeek)
+        XCTAssertTrue(reply.text.isEmpty); XCTAssertEqual(reply.calls.first?.name, "inspect_runtime")
     }
     func testTransportRejectsStreamBrokenOversizedAndHTTPFailure() async {
         for (scenario, expected) in [("stream", AssistantError.incomplete), ("broken", .invalidResponse),
