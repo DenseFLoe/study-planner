@@ -101,6 +101,8 @@ final class AssistantPrivacyMemoryTests: XCTestCase {
         }
     }
     @MainActor func testToolCredentialIsBlockedWithoutOfferingOverride() async throws {
+        // Missing optional SDK support must skip the test, not enter the rejection assertion below.
+        let directory = try runtime()
         let basis = AssistantSimulation.snapshot()
         var state = basis.state; state.courses[0].name = "password=SYNTHETIC_ONLY"
         let snapshot = AssistantSnapshot(state: state, now: basis.now, calendar: basis.calendar)
@@ -108,13 +110,13 @@ final class AssistantPrivacyMemoryTests: XCTestCase {
         var approvals = 0
         do {
             _ = try await runner.run(configuration: AssistantSimulation.configuration(), messages: [.init(role: "user", content: "合成查询")],
-                snapshot: snapshot, key: "", directory: runtime(), transport: mock, currentSnapshotID: { snapshot.id },
+                snapshot: snapshot, key: "", directory: directory, transport: mock, currentSnapshotID: { snapshot.id },
                 approve: { _ in approvals += 1; return true }, activity: { _ in }, evidence: { _ in })
             XCTFail("Credential-shaped course name must be blocked")
         } catch { XCTAssertEqual(error as? AssistantError, .sensitive) }
         XCTAssertEqual(approvals, 1)
         let requests = await mock.requests; XCTAssertEqual(requests.count, 1)
-        XCTAssertFalse(requests[0].body.contains("SYNTHETIC_ONLY"))
+        XCTAssertFalse(try XCTUnwrap(requests.first).body.contains("SYNTHETIC_ONLY"))
     }
     func testUnknownOrTamperedToolResultsCannotClaimToBeSafe() throws {
         let config = AssistantSimulation.configuration()
