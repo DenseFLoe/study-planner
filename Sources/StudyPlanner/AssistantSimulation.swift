@@ -93,6 +93,17 @@ enum AssistantSimulation {
         guard let directory = AssistantRunner.bundledDirectory else { return false }
         do {
             let snapshot = snapshot()
+            var checkState = snapshot.state
+            let first = ScheduledTask(courseID: courseID, start: snapshot.now, durationMinutes: 120)
+            let overlap = ScheduledTask(courseID: courseID, start: snapshot.now.addingTimeInterval(3600), durationMinutes: 60)
+            var completed = first; completed.id = UUID(); completed.status = .completed
+            var floating = first; floating.id = UUID(); floating.durationMinutes = 30
+            floating.floatingWindowStart = snapshot.now; floating.floatingWindowEnd = snapshot.now.addingTimeInterval(4 * 3600)
+            checkState.tasks = [first, overlap, completed, floating]
+            let checked = try AssistantTimeCheck.inspect(snapshot: .init(state: checkState, now: snapshot.now, calendar: snapshot.calendar),
+                day: snapshot.calendar.startOfDay(for: snapshot.now), offset: 0)
+            guard checked["fixed_overlap_count"] as? Int == 1, checked["excluded_confirmed_task_count"] as? Int == 1,
+                  checked["floating_window_count"] as? Int == 1 else { return false }
             for provider in [AssistantProvider.openai, .anthropic, .deepseek] {
                 let runner = AssistantRunner(), transport = AssistantMockTransport()
                 var approvals: [AssistantApproval] = [], evidence: [AssistantToolEvidence] = []
@@ -105,9 +116,11 @@ enum AssistantSimulation {
                     }, activity: { _ in }, evidence: { evidence.append($0) })
                 guard approvals.count == 7, evidence.count == 6, runner.toolCount == 6, runner.sentRequests == 7,
                       let summary = approvals.last?.summary,
-                      summary.contains("冲突涉及的课程名称、开始及截止日期"), summary.contains("课节名称及编号"),
-                      summary.contains("实际学习起始日期与时间") else { return false }
+                      summary.contains("课程/课节名称"), summary.contains("日期时间"),
+                      summary.contains("冲突及余量"), summary.contains("相关编号") else { return false }
                 let captured = await transport.requests
+                guard let last = captured.last,
+                      AssistantDetailNode.parse(last.body).map(\.plainText).joined().contains("本机时间核对") else { return false }
                 guard captured == approvals.map(\.request),
                       let course = try JSONSerialization.jsonObject(with: Data(evidence[1].json.utf8)) as? [String: Any],
                       let courseData = course["data"] as? [String: Any], let lessons = courseData["lessons"] as? [[String: Any]],
@@ -117,7 +130,7 @@ enum AssistantSimulation {
                       task["lesson_match"] as? String == "matched", task["untrusted_lesson_name"] as? String == "合成课节1",
                       lessons.first?["lesson_id"] as? String == reference, lessons.first?["position"] as? Int == 1 else { return false }
             }
-            print("ASSISTANT_PACKAGE_PROBE_PASS protocols=3 queries=18 externalRequests=0 credentialsUsed=0 privacy=verified lessonLinks=verified")
+            print("ASSISTANT_PACKAGE_PROBE_PASS protocols=3 queries=18 externalRequests=0 credentialsUsed=0 privacy=verified lessonLinks=verified timeCheck=verified readableDetails=verified")
             return true
         } catch { print("ASSISTANT_PACKAGE_PROBE_FAIL: \(AssistantError.safe(error).rawValue)"); return false }
     }

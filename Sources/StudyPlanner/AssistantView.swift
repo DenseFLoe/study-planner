@@ -79,7 +79,9 @@ struct AssistantView: View {
                     ForEach(session.entries) { entry in
                         VStack(alignment: .leading, spacing: 6) {
                             if entry.role == "本机证据" {
-                                DisclosureGroup("查看本机证据") { Text(entry.text).font(.system(.caption, design: .monospaced)).textSelection(.enabled) }
+                                DisclosureGroup("查看本机证据") {
+                                    ForEach(AssistantDetailNode.parse(entry.text)) { AssistantDetailTree(node: $0) }
+                                }
                             } else {
                                 HStack { Text(entry.role).font(.caption.bold()); if entry.status != "完成" { Text(entry.status ?? "").font(.caption).foregroundStyle(.secondary) } }
                                 Text(entry.text).textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading)
@@ -94,18 +96,11 @@ struct AssistantView: View {
     private func approvalCard(_ approval: AssistantApproval) -> some View {
         VStack(alignment: .leading, spacing: 10) {
             Text("发送前确认").font(.headline)
-            // A bounded, vertically scrollable summary must not be compressed to an ellipsis
-            // when the window is small or the exact request disclosure is open.
-            ScrollView {
-                Text(approval.summary).font(.callout).textSelection(.enabled)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .fixedSize(horizontal: false, vertical: true)
-            }.frame(height: 104)
-            DisclosureGroup("查看实际待发送内容", isExpanded: $detailsExpanded) {
-                ScrollView([.vertical, .horizontal]) {
-                    Text(approval.request.details).font(.system(.caption, design: .monospaced)).textSelection(.enabled).padding(8)
-                }.frame(height: 110)
-            }
+            Text(approval.summary).font(.callout).textSelection(.enabled)
+                .frame(maxWidth: .infinity, alignment: .leading).fixedSize(horizontal: false, vertical: true)
+            Button("查看发送详情") { detailsExpanded = true }
+                .sheet(isPresented: $detailsExpanded) { AssistantRequestDetailsView(request: approval.request) }
+            Text("仅允许这一次请求；后续查询结果会再确认。已发送的内容不能撤回。").font(.caption).foregroundStyle(.secondary)
             HStack {
                 Text("本次有效至 \(approval.expiresAt.formatted(date: .omitted, time: .standard))").font(.caption).foregroundStyle(.secondary)
                 Spacer()

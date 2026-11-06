@@ -239,6 +239,7 @@ final class AssistantTests: XCTestCase {
             XCTAssertTrue(approvals[0].request.categories.isEmpty)
             XCTAssertEqual(approvals[1].request.categories, [results[0].category])
             XCTAssertEqual(approvals.last?.request.categories.count, 6)
+            XCTAssertLessThan(try XCTUnwrap(approvals.last).summary.count, 180)
             let captured = await mock.requests
             XCTAssertEqual(captured, approvals.map(\.request))
             XCTAssertFalse(captured[0].body.contains("合成课程 A"))
@@ -252,10 +253,11 @@ final class AssistantTests: XCTestCase {
         state.settings.actualStudyStart = basis.now
         let snapshot = AssistantSnapshot(state: state, now: basis.now, calendar: basis.calendar)
         let cases: [(String, [String: String], [String], [String])] = [
-            ("inspect_conflicts", ["offset": "0"], ["课程名称", "开始及截止日期", "未排入量"], ["合成敏感课程名称", "start_date", "deadline", "2026-09-14"]),
-            ("inspect_schedule", ["date": "2026-09-14", "offset": "0"], ["课节名称及编号", "课表日期与时间", "课程及任务编号"], ["合成课节1", "lesson_id", "task_id", "2026-09-14"]),
-            ("inspect_course", ["course": AssistantSimulation.courseID.uuidString, "offset": "0"], ["课程名称及编号", "课节名称及编号与顺序", "开始及截止日期"], ["合成敏感课程名称", "合成课节1", "lesson_id", "position", "start_date", "deadline"]),
-            ("inspect_rules", [:], ["实际学习起始日期与时间", "休息间隔"], ["actual_study_start", "2026-09-14 08:00:00"])
+            ("inspect_conflicts", ["offset": "0"], ["课程/课节名称", "日期时间", "冲突及余量"], ["合成敏感课程名称", "start_date", "deadline", "2026-09-14"]),
+            ("inspect_schedule", ["date": "2026-09-14", "offset": "0"], ["课程/课节名称", "日期时间", "相关编号", "冲突及余量"], ["合成课节1", "lesson_id", "task_id", "2026-09-14", "fixed_overlap_count"]),
+            ("inspect_course", ["course": AssistantSimulation.courseID.uuidString, "offset": "0"], ["课程/课节名称", "相关编号", "日期时间"], ["合成敏感课程名称", "合成课节1", "lesson_id", "position", "start_date", "deadline"]),
+            ("inspect_rules", [:], ["日期时间", "排程规则"], ["actual_study_start", "2026-09-14 08:00:00"]),
+            ("inspect_time_conflicts", ["date": "2026-09-14", "offset": "0"], ["日期时间", "相关编号", "冲突及余量"], ["fixed_overlap_count", "floating_window_count", "2026-09-14"])
         ]
         for provider in [AssistantProvider.openai, .anthropic, .deepseek] {
             for (tool, input, summaryTerms, bodyTerms) in cases {
@@ -274,6 +276,12 @@ final class AssistantTests: XCTestCase {
                 for term in summaryTerms { XCTAssertTrue(outgoing.summary.contains(term), "\(tool): missing summary \(term)") }
                 for term in bodyTerms { XCTAssertTrue(outgoing.request.body.contains(term), "\(tool): missing actual data \(term)") }
                 XCTAssertTrue(outgoing.request.details.hasSuffix(outgoing.request.body))
+                let readable = AssistantDetailNode.parse(outgoing.request.body).map(\.plainText).joined(separator: "\n")
+                XCTAssertTrue(readable.contains("本机查询事实"))
+                XCTAssertTrue(readable.contains("本次资料类别"))
+                XCTAssertTrue(readable.contains(try XCTUnwrap(results.first).category))
+                if tool == "inspect_conflicts" { XCTAssertTrue(readable.contains("合成敏感课程名称")); XCTAssertTrue(readable.contains("截止日期")) }
+                if tool == "inspect_schedule" { XCTAssertTrue(readable.contains("合成课节1")); XCTAssertTrue(readable.contains("本机时间核对")) }
                 let captured = await mock.requests
                 XCTAssertEqual(captured, approvals.map(\.request))
             }

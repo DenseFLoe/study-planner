@@ -53,6 +53,26 @@ struct AssistantRequest: Codable, Equatable, Sendable {
         }
         return names.sorted()
     }
+    /// Privacy classes from the actual tool-result categories, never from model prose.
+    var compactCategories: [String] {
+        var result: [String] = []
+        func add(_ name: String) { if !result.contains(name) { result.append(name) } }
+        for category in categories {
+            var matched = false
+            for (terms, label) in [
+                (["名称"], "课程/课节名称"), (["编号"], "相关编号"),
+                (["日期", "时间", "时段", "截止"], "日期时间"),
+                (["进度", "时长", "学习量"], "学习量与进度"),
+                (["规则", "偏好", "排课设置", "休息"], "排程规则"),
+                (["冲突", "重叠", "容量", "未排入", "时间核对"], "冲突及余量"),
+                (["事项占用"], "事项占用"), (["计算"], "计算结果与依据"), (["参数提示"], "查询提示")
+            ] where terms.contains(where: { category.contains($0) }) {
+                matched = true; add(label)
+            }
+            if !matched { add(category) }
+        }
+        return result
+    }
 }
 
 struct AssistantApproval: Identifiable, Sendable {
@@ -63,9 +83,9 @@ struct AssistantApproval: Identifiable, Sendable {
     let expiresAt: Date
     let simulated: Bool
     var summary: String {
-        let data = (["你的问题与本对话已完成的问答", "助手说明及只读查询工具定义"] + request.categories).joined(separator: "；")
-        let destination = simulated ? "本机模拟服务（不会联网）" : "\(request.configuration.provider.rawValue)，地址 \(request.url)"
-        return "接收方：\(destination)\n模型：\(request.configuration.model)\n将发送：\(data)。\n用于回答当前问题；发送后无法撤回。每次后续查询结果也会单独请你确认。"
+        let data = (["本次问题、本对话历史、助手规则与查询说明"] + request.compactCategories).joined(separator: "；")
+        let destination = simulated ? "本机模拟（不会联网）" : "\(request.configuration.provider.rawValue) · \(URL(string: request.url)?.host ?? request.url)"
+        return "发给：\(destination) · \(request.configuration.model)\n包含：\(data)。"
     }
 }
 

@@ -37,7 +37,8 @@ enum AssistantTools {
         .init(name: "inspect_schedule", description: "查询某日已保存的课表、任务对应课节与固定/浮动占用；date为yyyy-MM-dd，空表示今天。每页40条，offset为偏移。不会重新排课。", fields: ["date": "yyyy-MM-dd或空字符串", "offset": "从0开始的整数"]),
         .init(name: "inspect_progress", description: "本机核算最多31天的实际学习量和计划量。日期均为yyyy-MM-dd；course为课程UUID或空表示全部。未知日期单列，不使用登记日期冒充学习日期。", fields: ["start_date": "yyyy-MM-dd", "end_date": "yyyy-MM-dd", "course": "课程UUID或空"]),
         .init(name: "inspect_rules", description: "查询真实排程规则与用户保存的可学习时段、最小块、偏好。", fields: [:]),
-        .init(name: "inspect_conflicts", description: "由软件引擎核实当前已存课表的冲突、未排入量；不是历史排程原因。分页每页20项。", fields: ["offset": "从0开始的整数"]),
+        .init(name: "inspect_conflicts", description: "查询排程容量、休息约束和未排入量；这不是两段时间是否重叠的判定，也不是历史排程原因。时间重叠须用inspect_time_conflicts指定日期核对。分页每页20项。", fields: ["offset": "从0开始的整数"]),
+        .init(name: "inspect_time_conflicts", description: "本机逐对核对某日所有固定时段重叠，区分已确认任务和浮动窗口。浮动窗口只返回已证明的容量不足或未核实，不能当作实际占用。date为空表示今天；每页20条，必须读完next_offset才是完整明细。", fields: ["date": "yyyy-MM-dd或空字符串", "offset": "从0开始的整数"]),
         .init(name: "calculate", description: "由本机对本轮已有证据里的两个数值做加减乘除。left/right必须是证据路径，如E2.data.total_minutes或E4.data.days.0.actual_minutes；不得自己填写数字。operation为add/subtract/multiply/divide。", fields: ["left": "左侧证据数值路径", "right": "右侧证据数值路径", "operation": "add/subtract/multiply/divide"])
     ]
     static let instructions = """
@@ -49,6 +50,7 @@ enum AssistantTools {
     不自行编造排课原因或计算数字。需要进一步算术时调用calculate引用已有证据数值路径；计算未核实时说明缺少事实。
     未排入分钟数不等于客观缺口；搜索未找到方案不等于无解。
     实际学习用时不同于有效课程进度；固定/浮动占用窗口不同于实际学习时长。
+    判断时间重叠必须引用inspect_time_conflicts或inspect_schedule.time_check的本机结果。逐对重叠数量、起止和时长均由程序核实，不能根据窗口、课表列表或容量结论自行推断。已确认任务的原计划不等于实际学习时段。休息不足不是时段重叠；单项浮动窗口可容纳不证明联合可行，not_verified必须说明尚未核实。
     课表课节只按同一课程下的lesson_id与课程查询关联，不按名称、时间或顺序猜测；lesson_match不是matched时说明关联缺失。课表课节名称是排课时保存的名称，可能与当前课节名称不同。
     不给不存在的每日硬上限；均摊和每日倍率只是偏好。遵循工具结果中的范围与缺失信息。
     """
@@ -129,7 +131,7 @@ enum AssistantTools {
                        },
                        "lesson_count": lessons.count, "next_offset": end < lessons.count ? String(end) as Any : NSNull()]
         case "inspect_schedule":
-            category = "课表日期与时间、课程及任务编号、课节名称及编号与关联状态、学习时长与完成状态和事项占用（不含事项名称）"
+            category = "课表日期与时间、课程及任务和事项编号、课节名称及编号与关联状态、学习时长与完成状态、事项占用和本机时间核对（不含事项名称）"
             let day = try snapshot.date(input["date"]!), dayEnd = calendar.date(byAdding: .day, value: 1, to: day)!
             let tasks = state.tasks.filter { $0.planningStart < dayEnd && $0.planningEnd > day }.sorted { $0.start < $1.start }
             let events = state.fixedEvents.filter { $0.occurs(on: day, calendar: calendar) }
@@ -145,11 +147,13 @@ enum AssistantTools {
                     "untrusted_lesson_name": task.lessonName.map { String($0.prefix(160)) } as Any? ?? NSNull(), "lesson_match": match,
                     "start": snapshot.stamp(task.planningStart, time: true), "end": snapshot.stamp(task.planningEnd, time: true),
                     "duration_minutes": task.durationMinutes, "floating": task.isFloating, "status": task.status.rawValue,
-                    "completed_minutes": task.completedMinutes]
-            } + events.map { ["kind": "event", "start_minute": $0.startMinute,
+                    "completed_minutes": task.completedMinutes, "is_unconfirmed": task.isUnconfirmed,
+                    "confirmed_at": task.confirmedAt.map { snapshot.stamp($0, time: true) } as Any? ?? NSNull()]
+            } + events.map { ["kind": "event", "id": $0.id.uuidString, "start_minute": $0.startMinute,
                     "end_minute": $0.endMinute, "occupied_minutes": $0.occupiedMinutes, "floating": $0.isFloating] }
             let start = try offset(rows.count), end = min(start + 40, rows.count)
             payload = ["date": snapshot.stamp(day), "rows": Array(rows[start..<end]), "total": rows.count,
+                       "time_check": try AssistantTimeCheck.inspect(snapshot: snapshot, day: day, offset: 0),
                        "next_offset": end < rows.count ? String(end) as Any : NSNull(),
                        "note": "跨日任务按区间相交列出；duration是整条任务时长，不是当日实际用时。浮动项仅表示可用窗口。lesson_id是本机生成的稳定引用，可与同课程的inspect_course课节对应；lesson_match为matched才表示当前课节中找到相同ID，not_found表示当前课节不可匹配，not_recorded表示任务未保存课节ID。null表示未保存对应信息，不按名称或顺序猜测。untrusted_lesson_name为任务保存的名称，可能已过时。"]
         case "inspect_progress":
@@ -176,6 +180,10 @@ enum AssistantTools {
                        "availability": state.settings.availability.map { ["weekday": $0.weekday, "start_minute": $0.startMinute, "end_minute": $0.endMinute] },
                        "actual_study_start": state.settings.actualStudyStart.map { snapshot.stamp($0, time: true) } as Any? ?? NSNull(),
                        "rules": "星期日=1。开始、截止、可用时段、整节顺序和休息优先；均摊和每日倍率是偏好，不是每日硬上限。最终余量可短于最小块。"]
+        case "inspect_time_conflicts":
+            category = "课表日期与时间、任务及事项编号、本机核实的固定时段重叠与浮动窗口容量"
+            guard let text = input["offset"], let start = Int(text), String(start) == text else { throw AssistantError.protocolError }
+            payload = try AssistantTimeCheck.inspect(snapshot: snapshot, day: snapshot.date(input["date"]!), offset: start)
         case "inspect_conflicts":
             category = "冲突涉及的课程名称、开始及截止日期，以及软件核算的当前课表冲突、可用时间和未排入量"
             let assessment = ScheduleEngine(calendar: calendar).assessSavedPlan(state: state, now: snapshot.now)
@@ -190,7 +198,8 @@ enum AssistantTools {
             } + assessment.risks.map { ["kind": "unbooked", "deadline": snapshot.stamp($0.deadline), "unscheduled_minutes": $0.unscheduledMinutes] }
             let start = try offset(rows.count), end = min(start + 20, rows.count)
             payload = ["rows": Array(rows[start..<end]), "total": rows.count, "next_offset": end < rows.count ? String(end) as Any : NSNull(),
-                       "source": "ScheduleEngine.assessSavedPlan", "note": "未修改或重新生成课表。未排入不等于客观缺口；只明确标记proven_capacity_deficit为容量证明。没有历史设置和决策轨迹，不能推断唯一历史原因。"]
+                       "source": "ScheduleEngine.assessSavedPlan", "assessment_kind": "capacity_and_rules",
+                       "note": "这是容量和排程约束评估，不是实际时段重叠清单；判断具体时段是否重叠必须调用inspect_time_conflicts指定日期。未修改或重新生成课表。未排入不等于客观缺口；只明确标记proven_capacity_deficit为容量证明。没有历史设置和决策轨迹，不能推断唯一历史原因。"]
         default: throw AssistantError.protocolError
         }
         let object: [String: Any] = ["evidence_id": id, "category": category, "captured_at": snapshot.stamp(snapshot.now, time: true),
