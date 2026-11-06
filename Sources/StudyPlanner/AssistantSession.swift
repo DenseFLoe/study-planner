@@ -7,17 +7,26 @@ import StudyCore
         didSet {
             guard configuration != oldValue else { return }
             if busy { stop(reason: .changed) }
-            if configuration.provider != oldValue.provider || configuration.baseURL != oldValue.baseURL { key = "" }
+            if configuration.provider != oldValue.provider || configuration.baseURL != oldValue.baseURL {
+                if !key.isEmpty { knownKeys.insert(key) }
+                key = ""
+            }
             persist()
         }
     }
-    var key = "" { didSet { if key != oldValue && busy { stop(reason: .changed) } } }
+    var key = "" {
+        didSet {
+            if key != oldValue && busy { stop(reason: .changed) }
+        }
+    }
     var question = "" { didSet { if question != oldValue && busy { stop(reason: .changed) } } }
     private(set) var conversations: [AssistantConversation]
     private(set) var selectedID: UUID
+    private(set) var memories: [AssistantMemory]
+    private(set) var memoryError: String?
     private(set) var approval: AssistantApproval?
     private(set) var busy = false
-    private(set) var activity = "仅查询；每次发送前由你确认"
+    private(set) var activity = "只读查询 · 本轮课表内容确认一次"
     private(set) var message: String?
     private(set) var historyMessage: String?
     private(set) var evidence: [AssistantToolEvidence] = []
@@ -32,6 +41,7 @@ import StudyCore
     @ObservationIgnored private var expiry: Task<Void, Never>?
     @ObservationIgnored private var decision: CheckedContinuation<Bool, Error>?
     @ObservationIgnored private var runID: UUID?
+    @ObservationIgnored private var knownKeys = Set<String>()
 
     init(historyStore: AssistantHistoryStore? = .local, directory: URL? = AssistantRunner.bundledDirectory,
          simulated: Bool = false, snapshot: @escaping @MainActor () -> AssistantSnapshot?,
@@ -41,6 +51,7 @@ import StudyCore
         var saved = AssistantWorkspace(), loadFailed = false
         do { saved = try historyStore?.load() ?? saved } catch { loadFailed = true }
         configuration = saved.configuration
+        memories = saved.memories
         let loaded = saved.conversations.isEmpty ? [AssistantConversation()] : saved.conversations
         conversations = loaded
         selectedID = loaded.contains { $0.id == saved.selectedID } ? saved.selectedID! : loaded[0].id
@@ -55,26 +66,59 @@ import StudyCore
     var entries: [AssistantChatEntry] { conversations.first { $0.id == selectedID }?.entries ?? [] }
     var canRetry: Bool { !busy && entries.contains { $0.role == "你" } }
     var canSend: Bool { !busy && historyWritable && !question.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+    var enabledMemoryCount: Int { memories.filter(\.enabled).count }
+    @discardableResult func saveMemory(id: UUID? = nil, text: String, enabled: Bool) -> Bool {
+        do {
+            let text = text.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !text.isEmpty, text.utf8.count <= 2000, id != nil || memories.count < 50 else { throw AssistantError.limit }
+            try checkContent(text)
+            guard historyWritable else { throw AssistantError.history }
+            var next = memories
+            if let id {
+                guard let index = next.firstIndex(where: { $0.id == id }) else { throw AssistantError.changed }
+                next[index] = .init(id: id, text: text, enabled: enabled)
+            } else { next.append(.init(text: text, enabled: enabled)) }
+            stop(reason: .changed)
+            let original = memories; memories = next
+            guard persist() else { memories = original; throw AssistantError.history }
+            memoryError = nil; return true
+        } catch { memoryError = AssistantError.safe(error).rawValue; return false }
+    }
+    func deleteMemory(_ id: UUID) {
+        guard historyWritable, memories.contains(where: { $0.id == id }) else { return }
+        stop(reason: .changed)
+        let original = memories; memories.removeAll { $0.id == id }
+        if !persist() { memories = original; memoryError = AssistantError.history.rawValue }
+        else { memoryError = nil }
+    }
+    func setMemoryEnabled(_ id: UUID, _ enabled: Bool) {
+        guard let memory = memories.first(where: { $0.id == id }) else { return }
+        saveMemory(id: id, text: memory.text, enabled: enabled)
+    }
+    private func checkContent(_ text: String) throws {
+        try AssistantSecrets.check(text, key: key)
+        for secret in knownKeys { try AssistantSecrets.check(text, key: secret) }
+    }
     func newConversation() {
         stop(); guard conversations.count < 100 else { message = "最多保留100个对话。"; return }
         let value = AssistantConversation(); conversations.insert(value, at: 0); selectedID = value.id
-        question = ""; evidence = []; message = nil; persist()
+        question = ""; evidence = []; message = nil; activity = "只读查询 · 本轮课表内容确认一次"; persist()
     }
     func select(_ id: UUID) {
         guard id != selectedID, conversations.contains(where: { $0.id == id }) else { return }
-        stop(); selectedID = id; question = ""; evidence = []; message = nil; persist()
+        stop(); selectedID = id; question = ""; evidence = []; message = nil; activity = "只读查询 · 本轮课表内容确认一次"; persist()
     }
     func useProvider(_ provider: AssistantProvider) {
         configuration = .init(provider: provider, baseURL: provider.baseURL, model: "")
     }
     func saveKey() {
         guard !simulated else { return }
-        do { try AssistantVault.save(key, config: configuration); message = "密钥已保存在此 Mac 钥匙串，仅对应当前服务地址。" }
+        do { try AssistantVault.save(key, config: configuration); knownKeys.insert(key); message = "密钥已保存在此 Mac 钥匙串，仅对应当前服务地址。" }
         catch { message = AssistantError.safe(error).rawValue }
     }
     func loadKey() {
         guard !simulated else { return }
-        do { key = try AssistantVault.load(configuration); message = "已载入当前地址的密钥。" }
+        do { key = try AssistantVault.load(configuration); knownKeys.insert(key); message = "已载入当前地址的密钥。" }
         catch { message = AssistantError.safe(error).rawValue }
     }
     func retry() {
@@ -86,17 +130,19 @@ import StudyCore
         do {
             let text = question.trimmingCharacters(in: .whitespacesAndNewlines)
             guard text.utf8.count <= 6000 else { throw AssistantError.limit }
-            try AssistantSecrets.check(text, key: key)
+            try checkContent(text)
+            try checkContent(String(decoding: assistantJSON(configuration), as: UTF8.self))
             _ = try configuration.endpoint()
-            if !simulated { try AssistantSecrets.validateKey(key) }
+            if !simulated { try AssistantSecrets.validateKey(key); knownKeys.insert(key) }
             guard let snapshot = snapshotProvider() else { throw AssistantError.changed }
             guard let directory else { throw AssistantError.runtime }
-            let messages = entries.filter { $0.status == "完成" && ["你", "助手"].contains($0.role) }
+            let memory = try AssistantMemories.message(memories)
+            let messages = (memory.map { [$0] } ?? []) + entries.filter { $0.status == "完成" && ["你", "助手"].contains($0.role) }
                 .map { AssistantWireMessage(role: $0.role == "你" ? "user" : "assistant", content: $0.text) }
                 + [.init(role: "user", content: text)]
             let messageData = try assistantJSON(messages)
             guard messageData.count <= 200_000 else { throw AssistantError.limit }
-            try AssistantSecrets.check(String(decoding: messageData, as: UTF8.self), key: key)
+            try checkContent(String(decoding: messageData, as: UTF8.self))
             let transport = transportFactory()
             guard transport.simulated == simulated else { throw AssistantError.protocolError }
             append(.init(role: "你", text: text, status: "处理中"))
@@ -181,9 +227,9 @@ import StudyCore
     @discardableResult private func persist() -> Bool {
         guard historyWritable else { return false }
         do {
-            let workspace = AssistantWorkspace(configuration: configuration, conversations: conversations, selectedID: selectedID)
+            let workspace = AssistantWorkspace(configuration: configuration, conversations: conversations, selectedID: selectedID, memories: memories)
             // Do not allow configuration fields or responses to smuggle the active credential into history.
-            try AssistantSecrets.check(String(decoding: assistantJSON(workspace), as: UTF8.self), key: key)
+            try checkContent(String(decoding: assistantJSON(workspace), as: UTF8.self))
             try historyStore?.save(workspace); historyMessage = nil; return true
         } catch { historyMessage = AssistantError.safe(error) == .sensitive ? AssistantError.sensitive.rawValue : AssistantError.history.rawValue; return false }
     }

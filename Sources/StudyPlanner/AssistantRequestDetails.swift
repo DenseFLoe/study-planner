@@ -137,6 +137,6 @@ struct AssistantRequestDetailsView: View {
                 }.frame(maxWidth: .infinity, alignment: .leading).padding(4)
             }
             HStack { Spacer(); Button("返回确认") { dismiss() }.keyboardShortcut(.cancelAction) }
-        }.padding(22).frame(minWidth: 580, idealWidth: 700, maxWidth: 900, minHeight: 420, idealHeight: 560, maxHeight: 720)
+        }.frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 }

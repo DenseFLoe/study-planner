@@ -226,7 +226,7 @@ final class AssistantTests: XCTestCase {
         let clean = try history(), conversation = AssistantConversation()
         XCTAssertThrowsError(try clean.save(.init(conversations: [conversation, conversation])))
     }
-    @MainActor func testSDKSerializersExecuteAllSixReadOnlyToolsAndRequireEveryApproval() async throws {
+    @MainActor func testSDKSerializersExecuteAllSixReadOnlyToolsAfterOneScopeConfirmation() async throws {
         let snapshot = AssistantSimulation.snapshot()
         for provider in [AssistantProvider.openai, .anthropic, .deepseek] {
             let runner = AssistantRunner(), mock = AssistantMockTransport()
@@ -235,13 +235,12 @@ final class AssistantTests: XCTestCase {
                 messages: [.init(role: "user", content: "合成问题")], snapshot: snapshot, key: "", directory: try runtime(),
                 transport: mock, currentSnapshotID: { snapshot.id }, approve: { approvals.append($0); return true },
                 activity: { _ in }, evidence: { results.append($0) })
-            XCTAssertEqual(approvals.count, 7); XCTAssertEqual(results.count, 6); XCTAssertFalse(answer.isEmpty)
+            XCTAssertEqual(approvals.count, 1); XCTAssertEqual(results.count, 6); XCTAssertFalse(answer.isEmpty)
             XCTAssertTrue(approvals[0].request.categories.isEmpty)
-            XCTAssertEqual(approvals[1].request.categories, [results[0].category])
-            XCTAssertEqual(approvals.last?.request.categories.count, 6)
-            XCTAssertLessThan(try XCTUnwrap(approvals.last).summary.count, 180)
             let captured = await mock.requests
-            XCTAssertEqual(captured, approvals.map(\.request))
+            XCTAssertEqual(captured.count, 7)
+            XCTAssertEqual(captured.first, approvals.first?.request)
+            XCTAssertEqual(captured.last?.categories.count, 6)
             XCTAssertFalse(captured[0].body.contains("合成课程 A"))
             XCTAssertTrue(captured[1].body.contains("合成课程 A"))
         }
@@ -249,13 +248,13 @@ final class AssistantTests: XCTestCase {
     @MainActor func testDirectQueryPrivacySummaryMatchesActuallyApprovedToolData() async throws {
         let basis = AssistantSimulation.snapshot()
         var state = basis.state
-        state.courses[0].name = "合成敏感课程名称"
+        state.courses[0].name = "合成普通课程名称"
         state.settings.actualStudyStart = basis.now
         let snapshot = AssistantSnapshot(state: state, now: basis.now, calendar: basis.calendar)
         let cases: [(String, [String: String], [String], [String])] = [
-            ("inspect_conflicts", ["offset": "0"], ["课程/课节名称", "日期时间", "冲突及余量"], ["合成敏感课程名称", "start_date", "deadline", "2026-09-14"]),
+            ("inspect_conflicts", ["offset": "0"], ["课程/课节名称", "日期时间", "冲突及余量"], ["合成普通课程名称", "start_date", "deadline", "2026-09-14"]),
             ("inspect_schedule", ["date": "2026-09-14", "offset": "0"], ["课程/课节名称", "日期时间", "相关编号", "冲突及余量"], ["合成课节1", "lesson_id", "task_id", "2026-09-14", "fixed_overlap_count"]),
-            ("inspect_course", ["course": AssistantSimulation.courseID.uuidString, "offset": "0"], ["课程/课节名称", "相关编号", "日期时间"], ["合成敏感课程名称", "合成课节1", "lesson_id", "position", "start_date", "deadline"]),
+            ("inspect_course", ["course": AssistantSimulation.courseID.uuidString, "offset": "0"], ["课程/课节名称", "相关编号", "日期时间"], ["合成普通课程名称", "合成课节1", "lesson_id", "position", "start_date", "deadline"]),
             ("inspect_rules", [:], ["日期时间", "排程规则"], ["actual_study_start", "2026-09-14 08:00:00"]),
             ("inspect_time_conflicts", ["date": "2026-09-14", "offset": "0"], ["日期时间", "相关编号", "冲突及余量"], ["fixed_overlap_count", "floating_window_count", "2026-09-14"])
         ]
@@ -267,10 +266,14 @@ final class AssistantTests: XCTestCase {
                     messages: [.init(role: "user", content: "合成单项查询")], snapshot: snapshot, key: "", directory: try runtime(),
                     transport: mock, currentSnapshotID: { snapshot.id }, approve: { approvals.append($0); return true },
                     activity: { _ in }, evidence: { results.append($0) })
-                XCTAssertEqual(approvals.count, 2); XCTAssertEqual(results.count, 1)
-                let first = try XCTUnwrap(approvals.first), outgoing = try XCTUnwrap(approvals.last)
+                XCTAssertEqual(approvals.count, 1); XCTAssertEqual(results.count, 1)
+                let captured = await mock.requests
+                XCTAssertEqual(captured.count, 2)
+                let first = try XCTUnwrap(approvals.first)
+                var detailsGate = AssistantApprovalGate()
+                let outgoing = try detailsGate.prepare(XCTUnwrap(captured.last), snapshotID: snapshot.id, simulated: true, confirmsScope: false)
                 XCTAssertTrue(first.request.categories.isEmpty)
-                XCTAssertFalse(first.request.body.contains("合成敏感课程名称"))
+                XCTAssertFalse(first.request.body.contains("合成普通课程名称"))
                 XCTAssertFalse(first.request.body.contains("合成课节1"))
                 XCTAssertEqual(outgoing.request.categories, [try XCTUnwrap(results.first).category])
                 for term in summaryTerms { XCTAssertTrue(outgoing.summary.contains(term), "\(tool): missing summary \(term)") }
@@ -280,18 +283,21 @@ final class AssistantTests: XCTestCase {
                 XCTAssertTrue(readable.contains("本机查询事实"))
                 XCTAssertTrue(readable.contains("本次资料类别"))
                 XCTAssertTrue(readable.contains(try XCTUnwrap(results.first).category))
-                if tool == "inspect_conflicts" { XCTAssertTrue(readable.contains("合成敏感课程名称")); XCTAssertTrue(readable.contains("截止日期")) }
+                if tool == "inspect_conflicts" { XCTAssertTrue(readable.contains("合成普通课程名称")); XCTAssertTrue(readable.contains("截止日期")) }
                 if tool == "inspect_schedule" { XCTAssertTrue(readable.contains("合成课节1")); XCTAssertTrue(readable.contains("本机时间核对")) }
-                let captured = await mock.requests
-                XCTAssertEqual(captured, approvals.map(\.request))
+                XCTAssertEqual(captured.first, first.request)
             }
         }
     }
     @MainActor func testRefusalAfterToolNeverTransmitsToolResult() async throws {
-        let mock = AssistantMockTransport(), session = try session(mock)
+        let basis = AssistantSimulation.snapshot()
+        var state = basis.state; state.courses[0].name = "合成私密课程"
+        let snapshot = AssistantSnapshot(state: state, now: basis.now, calendar: basis.calendar)
+        let mock = AssistantMockTransport(), session = try session(mock, snapshot: snapshot)
         session.send(); try await waitUntil { session.approval != nil }
         session.decide(session.approval!.id, allow: true)
         try await waitUntil { session.approval != nil }
+        XCTAssertEqual(session.approval?.title, "隐私内容确认")
         XCTAssertEqual(session.evidence.count, 1)
         session.decide(session.approval!.id, allow: false)
         try await waitUntil { !session.busy }
@@ -299,7 +305,7 @@ final class AssistantTests: XCTestCase {
         XCTAssertEqual(requests.count, 1); XCTAssertFalse(requests[0].body.contains("合成课程 A"))
         XCTAssertFalse(session.entries.contains { $0.role == "助手" })
     }
-    @MainActor func testSDKCalculationUsesNativeEvidenceAndIsSeparatelyApproved() async throws {
+    @MainActor func testSDKCalculationUsesNativeEvidenceWithinConfirmedScope() async throws {
         let snapshot = AssistantSimulation.snapshot(), runner = AssistantRunner()
         let mock = AssistantMockTransport(script: [
             ("inspect_course", ["course": AssistantSimulation.courseID.uuidString, "offset": "0"]),
@@ -309,9 +315,11 @@ final class AssistantTests: XCTestCase {
         _ = try await runner.run(configuration: AssistantSimulation.configuration(), messages: [.init(role: "user", content: "合成计算")],
             snapshot: snapshot, key: "", directory: try runtime(), transport: mock, currentSnapshotID: { snapshot.id },
             approve: { approvals.append($0); return true }, activity: { _ in }, evidence: { _ in })
-        XCTAssertEqual(approvals.count, 3)
-        XCTAssertTrue(approvals[2].request.categories.contains("软件核算的数值与计算依据"))
-        XCTAssertTrue(approvals[2].request.body.contains("result"))
+        XCTAssertEqual(approvals.count, 1)
+        let captured = await mock.requests
+        XCTAssertEqual(captured.count, 3)
+        XCTAssertTrue(captured[2].categories.contains("软件核算的数值与计算依据"))
+        XCTAssertTrue(captured[2].body.contains("result"))
     }
     @MainActor func testRefuseRetryAndDuplicateDecisions() async throws {
         let session = try session()

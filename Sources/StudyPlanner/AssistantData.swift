@@ -4,7 +4,7 @@ import Security
 
 enum AssistantError: String, Error, LocalizedError {
     case configuration = "请填写 HTTPS 服务地址和模型名称；地址不能含账号、查询参数或片段。"
-    case key = "请在左下角填写密钥，或主动从本机钥匙串载入。"
+    case key = "请打开 API 设置填写密钥，或主动从本机钥匙串载入。"
     case keychain = "钥匙串操作未完成，原有凭证未删除。"
     case history = "本机聊天记录无法安全读写，原文件已保留；本次未覆盖保存。"
     case sensitive = "检测到疑似密钥或凭证，已阻止保存和发送。请移除后重试。"
@@ -60,11 +60,39 @@ func assistantHash(_ data: Data) -> String { SHA256.hash(data: data).map { Strin
 
 enum AssistantSecrets {
     static func check(_ text: String, key: String = "") throws {
-        let patterns = [#"(?i)\b(sk-|sk_|sess-|Bearer\s+)[A-Za-z0-9_\-]{8,}"#,
-                        #"(?i)(api[_ -]?key|password|access[_ -]?token|密钥|密码)\s*[=:：]\s*\S{6,}"#]
-        guard key.isEmpty || !text.contains(key), !patterns.contains(where: {
-            text.range(of: $0, options: .regularExpression) != nil
-        }) else { throw AssistantError.sensitive }
+        // Decode JSON strings too: an escaped credential is still a credential.
+        func inspect(_ value: String, depth: Int) throws {
+            let normalized = value.precomposedStringWithCompatibilityMapping
+            let decoded = normalized.removingPercentEncoding ?? normalized
+            let patterns = [
+                #"(?i)\b(sk[-_]|sess-|gh[pousr]_|github_pat_|xox[baprs]-|Bearer\s+)[A-Za-z0-9_\-]{8,}"#,
+                #"(?i)(api[_ -]?key|password|passwd|client[_ -]?secret|access[_ -]?token|refresh[_ -]?token|authorization|cookie|密钥|密码|口令|访问令牌)[\"']?\s*(?:[=:：]|是|为)\s*[\"']?[^\s\"',;}]{4,}"#,
+                #"-----BEGIN (?:[A-Z]+ )?PRIVATE KEY-----"#,
+                #"\b(?:AKIA|ASIA)[A-Z0-9]{16}\b"#,
+                #"\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}"#,
+                #"(?i)\b[a-z][a-z0-9+.-]*://[^\s/]+:[^\s/]+@"#,
+                #"(?i)[?&](?:token|key|secret|password|signature|access_token)=[^\s&#\"]+"#
+            ]
+            for candidate in [normalized, decoded] {
+                guard key.isEmpty || !candidate.contains(key), !patterns.contains(where: {
+                    candidate.range(of: $0, options: .regularExpression) != nil
+                }) else { throw AssistantError.sensitive }
+            }
+            guard depth < 8, let data = value.data(using: .utf8),
+                  let object = try? JSONSerialization.jsonObject(with: data, options: [.fragmentsAllowed]) else { return }
+            func walk(_ object: Any) throws {
+                if let string = object as? String, string != value { try inspect(string, depth: depth + 1) }
+                else if let array = object as? [Any] { for item in array { try walk(item) } }
+                else if let dictionary = object as? [String: Any] {
+                    for (name, item) in dictionary {
+                        if let string = item as? String { try inspect(name + ":" + string, depth: depth + 1) }
+                        try inspect(name, depth: depth + 1); try walk(item)
+                    }
+                }
+            }
+            try walk(object)
+        }
+        try inspect(text, depth: 0)
     }
     static func validateKey(_ key: String) throws {
         guard !key.isEmpty, key.utf8.count <= 8192, !key.contains(where: { $0.isWhitespace }) else { throw AssistantError.key }
@@ -116,6 +144,21 @@ struct AssistantWorkspace: Codable {
     var configuration = AssistantConfiguration()
     var conversations: [AssistantConversation] = []
     var selectedID: UUID?
+    var memories: [AssistantMemory] = []
+
+    init(configuration: AssistantConfiguration = .init(), conversations: [AssistantConversation] = [],
+         selectedID: UUID? = nil, memories: [AssistantMemory] = []) {
+        self.configuration = configuration; self.conversations = conversations
+        self.selectedID = selectedID; self.memories = memories
+    }
+    private enum CodingKeys: String, CodingKey { case configuration, conversations, selectedID, memories }
+    init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        configuration = try values.decode(AssistantConfiguration.self, forKey: .configuration)
+        conversations = try values.decode([AssistantConversation].self, forKey: .conversations)
+        selectedID = try values.decodeIfPresent(UUID.self, forKey: .selectedID)
+        memories = try values.decodeIfPresent([AssistantMemory].self, forKey: .memories) ?? []
+    }
 }
 
 /// Atomic private file outside planner persistence/sync; a corrupt file is never replaced.
@@ -164,7 +207,10 @@ struct AssistantHistoryStore {
     private func validate(_ value: AssistantWorkspace) throws {
         guard value.conversations.count <= 100,
               Set(value.conversations.map(\.id)).count == value.conversations.count,
-              value.conversations.allSatisfy({ Set($0.entries.map(\.id)).count == $0.entries.count }) else { throw AssistantError.history }
+              value.conversations.allSatisfy({ Set($0.entries.map(\.id)).count == $0.entries.count }),
+              value.memories.count <= 50, Set(value.memories.map(\.id)).count == value.memories.count,
+              value.memories.allSatisfy({ !$0.text.isEmpty && $0.text.utf8.count <= 2000 }) else { throw AssistantError.history }
+        try AssistantSecrets.check(String(decoding: assistantJSON(value), as: UTF8.self))
     }
     func save(_ value: AssistantWorkspace) throws {
         try validate(value); try safePath(url)

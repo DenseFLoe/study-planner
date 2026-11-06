@@ -19,7 +19,20 @@ actor AssistantMockTransport: AssistantTransport {
         if delay != .zero { try await Task.sleep(for: delay) }
         if requests.count == failAt { throw AssistantError.network }
         let step = requests.count, tool = step <= script.count ? script[step - 1] : nil
-        let text = "[E1][E2] 合成演示完成：已查询本机课程与证据。此回答用于检查界面和审批流程，不代表真实模型的推理能力。"
+        let text = """
+        ## 合成演示完成
+        已查询本机课程与证据。[E1][E2]
+
+        - **课程内容**：按需查询课程和课节。
+        - **时间安排**：结合本机规则核对，不能把未排入量当作客观缺口。
+
+        | 项目 | 核对方式 |
+        | --- | --- |
+        | 学习进度 | 本机课程数据 |
+        | 排程冲突 | 本机计算证据 |
+
+        > 此回答用于检查界面和确认流程，不代表真实模型的推理能力。
+        """
         let response: [String: Any]
         if request.configuration.provider == .anthropic {
             let content: [[String: Any]] = tool.map { [["type": "tool_use", "id": "call-\(step)", "name": $0.0, "input": $0.1]] }
@@ -114,14 +127,14 @@ enum AssistantSimulation {
                         guard approvals.count == 1 || !approval.request.categories.isEmpty else { throw AssistantError.protocolError }
                         return true
                     }, activity: { _ in }, evidence: { evidence.append($0) })
-                guard approvals.count == 7, evidence.count == 6, runner.toolCount == 6, runner.sentRequests == 7,
+                guard approvals.count == 1, evidence.count == 6, runner.toolCount == 6, runner.sentRequests == 7,
                       let summary = approvals.last?.summary,
                       summary.contains("课程/课节名称"), summary.contains("日期时间"),
                       summary.contains("冲突及余量"), summary.contains("相关编号") else { return false }
                 let captured = await transport.requests
                 guard let last = captured.last,
                       AssistantDetailNode.parse(last.body).map(\.plainText).joined().contains("本机时间核对") else { return false }
-                guard captured == approvals.map(\.request),
+                guard captured.first == approvals.first?.request, captured.count == 7,
                       let course = try JSONSerialization.jsonObject(with: Data(evidence[1].json.utf8)) as? [String: Any],
                       let courseData = course["data"] as? [String: Any], let lessons = courseData["lessons"] as? [[String: Any]],
                       let schedule = try JSONSerialization.jsonObject(with: Data(evidence[2].json.utf8)) as? [String: Any],

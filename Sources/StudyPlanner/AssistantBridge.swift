@@ -82,6 +82,9 @@ private struct AssistantReply: Encodable {
              evidence: @escaping @MainActor (AssistantToolEvidence) -> Void) async throws -> String {
         guard process == nil else { throw AssistantError.protocolError }
         _ = try configuration.endpoint()
+        try AssistantSecrets.check(String(decoding: assistantJSON(messages), as: UTF8.self), key: key)
+        try AssistantSecrets.check(configuration.baseURL, key: key)
+        try AssistantSecrets.check(configuration.model, key: key)
         let helper = directory.appendingPathComponent("assistant-helper.cjs"), node = directory.appendingPathComponent("node")
         struct Manifest: Decodable { let assistantProtocol: Int; let assistantSHA256: String; let node: String }
         guard let data = try? Data(contentsOf: directory.appendingPathComponent("manifest.json")),
@@ -105,11 +108,13 @@ private struct AssistantReply: Encodable {
             var type = "start"; let provider: String; let baseURL: String; let model: String
             let instructions: String; let messages: [AssistantWireMessage]; let tools: [AssistantToolDefinition]
         }
+        let instructions = AssistantTools.instructions + "\n本机日期：\(snapshot.stamp(snapshot.now))；时区：\(snapshot.calendar.timeZone.identifier)。"
         try Self.write(Start(provider: configuration.provider.wire, baseURL: configuration.baseURL, model: configuration.model,
-                             instructions: AssistantTools.instructions + "\n本机日期：\(snapshot.stamp(snapshot.now))；时区：\(snapshot.calendar.timeZone.identifier)。",
+                             instructions: instructions,
                              messages: messages, tools: AssistantTools.definitions), input.fileHandleForWriting)
         var ready = false, gate = AssistantApprovalGate(), frameIDs = Set<String>()
         var queriedEvidence: [AssistantToolEvidence] = []
+        var scopeConfirmed = false, allowedFindings = Set<String>()
         for try await bytes in frames {
             if cancelled || Task.isCancelled { throw AssistantError.stopped }
             guard currentSnapshotID() == snapshot.id else { throw AssistantError.changed }
@@ -125,11 +130,20 @@ private struct AssistantReply: Encodable {
                       let url = frame.url, let body = frame.body else { throw AssistantError.protocolError }
                 let request = AssistantRequest(id: id, configuration: configuration, url: url, body: body)
                 try request.validate(key: key)
-                let confirmation = try gate.prepare(request, snapshotID: snapshot.id, simulated: transport.simulated)
-                activity("等待你确认发送内容")
-                let allow = try await approve(confirmation)
+                let findings = try AssistantContentPolicy.findings(in: request, instructions: instructions, evidence: queriedEvidence)
+                    .filter { !allowedFindings.contains($0.fingerprint) }
+                if !scopeConfirmed || !findings.isEmpty {
+                    let confirmation = try gate.prepare(request, snapshotID: snapshot.id, simulated: transport.simulated,
+                                                        confirmsScope: !scopeConfirmed, findings: findings)
+                    activity(scopeConfirmed ? "发现需要核对的隐私内容" : "请确认本轮课表内容")
+                    let allow = try await approve(confirmation)
+                    if cancelled || Task.isCancelled { gate.cancel(); throw AssistantError.stopped }
+                    guard try gate.decide(id: confirmation.id, request: request, snapshotID: currentSnapshotID(), allow: allow) else { throw AssistantError.refused }
+                    scopeConfirmed = true
+                    allowedFindings.formUnion(findings.map(\.fingerprint))
+                }
                 if cancelled || Task.isCancelled { gate.cancel(); throw AssistantError.stopped }
-                guard try gate.decide(id: confirmation.id, request: request, snapshotID: currentSnapshotID(), allow: allow) else { throw AssistantError.refused }
+                guard currentSnapshotID() == snapshot.id else { throw AssistantError.changed }
                 activity(transport.simulated ? "模拟服务正在回答…" : "等待模型回答…")
                 sentRequests += 1
                 let response = try await transport.send(request, key: key)

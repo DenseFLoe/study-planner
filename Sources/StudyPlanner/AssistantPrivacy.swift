@@ -82,21 +82,33 @@ struct AssistantApproval: Identifiable, Sendable {
     let snapshotID: String
     let expiresAt: Date
     let simulated: Bool
+    var confirmsScope = true
+    var findings: [AssistantPrivacyFinding] = []
+    var title: String { confirmsScope ? "课表内容确认" : "隐私内容确认" }
     var summary: String {
-        let data = (["本次问题、本对话历史、助手规则与查询说明"] + request.compactCategories).joined(separator: "；")
-        let destination = simulated ? "本机模拟（不会联网）" : "\(request.configuration.provider.rawValue) · \(URL(string: request.url)?.host ?? request.url)"
-        return "发给：\(destination) · \(request.configuration.model)\n包含：\(data)。"
+        let destination = simulated ? "本机模拟（不会联网）" : request.url
+        let data = confirmsScope
+            ? "本次问题、已完成的对话历史和启用记忆；按需查询课程/课节名称、相关编号、日期时间、学习量与进度、排程规则、冲突及余量。"
+            : (["本次问题、对话历史、启用记忆"] + request.compactCategories).joined(separator: "；") + "。"
+        return "接收方：\(destination)\n模型：\(request.configuration.model)\n\(data)"
+    }
+    var scopeNote: String {
+        confirmsScope
+            ? "确认后，本轮同一接收方、同一课表版本的普通必要数据自动发送。发现新的敏感或不确定内容会再询问；疑似密钥一律阻止。"
+            : "仅允许本轮向此接收方发送下列内容；相同内容在后续请求中可能重复携带。新的隐私内容仍会询问。"
     }
 }
 
 struct AssistantApprovalGate {
     private(set) var pending: AssistantApproval?
     private var seen = Set<String>()
-    mutating func prepare(_ request: AssistantRequest, snapshotID: String, simulated: Bool, now: Date = Date()) throws -> AssistantApproval {
+    mutating func prepare(_ request: AssistantRequest, snapshotID: String, simulated: Bool, now: Date = Date(),
+                          confirmsScope: Bool = true, findings: [AssistantPrivacyFinding] = []) throws -> AssistantApproval {
         try request.validate()
         guard pending == nil, seen.insert(request.id).inserted, seen.count <= 8 else { throw AssistantError.protocolError }
         let value = AssistantApproval(request: request, fingerprint: assistantHash(try assistantJSON(request)),
-                                      snapshotID: snapshotID, expiresAt: now.addingTimeInterval(120), simulated: simulated)
+                                      snapshotID: snapshotID, expiresAt: now.addingTimeInterval(120), simulated: simulated,
+                                      confirmsScope: confirmsScope, findings: findings)
         pending = value; return value
     }
     mutating func decide(id: UUID, request: AssistantRequest, snapshotID: String, allow: Bool, now: Date = Date()) throws -> Bool {

@@ -1,5 +1,5 @@
 // This process never receives credentials and cannot open network connections.
-// All SDK HTTP requests are serialized through Swift's one-shot approval gate.
+// All SDK HTTP requests pass Swift's turn-scoped consent and local privacy checks.
 import { ToolLoopAgent, tool, stepCountIs } from 'ai';
 import { createOpenAI } from '@ai-sdk/openai';
 import { createAnthropic } from '@ai-sdk/anthropic';
