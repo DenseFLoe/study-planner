@@ -314,6 +314,20 @@ Android 首次迁移旧版 `planner-v1.json` 时，按备份相同的64MB上限�
 
 Android 与服务端在读取备份或同步设置时，先检查分钟、星期及已知偏好等级的整数类型；小数、数字字符串与溢出值不会被截断后保存。合法的整数值 JSON 表示（例如 `60.0`、`6e1`）继续兼容，旧版未设置偏好等级的数据仍可读取。
 
+## Mac 日程助手
+
+窗口顶部的对话气泡打开「日程助手」；课程列表右键选择「向助手询问这门课」会带入该课程，也可在助手里切换日期和课程。点击「解释排课」「核对超标」或输入问题，先「预览本次发送内容」，核对后点「同意发送本次内容」。未配置 API 也能查看本地证据。
+
+在助手的 API 配置中选择 OpenAI、xAI / Grok 或 DeepSeek，填写账户支持的模型名称和密钥。默认地址分别使用 OpenAI Responses、xAI Chat Completions、DeepSeek Chat Completions；支持修改完整 HTTPS 接口地址，代理必须兼容所选协议。切换服务商或地址会清空内存密钥。密钥默认只在窗口内使用；可明确点击存入本机钥匙串、载入或删除，按服务商和完整地址隔离，不进入日程、云同步或备份。模型与地址在成功发起请求时保存到本机设置；不自动读取其他应用的密钥。
+
+每次只发送当前问题、预览中的有限证据和固定助手规则。课程名默认用编号代替，本机对应表不会发送；选择包含名称或在问题中输入名称则会发送该名称。证据包含所选日期的安排、匿名事项占用、课程有效进度、截止日期、倍率、偏好和当前可用的排程评估；不发送备注、来源网址、账号、完整数据库或历史聊天。概览最多12门课、24条当日安排和16项事项，截断会标明，可选择单门课程进一步核对。自定义服务地址会收到密钥和内容，服务商的数据政策与收费仍适用。OpenAI 请求设置 `store:false`，不代表所有服务商零留存。
+
+回答引用 `[E编号]` 供核对，并区分数据事实、可能解释和缺失信息。每日均摊、倍率、全日负担提醒线和截止容量是不同口径；助手不改动日程，也不把尚未排入解释为无解。现有数据库没有完整历史决策轨迹，因此不能保证还原当时为什么选中某个具体时段。回答来自模型，仍需核对；窗口关闭后问答清除，后续问题不自动携带前文。
+
+请求采用完整返回模式，最多4096输出 token、90秒总超时和1MiB响应限制；不自动重试、不自动换模型、不启用加速。取消、关闭、切换课程/日期/服务商会停止等待并丢弃迟到回答；已经送达服务商的请求仍可能计费。超时、限流/余额不足、密钥错误、模型不可用、空回答、截断或意外流式响应都有明确提示；重试必须重新预览并同意发送。开发验证只使用合成数据和 mock，不调用付费 API。真实服务商联调及系统钥匙串读写需用户配置后验收。
+
+本次实现前评估了 [MacPaw/OpenAI](https://github.com/MacPaw/OpenAI) 与 [SwiftOpenAI](https://github.com/jamesrochabrun/SwiftOpenAI)：两者为 MIT 许可，公开发布页仍有近期维护（核对于2026-11-06，分别0.6.0与4.6.3），支持本项目 macOS 版本。前者引入 Swift OpenAPI Runtime，后者声明 AsyncHTTPClient/SwiftNIO 等依赖（用于 Linux）；它们更适合广泛 API 能力。本功能只使用两种有界文本协议，复用 Foundation URLSession、Security 钥匙串和已有排程计算，不引入完整 SDK，也未复制第三方源码，因此无新增第三方许可文件。协议依据：[OpenAI 文本接口](https://developers.openai.com/api/docs/guides/text)、[xAI Chat Completions](https://docs.x.ai/developers/model-capabilities/legacy/chat-completions)、[DeepSeek Chat Completions](https://api-docs.deepseek.com/api/create-chat-completion/)。以后增加工具调用、流式对话或更多接口时可重新评估 SDK。
+
 ## 验证
 
 新增 `bash Scripts/test-ci.sh` 统一运行服务端、Swift、Android 及跨语言往返测试，自动准备并校验 JSON-java 依赖。GitHub Actions 在提交和拉取请求时执行同一入口，不上传构建产物。另有独立 Ubuntu 任务运行 `bash Scripts/test-portable-ci.sh`，用固定摘要的官方 Swift 6.0.3 容器先生成本轮样本，再验证服务端、Android 核心及真实 Android API 编译、Java 同步往返，以及全部 `StudyCoreTests` 和 Foundation 文件存储测试；最后由 Java 读取 Swift 云端快照。同步确认、浮动事项、合并记录与文件备份的互读样本在隔离目录共享，缺失样本立即失败；随后使用一次性临时密钥实际构建并验签 Android APK，核对资源、DEX、版本与空白初始数据，结束后删除临时 APK 和密钥；不使用发布密钥，不上传或安装。该任务无需等 macOS 执行器。完整 Swift、SwiftData、界面与跨语言往返检查仍在原 macOS 任务运行。需要真实手机、SSH 服务器或真实网站的测试仍须单独准备环境，不代表真机验收。
