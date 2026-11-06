@@ -19,6 +19,55 @@ private actor ApprovalCaptureTransport: AssistantTransport {
         return state
     }
 
+    private func numberedState(_ names: [String]) -> PlannerState {
+        var state = PlannerState()
+        state.courses = names.enumerated().map { index, name in
+            var course = Course(name: name, totalMinutes: 120, startDate: Date(), deadline: Date() + 86400)
+            course.id = UUID(uuidString: String(format: "00000000-0000-0000-0000-%012d", index + 1))!
+            return course
+        }
+        return state
+    }
+
+    func testNumericBoundaryIsPreservedInApprovedPayloadForEveryProvider() async throws {
+        let state = numberedState(["英语"] + (2...12).map { "合成科目\($0)末" })
+        for provider in AssistantProvider.allCases {
+            let transport = ApprovalCaptureTransport(), session = AssistantSession(transport: transport, defaults: nil)
+            session.switchProvider(provider); session.configuration.model = "synthetic-model"; session.key = "synthetic-secret"
+            session.question = "英语2倍为什么超标？"
+            await session.prepare(state: state, day: Date(), courseID: nil, includeNames: false)
+            let preview = try XCTUnwrap(session.preview)
+            XCTAssertEqual(preview.question, "「课程1」2倍为什么超标？")
+            session.send(currentState: state); await session.waitForRequest()
+            let captured = await transport.first
+            let data = try XCTUnwrap(captured?.httpBody)
+            let json = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+            let payload = provider == .openAI ? json["input"] as? String
+                : (json["messages"] as? [[String: String]])?.last?["content"]
+            XCTAssertEqual(payload, "用户问题：\n\(preview.question)\n\n本地证据（只读快照）：\n\(preview.evidence.text)")
+            XCTAssertFalse(String(decoding: data, as: UTF8.self).contains("英语"))
+        }
+    }
+
+    func testNameAliasCollisionBlocksSendingAndExplicitSelectionRestoresCorrectIdentity() async throws {
+        let state = numberedState(["英语", "课程1"])
+        for index in state.courses.indices {
+            let transport = ApprovalCaptureTransport(), session = AssistantSession(transport: transport, defaults: nil)
+            session.configuration.model = "synthetic-model"; session.key = "synthetic-secret"
+            session.question = "课程1为什么超标？"
+            await session.prepare(state: state, day: Date(), courseID: nil, includeNames: false)
+            XCTAssertNil(session.preview); XCTAssertTrue(session.message?.contains("名称与编号冲突") == true)
+            session.send(currentState: state)
+            var count = await transport.count; XCTAssertEqual(count, 0)
+            await session.prepare(state: state, day: Date(), courseID: state.courses[index].id, includeNames: false)
+            let preview = try XCTUnwrap(session.preview)
+            XCTAssertEqual(preview.question, "「课程\(index + 1)」为什么超标？")
+            session.send(currentState: state); await session.waitForRequest()
+            count = await transport.count; XCTAssertEqual(count, 1)
+            XCTAssertEqual(session.answeredPreview, preview)
+        }
+    }
+
     func testEveryProviderSendsExactlyPreviewedResolvedQuestionEvidenceAndRules() async throws {
         for provider in AssistantProvider.allCases {
             let transport = ApprovalCaptureTransport(), session = AssistantSession(transport: transport, defaults: nil)
@@ -27,7 +76,7 @@ private actor ApprovalCaptureTransport: AssistantTransport {
             let state = fixture()
             await session.prepare(state: state, day: Date(), courseID: nil, includeNames: false)
             let preview = try XCTUnwrap(session.preview)
-            XCTAssertEqual(preview.question, "课程1为什么超标？")
+            XCTAssertEqual(preview.question, "「课程1」为什么超标？")
             XCTAssertEqual(preview.originalQuestion, session.question)
             session.send(currentState: state); await session.waitForRequest()
             let captured = await transport.first
