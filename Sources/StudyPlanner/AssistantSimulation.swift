@@ -127,7 +127,7 @@ enum AssistantSimulation {
                         guard approvals.count == 1 || !approval.request.categories.isEmpty else { throw AssistantError.protocolError }
                         return true
                     }, activity: { _ in }, evidence: { evidence.append($0) })
-                guard approvals.count == 1, evidence.count == 6, runner.toolCount == 6, runner.sentRequests == 7,
+                guard approvals.count == 1, evidence.count == 6, await runner.toolCount == 6, await runner.sentRequests == 7,
                       let summary = approvals.last?.summary,
                       summary.contains("课程/课节名称"), summary.contains("日期时间"),
                       summary.contains("冲突及余量"), summary.contains("相关编号") else { return false }

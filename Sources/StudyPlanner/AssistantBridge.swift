@@ -57,8 +57,9 @@ private struct AssistantReply: Encodable {
     var resultJSON: String? = nil
 }
 
-@MainActor final class AssistantRunner {
-    static var bundledDirectory: URL? { Bundle.main.resourceURL?.appendingPathComponent("AgentPrototype") }
+/// File hashing, request validation and pipe writes must never occupy the UI executor.
+actor AssistantRunner {
+    nonisolated static var bundledDirectory: URL? { Bundle.main.resourceURL?.appendingPathComponent("AgentPrototype") }
     private var process: Process?
     private(set) var cancelled = false
     private(set) var sentRequests = 0
@@ -68,7 +69,7 @@ private struct AssistantReply: Encodable {
     private func stopProcess() {
         guard let process, process.isRunning else { return }
         process.terminate()
-        Task { @MainActor in
+        Task {
             try? await Task.sleep(for: .seconds(1))
             // This is only the disposable, read-only SDK child, never the application saving user data.
             if process.isRunning { kill(process.processIdentifier, SIGKILL) }
@@ -81,6 +82,8 @@ private struct AssistantReply: Encodable {
              activity: @escaping @MainActor (String) -> Void,
              evidence: @escaping @MainActor (AssistantToolEvidence) -> Void) async throws -> String {
         guard process == nil else { throw AssistantError.protocolError }
+        try Task.checkCancellation()
+        guard !cancelled else { throw AssistantError.stopped }
         _ = try configuration.endpoint()
         try AssistantSecrets.check(String(decoding: assistantJSON(messages), as: UTF8.self), key: key)
         try AssistantSecrets.check(configuration.baseURL, key: key)
@@ -100,8 +103,8 @@ private struct AssistantReply: Encodable {
         child.standardInput = input; child.standardOutput = output; child.standardError = FileHandle.nullDevice
         process = child; try child.run()
         let frames = Self.frames(output.fileHandleForReading)
-        let timeout = Task { @MainActor [weak self] in
-            do { try await Task.sleep(for: .seconds(1200)) } catch { return }; self?.cancel()
+        let timeout = Task { [weak self] in
+            do { try await Task.sleep(for: .seconds(1200)) } catch { return }; await self?.cancel()
         }
         defer { timeout.cancel(); stopProcess(); try? input.fileHandleForWriting.close() }
         struct Start: Encodable {
@@ -114,10 +117,10 @@ private struct AssistantReply: Encodable {
                              messages: messages, tools: AssistantTools.definitions), input.fileHandleForWriting)
         var ready = false, gate = AssistantApprovalGate(), frameIDs = Set<String>()
         var queriedEvidence: [AssistantToolEvidence] = []
-        var scopeConfirmed = false, allowedFindings = Set<String>()
+        var scopeConfirmed = false
         for try await bytes in frames {
             if cancelled || Task.isCancelled { throw AssistantError.stopped }
-            guard currentSnapshotID() == snapshot.id else { throw AssistantError.changed }
+            guard await currentSnapshotID() == snapshot.id else { throw AssistantError.changed }
             let frame = try JSONDecoder().decode(AssistantFrame.self, from: bytes)
             switch frame.type {
             case "ready":
@@ -131,20 +134,20 @@ private struct AssistantReply: Encodable {
                 let request = AssistantRequest(id: id, configuration: configuration, url: url, body: body)
                 try request.validate(key: key)
                 let findings = try AssistantContentPolicy.findings(in: request, instructions: instructions, evidence: queriedEvidence)
-                    .filter { !allowedFindings.contains($0.fingerprint) }
-                if !scopeConfirmed || !findings.isEmpty {
+                // The initial approval covers this turn's read-only scope, including private
+                // free text. Still verify every actual result and reject credentials below.
+                if !scopeConfirmed {
                     let confirmation = try gate.prepare(request, snapshotID: snapshot.id, simulated: transport.simulated,
                                                         confirmsScope: !scopeConfirmed, findings: findings)
-                    activity(scopeConfirmed ? "发现需要核对的隐私内容" : "请确认本轮课表内容")
+                    await activity("请确认本轮课表内容")
                     let allow = try await approve(confirmation)
                     if cancelled || Task.isCancelled { gate.cancel(); throw AssistantError.stopped }
-                    guard try gate.decide(id: confirmation.id, request: request, snapshotID: currentSnapshotID(), allow: allow) else { throw AssistantError.refused }
+                    guard try gate.decide(id: confirmation.id, request: request, snapshotID: await currentSnapshotID(), allow: allow) else { throw AssistantError.refused }
                     scopeConfirmed = true
-                    allowedFindings.formUnion(findings.map(\.fingerprint))
                 }
                 if cancelled || Task.isCancelled { gate.cancel(); throw AssistantError.stopped }
-                guard currentSnapshotID() == snapshot.id else { throw AssistantError.changed }
-                activity(transport.simulated ? "模拟服务正在回答…" : "等待模型回答…")
+                guard await currentSnapshotID() == snapshot.id else { throw AssistantError.changed }
+                await activity(transport.simulated ? "模拟服务正在回答…" : "等待模型回答…")
                 sentRequests += 1
                 let response = try await transport.send(request, key: key)
                 if cancelled || Task.isCancelled { throw AssistantError.stopped }
@@ -154,7 +157,7 @@ private struct AssistantReply: Encodable {
             case "tool":
                 guard ready, sentRequests > 0, toolCount < 24, let id = frame.id, frameIDs.insert(id).inserted,
                       let name = frame.name, let arguments = frame.input else { throw AssistantError.protocolError }
-                activity("正在本机查询：\(AssistantTools.definitions.first { $0.name == name }?.description ?? "受限查询")")
+                await activity("正在本机查询：\(AssistantTools.definitions.first { $0.name == name }?.description ?? "受限查询")")
                 toolCount += 1
                 let evidenceID = "E\(toolCount)"
                 let previous = queriedEvidence
@@ -163,7 +166,7 @@ private struct AssistantReply: Encodable {
                 }.value
                 if cancelled || Task.isCancelled { throw AssistantError.stopped }
                 try AssistantSecrets.check(result.json, key: key)
-                queriedEvidence.append(result); evidence(result)
+                queriedEvidence.append(result); await evidence(result)
                 try Self.write(AssistantReply(id: id, resultJSON: result.json), input.fileHandleForWriting)
             case "done":
                 guard ready, sentRequests > 0, let text = frame.text, !text.isEmpty, text.utf8.count <= 64_000 else { throw AssistantError.protocolError }

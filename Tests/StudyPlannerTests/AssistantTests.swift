@@ -289,20 +289,18 @@ final class AssistantTests: XCTestCase {
             }
         }
     }
-    @MainActor func testRefusalAfterToolNeverTransmitsToolResult() async throws {
+    @MainActor func testRefusingInitialScopeNeverQueriesOrTransmitsPrivateCourse() async throws {
         let basis = AssistantSimulation.snapshot()
         var state = basis.state; state.courses[0].name = "合成私密课程"
         let snapshot = AssistantSnapshot(state: state, now: basis.now, calendar: basis.calendar)
         let mock = AssistantMockTransport(), session = try session(mock, snapshot: snapshot)
         session.send(); try await waitUntil { session.approval != nil }
-        session.decide(session.approval!.id, allow: true)
-        try await waitUntil { session.approval != nil }
-        XCTAssertEqual(session.approval?.title, "隐私内容确认")
-        XCTAssertEqual(session.evidence.count, 1)
+        XCTAssertEqual(session.approval?.title, "课表内容确认")
+        XCTAssertTrue(session.evidence.isEmpty)
         session.decide(session.approval!.id, allow: false)
         try await waitUntil { !session.busy }
         let requests = await mock.requests
-        XCTAssertEqual(requests.count, 1); XCTAssertFalse(requests[0].body.contains("合成课程 A"))
+        XCTAssertTrue(requests.isEmpty)
         XCTAssertFalse(session.entries.contains { $0.role == "助手" })
     }
     @MainActor func testSDKCalculationUsesNativeEvidenceWithinConfirmedScope() async throws {

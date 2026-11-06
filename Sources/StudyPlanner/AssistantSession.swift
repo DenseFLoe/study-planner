@@ -11,7 +11,7 @@ import StudyCore
                 if !key.isEmpty { knownKeys.insert(key) }
                 key = ""
             }
-            persist()
+            schedulePersistence()
         }
     }
     var key = "" {
@@ -31,7 +31,8 @@ import StudyCore
     private(set) var historyMessage: String?
     private(set) var evidence: [AssistantToolEvidence] = []
     let simulated: Bool
-    @ObservationIgnored private let historyStore: AssistantHistoryStore?
+    @ObservationIgnored private let historyWriter: AssistantHistoryWriter
+    @ObservationIgnored private var persistenceID = UUID()
     @ObservationIgnored private let snapshotProvider: @MainActor () -> AssistantSnapshot?
     @ObservationIgnored private let transportFactory: @MainActor () -> any AssistantTransport
     @ObservationIgnored private let directory: URL?
@@ -46,7 +47,8 @@ import StudyCore
     init(historyStore: AssistantHistoryStore? = .local, directory: URL? = AssistantRunner.bundledDirectory,
          simulated: Bool = false, snapshot: @escaping @MainActor () -> AssistantSnapshot?,
          transportFactory: @escaping @MainActor () -> any AssistantTransport = { AssistantHTTPTransport() }) {
-        self.historyStore = historyStore; self.snapshotProvider = snapshot; self.directory = directory
+        self.snapshotProvider = snapshot; self.directory = directory
+        self.historyWriter = AssistantHistoryWriter(store: historyStore)
         self.simulated = simulated; self.transportFactory = transportFactory
         var saved = AssistantWorkspace(), loadFailed = false
         do { saved = try historyStore?.load() ?? saved } catch { loadFailed = true }
@@ -102,11 +104,11 @@ import StudyCore
     func newConversation() {
         stop(); guard conversations.count < 100 else { message = "最多保留100个对话。"; return }
         let value = AssistantConversation(); conversations.insert(value, at: 0); selectedID = value.id
-        question = ""; evidence = []; message = nil; activity = "只读查询 · 本轮课表内容确认一次"; persist()
+        question = ""; evidence = []; message = nil; activity = "只读查询 · 本轮课表内容确认一次"; schedulePersistence()
     }
     func select(_ id: UUID) {
         guard id != selectedID, conversations.contains(where: { $0.id == id }) else { return }
-        stop(); selectedID = id; question = ""; evidence = []; message = nil; activity = "只读查询 · 本轮课表内容确认一次"; persist()
+        stop(); selectedID = id; question = ""; evidence = []; message = nil; activity = "只读查询 · 本轮课表内容确认一次"; schedulePersistence()
     }
     func useProvider(_ provider: AssistantProvider) {
         configuration = .init(provider: provider, baseURL: provider.baseURL, model: "")
@@ -136,24 +138,33 @@ import StudyCore
             if !simulated { try AssistantSecrets.validateKey(key); knownKeys.insert(key) }
             guard let snapshot = snapshotProvider() else { throw AssistantError.changed }
             guard let directory else { throw AssistantError.runtime }
-            let memory = try AssistantMemories.message(memories)
-            let messages = (memory.map { [$0] } ?? []) + entries.filter { $0.status == "完成" && ["你", "助手"].contains($0.role) }
-                .map { AssistantWireMessage(role: $0.role == "你" ? "user" : "assistant", content: $0.text) }
-                + [.init(role: "user", content: text)]
-            let messageData = try assistantJSON(messages)
-            guard messageData.count <= 200_000 else { throw AssistantError.limit }
-            try checkContent(String(decoding: messageData, as: UTF8.self))
+            let history = entries, memories = memories
             let transport = transportFactory()
             guard transport.simulated == simulated else { throw AssistantError.protocolError }
             append(.init(role: "你", text: text, status: "处理中"))
-            guard persist() else { return }
             question = ""; evidence = []; message = nil
             let id = UUID(), conversationID = selectedID, config = configuration, secret = key
+            let secrets = knownKeys.union([secret])
             runID = id; busy = true; activity = "正在准备本机查询…"
             let runner = AssistantRunner(); self.runner = runner
             work = Task { @MainActor [weak self] in
                 guard let self else { return }
                 do {
+                    let messages = try await Task.detached(priority: .userInitiated) {
+                        let memory = try AssistantMemories.message(memories)
+                        let messages = (memory.map { [$0] } ?? []) + history.filter { $0.status == "完成" && ["你", "助手"].contains($0.role) }
+                            .map { AssistantWireMessage(role: $0.role == "你" ? "user" : "assistant", content: $0.text) }
+                            + [.init(role: "user", content: text)]
+                        let data = try assistantJSON(messages)
+                        guard data.count <= 200_000 else { throw AssistantError.limit }
+                        let text = String(decoding: data, as: UTF8.self)
+                        try AssistantSecrets.check(text)
+                        for key in secrets where !key.isEmpty { try AssistantSecrets.check(text, key: key) }
+                        return messages
+                    }.value
+                    guard self.runID == id else { return }
+                    guard await self.persistInBackground() else { throw AssistantError.history }
+                    guard self.runID == id else { return }
                     let answer = try await runner.run(configuration: config, messages: messages, snapshot: snapshot,
                         key: secret, directory: directory, transport: transport,
                         currentSnapshotID: { [weak self] in self?.snapshotProvider()?.id ?? "unavailable" },
@@ -180,7 +191,9 @@ import StudyCore
                     self.message = AssistantError.safe(error).rawValue; self.activity = "本轮已结束 · 可重试"
                 }
                 guard self.runID == id else { return }
-                self.finish(); self.persist()
+                await self.persistInBackground()
+                guard self.runID == id else { return }
+                self.finish()
             }
         } catch { message = AssistantError.safe(error).rawValue }
     }
@@ -203,13 +216,20 @@ import StudyCore
     }
     func stop(reason: AssistantError = .stopped) {
         guard busy || decision != nil else { return }
-        runID = nil; runner?.cancel(); work?.cancel()
+        runID = nil
+        if let runner { Task { await runner.cancel() } }
+        work?.cancel()
         let pending = decision; decision = nil; approval = nil; expiry?.cancel(); expiry = nil
         pending?.resume(throwing: reason)
         markPending("未完成"); busy = false; runner = nil; work = nil
-        message = reason.rawValue; activity = "本轮已停止 · 可重试"; persist()
+        message = reason.rawValue; activity = "本轮已停止 · 可重试"; schedulePersistence()
     }
     func close() { stop(); key = ""; persist() }
+    func prepareToQuit() async -> Bool {
+        stop(); key = ""
+        guard historyWritable else { return true } // Preserve an unreadable original file.
+        return await persistInBackground()
+    }
     private func finish() {
         busy = false; runID = nil; runner = nil; work = nil; approval = nil
         expiry?.cancel(); expiry = nil
@@ -226,11 +246,45 @@ import StudyCore
     }
     @discardableResult private func persist() -> Bool {
         guard historyWritable else { return false }
+        persistenceID = UUID()
         do {
             let workspace = AssistantWorkspace(configuration: configuration, conversations: conversations, selectedID: selectedID, memories: memories)
             // Do not allow configuration fields or responses to smuggle the active credential into history.
-            try checkContent(String(decoding: assistantJSON(workspace), as: UTF8.self))
-            try historyStore?.save(workspace); historyMessage = nil; return true
+            try historyWriter.save(workspace, secrets: knownKeys.union([key])); historyMessage = nil; return true
         } catch { historyMessage = AssistantError.safe(error) == .sensitive ? AssistantError.sensitive.rawValue : AssistantError.history.rawValue; return false }
+    }
+    @discardableResult private func persistInBackground() async -> Bool {
+        guard historyWritable else { return false }
+        let id = UUID(); persistenceID = id
+        let workspace = AssistantWorkspace(configuration: configuration, conversations: conversations, selectedID: selectedID, memories: memories)
+        let result: Result<Void, Error> = await withCheckedContinuation { continuation in
+            // Enqueue before yielding MainActor so edits cannot overtake an older snapshot.
+            historyWriter.enqueue(workspace, secrets: knownKeys.union([key])) { continuation.resume(returning: $0) }
+        }
+        do {
+            try result.get()
+            if persistenceID == id { historyMessage = nil }
+            return true
+        } catch {
+            if persistenceID == id {
+                historyMessage = AssistantError.safe(error) == .sensitive ? AssistantError.sensitive.rawValue : AssistantError.history.rawValue
+            }
+            return false
+        }
+    }
+    private func schedulePersistence() {
+        guard historyWritable else { return }
+        let id = UUID(); persistenceID = id
+        let workspace = AssistantWorkspace(configuration: configuration, conversations: conversations, selectedID: selectedID, memories: memories)
+        historyWriter.enqueue(workspace, secrets: knownKeys.union([key])) { [weak self] result in
+            Task { @MainActor in
+                guard let self, self.persistenceID == id else { return }
+                switch result {
+                case .success: self.historyMessage = nil
+                case .failure(let error):
+                    self.historyMessage = AssistantError.safe(error) == .sensitive ? AssistantError.sensitive.rawValue : AssistantError.history.rawValue
+                }
+            }
+        }
     }
 }

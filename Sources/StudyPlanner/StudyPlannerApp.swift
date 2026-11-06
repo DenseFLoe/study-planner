@@ -19,9 +19,11 @@ import AgentPrototype
     }
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         store?.websiteUpdater.stop()
-        guard let store, store.orderSaveBusy || store.dayRefreshTask != nil else { return .terminateNow }
+        guard let store, store.orderSaveBusy || store.dayRefreshTask != nil || store.assistantWindow.session != nil else { return .terminateNow }
         Task {
-            let saved = await store.waitForOrderSave()
+            let assistantSaved = await store.assistantWindow.session?.prepareToQuit() ?? true
+            let plannerSaved = await store.waitForOrderSave()
+            let saved = assistantSaved && plannerSaved
             if !saved { store.websiteUpdater.start(store: store) }
             sender.reply(toApplicationShouldTerminate: saved)
         }

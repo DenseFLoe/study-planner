@@ -88,13 +88,13 @@ struct AssistantApproval: Identifiable, Sendable {
     var summary: String {
         let destination = simulated ? "本机模拟（不会联网）" : request.url
         let data = confirmsScope
-            ? "本次问题、已完成的对话历史和启用记忆；按需查询课程/课节名称、相关编号、日期时间、学习量与进度、排程规则、冲突及余量。"
+            ? "本次问题、已完成的对话历史和启用记忆；按需查询课程/课节名称、相关编号、日期时间、学习量与进度、排程规则、冲突及余量。上述文字中若含联系方式、身份、健康、财务信息、私密标记或链接，也包含在本轮授权范围内，请确认适合发送。"
             : (["本次问题、对话历史、启用记忆"] + request.compactCategories).joined(separator: "；") + "。"
         return "接收方：\(destination)\n模型：\(request.configuration.model)\n\(data)"
     }
     var scopeNote: String {
         confirmsScope
-            ? "确认后，本轮同一接收方、同一课表版本的普通必要数据自动发送。发现新的敏感或不确定内容会再询问；疑似密钥一律阻止。"
+            ? "本轮从本次发送到回答结束，只在这里确认一次；后续同一接收方、同一课表版本的范围内查询自动继续，不再逐条询问。新一轮重新确认；疑似密钥一律阻止，不能授权放行。"
             : "仅允许本轮向此接收方发送下列内容；相同内容在后续请求中可能重复携带。新的隐私内容仍会询问。"
     }
 }

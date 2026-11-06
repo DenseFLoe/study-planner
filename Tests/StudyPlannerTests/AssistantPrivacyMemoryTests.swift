@@ -79,7 +79,7 @@ final class AssistantPrivacyMemoryTests: XCTestCase {
         session.decide(approval.id, allow: false); try await waitUntil { !session.busy }
         let after = await mock.requests; XCTAssertTrue(after.isEmpty)
     }
-    @MainActor func testSensitiveToolContentRequiresOneExtraConfirmationPerDistinctValue() async throws {
+    @MainActor func testSensitiveCourseAndNewLessonShareOneInitialConfirmation() async throws {
         let basis = AssistantSimulation.snapshot()
         for provider in AssistantProvider.allCases {
             var state = basis.state
@@ -92,12 +92,14 @@ final class AssistantPrivacyMemoryTests: XCTestCase {
             _ = try await runner.run(configuration: AssistantSimulation.configuration(provider: provider),
                 messages: [.init(role: "user", content: "合成课程查询")], snapshot: snapshot, key: "", directory: runtime(), transport: mock,
                 currentSnapshotID: { snapshot.id }, approve: { approvals.append($0); return true }, activity: { _ in }, evidence: { _ in })
-            XCTAssertEqual(approvals.count, 3) // scope + course + newly discovered lesson; repeated query is automatic
+            XCTAssertEqual(approvals.count, 1)
             XCTAssertTrue(approvals[0].findings.isEmpty)
-            XCTAssertFalse(approvals[1].confirmsScope)
-            XCTAssertEqual(Set(approvals[1].findings.map(\.text)), ["合成保密课程"])
-            XCTAssertEqual(Set(approvals[2].findings.map(\.text)), ["合成病历课节"])
+            XCTAssertTrue(approvals[0].confirmsScope)
+            XCTAssertTrue(approvals[0].summary.contains("健康"))
+            XCTAssertTrue(approvals[0].scopeNote.contains("只在这里确认一次"))
             let requests = await mock.requests; XCTAssertEqual(requests.count, 4)
+            XCTAssertTrue(requests[1].body.contains("合成保密课程"))
+            XCTAssertTrue(requests[2].body.contains("合成病历课节"))
         }
     }
     @MainActor func testToolCredentialIsBlockedWithoutOfferingOverride() async throws {
@@ -211,6 +213,7 @@ final class AssistantPrivacyMemoryTests: XCTestCase {
         XCTAssertFalse(session.busy); XCTAssertTrue(session.entries.isEmpty)
         session.configuration.baseURL = "https://example.invalid/SYNTHETIC_OPAQUE_CREDENTIAL"
         XCTAssertTrue(session.key.isEmpty)
+        session.close() // Flush the ordered background saves before inspecting the file.
         XCTAssertFalse(try String(contentsOf: store.url, encoding: .utf8).contains("SYNTHETIC_OPAQUE_CREDENTIAL"))
         session.question = "继续查询"; session.send(); XCTAssertFalse(session.busy)
     }

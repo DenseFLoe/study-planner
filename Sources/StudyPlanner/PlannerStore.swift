@@ -9,8 +9,9 @@ final class PlannerStore {
     let assistantWindow = AssistantWindowController()
     let settingsDraft = SettingsDraft()
     private(set) var state = PlannerState() {
-        didSet { compressedPlan.update(state: state) }
+        didSet { assistantSnapshotID = UUID().uuidString; compressedPlan.update(state: state) }
     }
+    @ObservationIgnored private(set) var assistantSnapshotID = UUID().uuidString
     let backups: PlannerBackupRepository
     private(set) var backupEntries: [PlannerBackupEntry] = []
     var backupMessage: String?

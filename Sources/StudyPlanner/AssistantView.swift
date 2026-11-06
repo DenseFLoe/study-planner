@@ -222,7 +222,7 @@ struct AssistantView: View {
         if session == nil {
             session = AssistantSession(historyStore: store.demo ? nil : .local, snapshot: { [weak store] in
                 guard let store, store.isReady, !store.orderSaveBusy else { return nil }
-                return .init(state: store.state, now: Date())
+                return .init(state: store.state, now: Date(), id: store.assistantSnapshotID)
             })
         }
         guard let session else { return }; show(session: session)

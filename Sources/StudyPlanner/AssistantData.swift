@@ -140,7 +140,7 @@ struct AssistantConversation: Codable, Identifiable, Sendable {
     var entries: [AssistantChatEntry] = []
     var title: String { String((entries.first { $0.role == "你" }?.text ?? "新对话").prefix(32)) }
 }
-struct AssistantWorkspace: Codable {
+struct AssistantWorkspace: Codable, Sendable {
     var configuration = AssistantConfiguration()
     var conversations: [AssistantConversation] = []
     var selectedID: UUID?
@@ -162,7 +162,7 @@ struct AssistantWorkspace: Codable {
 }
 
 /// Atomic private file outside planner persistence/sync; a corrupt file is never replaced.
-struct AssistantHistoryStore {
+struct AssistantHistoryStore: Sendable {
     let url: URL
     var legacyURL: URL? = nil
     static var local: Self {
@@ -220,5 +220,27 @@ struct AssistantHistoryStore {
         try FileManager.default.createDirectory(at: parent, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
         try data.write(to: url, options: [.atomic])
         try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
+    }
+}
+
+/// A single ordered writer prevents an older background save from replacing a newer edit.
+final class AssistantHistoryWriter: Sendable {
+    private let queue = DispatchQueue(label: "local.studyplanner.assistant.history", qos: .userInitiated)
+    private let store: AssistantHistoryStore?
+    init(store: AssistantHistoryStore?) { self.store = store }
+    private func write(_ value: AssistantWorkspace, secrets: Set<String>) throws {
+        let text = String(decoding: try assistantJSON(value), as: UTF8.self)
+        try AssistantSecrets.check(text)
+        for secret in secrets where !secret.isEmpty { try AssistantSecrets.check(text, key: secret) }
+        try store?.save(value)
+    }
+    func save(_ value: AssistantWorkspace, secrets: Set<String>) throws {
+        try queue.sync { try write(value, secrets: secrets) }
+    }
+    func enqueue(_ value: AssistantWorkspace, secrets: Set<String>,
+                 completion: @escaping @Sendable (Result<Void, Error>) -> Void) {
+        queue.async {
+            completion(Result { try self.write(value, secrets: secrets) })
+        }
     }
 }

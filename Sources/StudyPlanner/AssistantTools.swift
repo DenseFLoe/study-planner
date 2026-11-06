@@ -4,8 +4,13 @@ import StudyCore
 struct AssistantSnapshot: Sendable {
     let state: PlannerState
     let now: Date
-    var calendar: Calendar = .current
-    var id: String { (try? assistantHash(assistantJSON(state))) ?? "invalid" }
+    let calendar: Calendar
+    let id: String
+    init(state: PlannerState, now: Date, calendar: Calendar = .current, id: String? = nil) {
+        self.state = state; self.now = now; self.calendar = calendar
+        // Production uses the store's revision; fixtures hash once, never on each tool frame.
+        self.id = id ?? ((try? assistantHash(assistantJSON(state))) ?? "invalid")
+    }
     func stamp(_ date: Date, time: Bool = false) -> String {
         let f = DateFormatter(); f.calendar = Calendar(identifier: .gregorian); f.timeZone = calendar.timeZone
         f.locale = Locale(identifier: "en_US_POSIX"); f.dateFormat = time ? "yyyy-MM-dd HH:mm:ss" : "yyyy-MM-dd"
