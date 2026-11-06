@@ -326,12 +326,6 @@ struct MainView: View {
 
             Spacer(minLength: 0)
 
-            Button { store.assistantWindow.show(store: store, day: selectedDay) } label: {
-                Label("智能助手", systemImage: "bubble.left.and.text.bubble.right")
-            }
-            .labelStyle(.iconOnly).buttonStyle(SoftButtonStyle())
-            .help("让助手查阅软件功能、课表和当前状态").accessibilityIdentifier("openAssistant")
-
             if !store.result.risks.isEmpty || !store.result.diagnostics.isEmpty {
                 Button { sheet = .risks } label: {
                     Label("查看排程情况", systemImage: "exclamationmark.triangle.fill")
@@ -475,9 +469,6 @@ struct MainView: View {
                             ? { sheet = .websiteSource(course.id) } : nil,
                         websiteStatus: store.websiteUpdater.sources[course.id].map { $0.needsAttention ? "网站更新待处理" : ($0.enabled ? "网站自动更新已开启" : "") }
                     ).disabled(store.orderSaveBusy)
-                        .contextMenu {
-                            Button("向助手询问这门课") { store.assistantWindow.show(store: store, day: selectedDay, courseID: course.id) }
-                        }
                 }
 
                 if total == 0 {

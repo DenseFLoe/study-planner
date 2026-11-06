@@ -6,7 +6,6 @@ import Network
 
 @MainActor @Observable
 final class PlannerStore {
-    @ObservationIgnored lazy var assistantWindow = AssistantWindowController()
     let settingsDraft = SettingsDraft()
     private(set) var state = PlannerState() {
         didSet { compressedPlan.update(state: state) }
@@ -118,7 +117,6 @@ final class PlannerStore {
                         backupReason: String? = "修改前自动备份", deletedCourseID: UUID? = nil,
                         clearError: Bool = true,
                         backupRestore: PlannerBackupRestore? = nil,
-                        assistantChange: AssistantScheduleChange? = nil,
                         courseDeletionDraft: CourseDeletionDraft? = nil,
                         courseMergeDraft: CourseMergeDraft? = nil,
                         fixedEventEdit: FixedEventEdit? = nil,
@@ -149,9 +147,7 @@ final class PlannerStore {
                 }
                 let saved: PlannerState
                 attemptedStorage = true
-                if let assistantChange {
-                    saved = try await repository.saveAssistantChangeForInteraction(assistantChange, from: previous)
-                } else if let backupRestore {
+                if let backupRestore {
                     saved = try await repository.restoreBackupForInteraction(backupRestore, from: previous)
                 } else if let courseMergeDraft {
                     saved = try await repository.mergeCoursesForInteraction(courseMergeDraft, from: previous, now: now)
@@ -184,7 +180,7 @@ final class PlannerStore {
                 // the store so explicit Reload can start from that latest data.
                 let needsLatestState = (lessonOrderDraft != nil && error is LessonOrderEditError)
                     || (attemptedStorage && (error is ConfirmationEditError
-                        || error is AssistantScheduleChangeError || error is CourseEditError || error is FixedEventEditError
+                        || error is CourseEditError || error is FixedEventEditError
                         || error is CourseMergeError || error is CourseDeletionError || error is SettingsEditError || error is PlannerBackupRestoreError))
                 if needsLatestState,
                    let latest = try? repository.load() {
@@ -267,14 +263,6 @@ final class PlannerStore {
         if let dayRefreshTask, !(await dayRefreshTask.value) { return false }
         while let task = orderSaveTask { if !(await task.value) { return false } }
         return true
-    }
-    func saveAssistantChange(_ draft: AssistantScheduleChange) async -> Bool {
-        guard !orderSaveBusy else { return false }
-        do {
-            var checked = state
-            try draft.apply(to: &checked)
-            return await commit(checked, replan: false, assistantChange: draft)
-        } catch { errorMessage = error.localizedDescription; return false }
     }
     func replan() async { await change { _ in } }
     @discardableResult

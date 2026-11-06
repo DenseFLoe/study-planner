@@ -8,8 +8,6 @@ public struct ScheduleConstraintConflict: Sendable, Equatable {
     public var courseNames: [String]
     public var minimumContinuousMinutes: Int? = nil
     public var restConflict: ScheduleRestConflict? = nil
-    /// Runtime assessment identity. Older/name-only assessments must be treated as ambiguous.
-    public var courseIDs: [UUID]? = nil
     /// A lower bound, not the scheduler's arbitrary unbooked amount.
     public var provenDeficit: Int? {
         minimumContinuousMinutes == nil && restConflict == nil ? max(0, requiredMinutes - availableMinutes) : nil

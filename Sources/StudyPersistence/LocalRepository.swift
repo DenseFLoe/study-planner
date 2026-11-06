@@ -19,7 +19,6 @@ public protocol PlannerRepository {
     @MainActor func saveForInteraction(_ state: PlannerState) async throws
     func saveChanges(_ state: PlannerState, from baseline: PlannerState) throws -> PlannerState
     @MainActor func saveChangesForInteraction(_ state: PlannerState, from baseline: PlannerState) async throws -> PlannerState
-    @MainActor func saveAssistantChangeForInteraction(_ draft: AssistantScheduleChange, from baseline: PlannerState) async throws -> PlannerState
     @MainActor func saveDailyTaskSwapForInteraction(_ draft: DailyTaskSwapDraft,
                                                    from baseline: PlannerState) async throws -> PlannerState
     @MainActor func restoreBackupForInteraction(_ restore: PlannerBackupRestore,
@@ -37,11 +36,6 @@ public protocol PlannerRepository {
 }
 
 extension PlannerRepository {
-    @MainActor public func saveAssistantChangeForInteraction(_ draft: AssistantScheduleChange, from baseline: PlannerState) async throws -> PlannerState {
-        var latest = try load()
-        try draft.apply(to: &latest)
-        return try await saveChangesForInteraction(latest, from: baseline)
-    }
     @MainActor public func mergeCoursesForInteraction(_ draft: CourseMergeDraft,
                                                       from baseline: PlannerState, now: Date) async throws -> PlannerState {
         var next = baseline
@@ -232,21 +226,6 @@ public final class LocalRepository: PlannerRepository {
         return try await Task.detached(priority: .userInitiated) {
             let worker = LocalRepository(container: container, migrationBackupURL: backup, cloudOutboxURL: outbox)
             return try worker.saveChanges(state, from: baseline)
-        }.value
-    }
-
-    public func saveAssistantChange(_ draft: AssistantScheduleChange, now: @Sendable () -> Date = { Date() }) throws -> PlannerState {
-        try update { latest, _ in
-            try draft.apply(to: &latest, now: now())
-            return latest
-        }
-    }
-    @MainActor public func saveAssistantChangeForInteraction(_ draft: AssistantScheduleChange, from baseline: PlannerState) async throws -> PlannerState {
-        let container = container, backup = migrationBackupURL, outbox = cloudOutboxURL
-        defer { discardCachedModels() }
-        return try await Task.detached(priority: .userInitiated) {
-            let worker = LocalRepository(container: container, migrationBackupURL: backup, cloudOutboxURL: outbox)
-            return try worker.saveAssistantChange(draft)
         }.value
     }
 
