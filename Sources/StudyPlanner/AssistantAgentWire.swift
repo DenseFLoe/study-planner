@@ -114,10 +114,11 @@ enum AssistantAgentWire {
                 }
             }
             guard (finish == "tool_calls") == !calls.isEmpty else { throw AssistantError.invalidResponse }
-            // Reasoning-enabled DeepSeek requires reasoning_content on tool continuations.
+            // DeepSeek requests carrying tools require reasoning_content from ALL previous
+            // assistant messages, including final answers followed by another user question.
             var clean = message.filter { ["content", "tool_calls", "reasoning_content"].contains($0.key) }
             clean["role"] = "assistant"
-            if calls.isEmpty { clean.removeValue(forKey: "reasoning_content") }
+            if calls.isEmpty && provider != .deepSeek { clean.removeValue(forKey: "reasoning_content") }
             continuation = [clean]
         }
         guard calls.count <= 4, Set(calls.map(\.id)).count == calls.count else { throw AssistantError.invalidResponse }

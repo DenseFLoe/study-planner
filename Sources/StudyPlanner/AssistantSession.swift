@@ -44,6 +44,7 @@ struct AssistantChatEntry: Identifiable, Sendable {
     let id = UUID()
     var role: String
     var text: String
+    var status: String?
 }
 
 struct AssistantApproval: Identifiable, Sendable {
@@ -75,6 +76,8 @@ final class AssistantSession {
     @ObservationIgnored private var nextResultID = 1
     @ObservationIgnored private var turnHistoryStart = 0
     @ObservationIgnored private var turnEvidenceStart = 0
+    @ObservationIgnored private var currentUserEntryID: UUID?
+    @ObservationIgnored private var conversationContext: AssistantContext?
     @ObservationIgnored private var privateReadsDenied = false
     @ObservationIgnored private let transport: any AssistantAgentTransport
     @ObservationIgnored private let defaults: UserDefaults?
@@ -93,14 +96,15 @@ final class AssistantSession {
     func reset() {
         generation = UUID(); task?.cancel(); task = nil
         history = []; entries = []; evidence = []; approval = nil; readContext = nil
+        conversationContext = nil; currentUserEntryID = nil
         usedCallIDs = []; nextResultID = 1; busy = false; activity = ""; message = nil
     }
     func close() { reset(); key = ""; question = "" }
     func contextChanged() {
         // Do not leave stale course aliases or old tool output in the next request.
-        let hadContent = !entries.isEmpty || approval != nil || busy
+        guard !entries.isEmpty || approval != nil || busy else { return }
         reset()
-        if hadContent { message = "应用数据已更新，旧查询和授权已清除。请重新提问，我会查看最新数据。" }
+        message = "应用数据或排程评估已更新，旧查询和授权已清除。请重新提问，我会查看最新数据。"
     }
     func questionChanged() {
         if approval?.question != nil { approval = nil }
@@ -108,10 +112,24 @@ final class AssistantSession {
     func stop() {
         guard busy || approval != nil else { return }
         generation = UUID(); task?.cancel(); task = nil; approval = nil; busy = false; activity = ""
-        // Incomplete function-call transcripts must never be replayed in a later turn.
-        history = Array(history.prefix(turnHistoryStart))
-        evidence = Array(evidence.prefix(turnEvidenceStart))
+        retainQuestionAfterInterruption(status: "本轮已停止；原问题保留，继续追问时会重新查询。")
         message = AssistantError.cancelled.localizedDescription
+    }
+
+    private func retainQuestionAfterInterruption(status: String) {
+        // Keep the already-approved user question visible to both the UI and the model.
+        // Discard incomplete assistant/tool pairs and this turn's evidence, especially
+        // results still awaiting permission. A later explicit question starts fresh reads.
+        let hasSubmittedQuestion = history.indices.contains(turnHistoryStart)
+            && { if case .user = history[turnHistoryStart] { return true }; return false }()
+        history = Array(history.prefix(turnHistoryStart + (hasSubmittedQuestion ? 1 : 0)))
+        evidence = Array(evidence.prefix(turnEvidenceStart))
+        usedCallIDs = Set(history.flatMap { exchange -> [String] in
+            if case .assistant(let reply) = exchange { return reply.calls.map(\.id) }; return []
+        })
+        if hasSubmittedQuestion, let index = entries.firstIndex(where: { $0.id == currentUserEntryID }) {
+            entries[index].status = status
+        }
     }
 
     func prepare(readContext: @escaping @MainActor () -> AssistantContext) {
@@ -119,10 +137,13 @@ final class AssistantSession {
         message = nil
         let value = question.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !value.isEmpty, value.utf8.count <= 6000 else { message = "请输入问题，最多6000字节（约2000个汉字）。"; return }
+        let context = readContext()
+        if let previous = conversationContext, !previous.matches(context) { contextChanged() }
         // No request or credential read occurs while preparing this local preview.
         self.readContext = readContext
+        currentUserEntryID = nil
         turnHistoryStart = history.count; turnEvidenceStart = evidence.count
-        approval = .init(configuration: configuration, context: readContext(), question: value, results: [], historyCount: history.count)
+        approval = .init(configuration: configuration, context: context, question: value, results: [], historyCount: history.count)
     }
 
     func approve(_ id: UUID, includePrivateData: Bool = true) {
@@ -136,7 +157,9 @@ final class AssistantSession {
             do { _ = try AssistantAgentWire.request(configuration: configuration, key: key, history: []) }
             catch { message = AssistantError.safe(error).localizedDescription; return }
             history.append(.user(question + "\n\n" + approved.context.questionContext))
-            entries.append(.init(role: "你", text: question)); requestsThisTurn = 0; privateReadsDenied = false
+            let entry = AssistantChatEntry(role: "你", text: question)
+            entries.append(entry); currentUserEntryID = entry.id; conversationContext = approved.context
+            requestsThisTurn = 0; privateReadsDenied = false
             self.question = ""
         } else {
             if !includePrivateData { privateReadsDenied = true }
@@ -210,9 +233,7 @@ final class AssistantSession {
             }
         } catch {
             guard token == generation else { return }
-            // Roll back the incomplete wire turn, including references that cannot be reused.
-            history = Array(history.prefix(turnHistoryStart))
-            evidence = Array(evidence.prefix(turnEvidenceStart))
+            retainQuestionAfterInterruption(status: "本轮未完成；原问题保留，继续追问时会重新查询。")
             message = error is AssistantAgentLimit ? "本轮已达到8次请求上限，已停止。可缩小问题后继续；不会自动重试。"
                 : AssistantError.safe(error).localizedDescription
             busy = false; activity = ""; task = nil; approval = nil

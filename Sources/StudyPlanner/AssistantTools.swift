@@ -45,7 +45,7 @@ struct AssistantContext: Sendable {
 
     var courses: [Course] { state.courses.filter { !$0.isArchived }.sorted { $0.id.uuidString < $1.id.uuidString } }
     func matches(_ other: Self) -> Bool {
-        state == other.state && runtime == other.runtime && selectedDay == other.selectedDay
+        state == other.state && result == other.result && runtime == other.runtime && selectedDay == other.selectedDay
             && selectedCourseID == other.selectedCourseID && dailyWarningMinutes == other.dailyWarningMinutes
             && calendar == other.calendar && calendar.isDate(now, inSameDayAs: other.now)
     }
@@ -71,6 +71,28 @@ struct AssistantToolResult: Identifiable, Equatable, Sendable {
 }
 
 enum AssistantTools {
+    /// Escape reference delimiters and invisible characters only inside JSON strings.
+    /// Structural array brackets must remain JSON syntax, and existing escapes must
+    /// keep their meaning (including a literal backslash followed by a quote).
+    static func encodedPayload(_ object: Any) throws -> String {
+        let data = try JSONSerialization.data(withJSONObject: object, options: [.sortedKeys])
+        var insideString = false, escaped = false, output = ""
+        for scalar in String(decoding: data, as: UTF8.self).unicodeScalars {
+            if insideString {
+                if escaped { output.unicodeScalars.append(scalar); escaped = false; continue }
+                if scalar == "\\" { output.unicodeScalars.append(scalar); escaped = true; continue }
+                if scalar == "\"" { insideString = false }
+                else if scalar == "[" || scalar == "]" || CharacterSet.newlines.contains(scalar)
+                    || scalar.properties.generalCategory == .format {
+                    output += scalar.utf16.map { String(format: "\\u%04X", $0) }.joined()
+                    continue
+                }
+            } else if scalar == "\"" { insideString = true }
+            output.unicodeScalars.append(scalar)
+        }
+        return output
+    }
+
     struct Definition {
         var name: String
         var title: String
@@ -120,14 +142,10 @@ enum AssistantTools {
         func result(_ payload: Any, privateData: Bool, denied: Bool = false) -> AssistantToolResult {
             let object: [String: Any] = ["source": definition?.title ?? "受限工具", "captured_at": context.stamp(context.now, time: true),
                                        "time_zone": context.calendar.timeZone.identifier, "data": payload]
-            let data = (try? JSONSerialization.data(withJSONObject: object, options: [.sortedKeys])) ?? Data("{}".utf8)
-            let text = String(decoding: data, as: UTF8.self).unicodeScalars.map { scalar -> String in
-                if scalar == "[" || scalar == "]" || CharacterSet.newlines.contains(scalar)
-                    || scalar.properties.generalCategory == .format {
-                    return scalar.utf16.map { String(format: "\\u%04X", $0) }.joined()
-                }
-                return String(scalar)
-            }.joined()
+            guard let text = try? encodedPayload(object) else {
+                return .init(id: id, callID: call.id, title: "查询结果编码失败",
+                             content: "[\(id)] {\"error\":\"无法安全编码查询结果，未提供数据。\"}", privateData: false, denied: true)
+            }
             return .init(id: id, callID: call.id, title: definition?.title ?? "拒绝不支持的操作",
                          content: "[\(id)] " + text, privateData: privateData, denied: denied)
         }

@@ -43,6 +43,7 @@ struct AssistantView: View {
                             VStack(alignment: .leading, spacing: 6) {
                                 Text(entry.role).font(.caption.bold()).foregroundStyle(.secondary)
                                 Text(verbatim: entry.text).textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading)
+                                if let status = entry.status { Text(status).font(.caption).foregroundStyle(.secondary) }
                             }.padding(12).background(entry.role == "你" ? Color.accentColor.opacity(0.08) : Color.secondary.opacity(0.06), in: RoundedRectangle(cornerRadius: 10))
                         }
                         if !session.evidence.isEmpty {
@@ -93,6 +94,7 @@ struct AssistantView: View {
                 session.reset()
             }
             .onChange(of: store.state) { _, _ in session.contextChanged() }
+            .onChange(of: store.result) { _, _ in session.contextChanged() }
     }
 
     private var context: AssistantContext {

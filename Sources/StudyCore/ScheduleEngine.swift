@@ -9,14 +9,14 @@ public struct ScheduleRisk: Identifiable, Equatable, Sendable {
     public var courseNames: [String]
     public var capacityDeficit: Int { max(0, requiredMinutes - availableMinutes) }
 }
-public struct CourseDemand: Sendable {
+public struct CourseDemand: Equatable, Sendable {
     public var remainingMinutes: Int
     public var learnableDays: Int
     public var averageMinutesPerDay: Double {
         learnableDays > 0 ? Double(remainingMinutes) / Double(learnableDays) : 0
     }
 }
-public struct ScheduleResult: Sendable {
+public struct ScheduleResult: Equatable, Sendable {
     public var tasks: [ScheduledTask]
     public var risks: [ScheduleRisk]
     public var demands: [UUID: CourseDemand]
