@@ -6,6 +6,9 @@ metadata="$(mktemp "${TMPDIR:-/tmp}/study-planner-build.XXXXXX")"
 trap 'rm -f "$metadata"' EXIT
 python3 Scripts/build-metadata.py capture "$PWD" "$configuration" "$metadata"
 source "$PWD/Scripts/version.env"
+if [[ "${STUDYPLANNER_AGENT_PROTOTYPE:-0}" == 1 ]]; then
+    bash Scripts/prepare-agent-prototype.sh
+fi
 export CLANG_MODULE_CACHE_PATH="${TMPDIR:-/tmp}/study-planner-clang"
 export SWIFTPM_MODULECACHE_OVERRIDE="${TMPDIR:-/tmp}/study-planner-swift"
 swift build --disable-sandbox -c "$configuration"
@@ -41,6 +44,12 @@ cat > "$app/Contents/Info.plist" <<PLIST
 </dict></plist>
 PLIST
 mkdir -p "$app/Contents/Resources"
+# Remove the previous optional payload when building a regular package.
+rm -rf "$app/Contents/Resources/AgentPrototype"
+if [[ "${STUDYPLANNER_AGENT_PROTOTYPE:-0}" == 1 ]]; then
+    ditto "$PWD/.build/agent-prototype/payload" "$app/Contents/Resources/AgentPrototype"
+    /usr/libexec/PlistBuddy -c 'Add :StudyPlannerAgentPrototype bool true' "$app/Contents/Info.plist"
+fi
 swift Scripts/make-icon.swift "$PWD/dist/StudyPlanner.iconset"
 python3 Scripts/package-icon.py "$PWD/dist/StudyPlanner.iconset" "$app/Contents/Resources/AppIcon.icns"
 python3 Scripts/build-metadata.py stamp "$PWD" "$metadata" "$app/Contents/Info.plist"

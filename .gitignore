@@ -25,6 +25,8 @@ Tests/SyncVerification/
 开源上传/
 .audit/
 .workbuddy/
+Experiments/AgentPrototype/node_modules/
+Experiments/AgentPrototype/out/
 
 # Private cloud service runtime and credentials (examples remain tracked)
 Server/data/

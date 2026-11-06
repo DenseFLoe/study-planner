@@ -35,6 +35,8 @@ macOS 的「学习日程 → 关于学习日程」显示当前运行应用的版
 
 ## 开发与本地验收
 
+可选的智能客服合成验证使用独立入口，不读取正式数据、不接入真实 API。运行 `bash Scripts/test-agent-prototype.sh` 验证本机查询、发送审批和两种 SDK 请求格式；使用 `STUDYPLANNER_AGENT_PROTOTYPE=1 ./Scripts/build-dmg.sh` 生成带运行时的实验 DMG。普通打包不包含该运行时。范围、局限与成品验收命令见 [合成验证说明](Experiments/AgentPrototype/README.md)。
+
 每一轮改动（一个明确的修改目标，或一轮用户反馈，而不是每次保存文件）都作为独立 Git 提交推送到已有 `origin`，提交前检查 diff、只显式添加本轮文件，不提交个人数据、密钥、日志和构建产物；推送失败时保留本地提交并如实报告，不强制推送，也不覆盖既有工作。完整的开发流程、DSH 委派规则与发布边界见 [AGENTS.md](AGENTS.md)。
 
 已有命令：

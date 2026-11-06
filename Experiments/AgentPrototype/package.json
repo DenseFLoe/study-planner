@@ -1,0 +1,17 @@
+{
+  "name": "study-planner-agent-prototype",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Synthetic-only local AI SDK integration probe; no live transport or credentials",
+  "scripts": {
+    "build": "node build.mjs"
+  },
+  "dependencies": {
+    "@ai-sdk/anthropic": "4.0.97",
+    "@ai-sdk/openai": "4.0.109",
+    "ai": "7.0.163",
+    "esbuild": "0.28.2",
+    "zod": "4.6.7"
+  }
+}

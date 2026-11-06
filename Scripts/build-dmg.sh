@@ -25,6 +25,7 @@ app="$dist_dir/学习日程.app"
 # after compilation. Modified builds cannot overwrite the clean commit's DMG.
 sha="$(/usr/libexec/PlistBuddy -c 'Print :StudyPlannerSourceIdentifier' "$app/Contents/Info.plist")"
 base="学习日程-macOS-$sha"
+if [[ "${STUDYPLANNER_AGENT_PROTOTYPE:-0}" == 1 ]]; then base="$base-agent-prototype"; fi
 dmg="$dist_dir/$base.dmg"
 checksum="$dmg.sha256"
 

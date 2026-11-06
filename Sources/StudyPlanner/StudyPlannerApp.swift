@@ -2,6 +2,7 @@ import SwiftUI
 import AppKit
 import StudyCore
 import UserNotifications
+import AgentPrototype
 
 @MainActor final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -79,6 +80,15 @@ struct StudyPlannerApp: App {
         let arguments = CommandLine.arguments
         if arguments.contains("--version") {
             print(AppBuildInfo.current.diagnosticDescription)
+            return
+        }
+        // These isolated branches run before PlannerStore / the real database is initialized.
+        if arguments.contains("--agent-prototype-check") {
+            let passed = await AgentPrototypeProbe.run()
+            exit(passed ? 0 : 2)
+        }
+        if arguments.contains("--agent-prototype") {
+            AgentPrototypeApp.main()
             return
         }
         if let index = arguments.firstIndex(of: "--cloud-verify-archive"), arguments.indices.contains(index + 1) {
