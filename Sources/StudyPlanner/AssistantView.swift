@@ -94,11 +94,17 @@ struct AssistantView: View {
     private func approvalCard(_ approval: AssistantApproval) -> some View {
         VStack(alignment: .leading, spacing: 10) {
             Text("发送前确认").font(.headline)
-            Text(approval.summary).font(.callout).textSelection(.enabled)
+            // A bounded, vertically scrollable summary must not be compressed to an ellipsis
+            // when the window is small or the exact request disclosure is open.
+            ScrollView {
+                Text(approval.summary).font(.callout).textSelection(.enabled)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .fixedSize(horizontal: false, vertical: true)
+            }.frame(height: 104)
             DisclosureGroup("查看实际待发送内容", isExpanded: $detailsExpanded) {
                 ScrollView([.vertical, .horizontal]) {
                     Text(approval.request.details).font(.system(.caption, design: .monospaced)).textSelection(.enabled).padding(8)
-                }.frame(height: 150)
+                }.frame(height: 110)
             }
             HStack {
                 Text("本次有效至 \(approval.expiresAt.formatted(date: .omitted, time: .standard))").font(.caption).foregroundStyle(.secondary)
