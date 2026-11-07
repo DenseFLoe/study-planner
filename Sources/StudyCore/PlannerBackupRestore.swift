@@ -11,10 +11,12 @@ public enum PlannerBackupRestoreError: LocalizedError {
 public struct PlannerBackupRestore: Sendable {
     private let backup: PlannerBackup
     private let reviewed: PlannerState
+    private let validUntil: Date?
 
-    public init(backup: PlannerBackup, reviewedState: PlannerState) {
+    public init(backup: PlannerBackup, reviewedState: PlannerState, validUntil: Date? = nil) {
         self.backup = backup
         reviewed = reviewedState
+        self.validUntil = validUntil
     }
 
     private static func comparable(_ state: PlannerState) -> PlannerState {
@@ -29,9 +31,11 @@ public struct PlannerBackupRestore: Sendable {
     }
 
     public func apply(to state: inout PlannerState) throws {
+        guard validUntil.map({ Date() < $0 }) ?? true else { throw PlannerBackupRestoreError.changed }
         guard Self.comparable(state) == Self.comparable(reviewed) else { throw PlannerBackupRestoreError.changed }
         var replacement = try backup.validated().state
         replacement.removeArchivedCourses()
+        guard validUntil.map({ Date() < $0 }) ?? true else { throw PlannerBackupRestoreError.changed }
         state = replacement
     }
 }

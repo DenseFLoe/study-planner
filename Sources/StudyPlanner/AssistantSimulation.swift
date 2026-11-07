@@ -1,6 +1,7 @@
 import Foundation
 import AppKit
 import StudyCore
+import StudyPersistence
 
 /// Fixed synthetic responses exercise SDK-selected tool calls, not real-model reasoning.
 /// This transport has no networking, keychain or planner repository dependency.
@@ -87,11 +88,49 @@ enum AssistantSimulation {
         session.question = "我的课程和课表是什么情况？请核对进度、规则及冲突。"
         return session
     }
-    @MainActor static func preview() {
+    @MainActor static func actionSession(directory: URL? = AssistantRunner.bundledDirectory) throws -> (AssistantSession, PlannerStore) {
+        let now = Date(), calendar = Calendar.current
+        var state = PlannerState()
+        var course = Course(name: "合成课程 · 可安全撤销", totalMinutes: 120, startDate: calendar.startOfDay(for: now),
+                            deadline: calendar.date(byAdding: .day, value: 7, to: now)!)
+        course.id = courseID; state.courses = [course]; state.settings.availability = []
+        let repository = try LocalRepository(inMemory: true)
+        try repository.save(state)
+        state = try repository.load()
+        let store = PlannerStore(state: state, repository: repository, result: ScheduleEngine().assessSavedPlan(state: state, now: now))
+        let session = AssistantSession(historyStore: nil, directory: directory, simulated: true, snapshot: {
+            guard !store.orderSaveBusy else { return nil }
+            return .init(state: store.state, now: Date(), id: store.assistantSnapshotID)
+        }, transportFactory: {
+            AssistantMockTransport(script: [("list_courses", ["offset": "0"]), ("preview_delete_course", ["course": courseID.uuidString])])
+        }, applyChange: { replacement, baseline, validUntil in await store.applyAssistantChange(replacement, from: baseline, validUntil: validUntil) })
+        session.configuration = configuration()
+        session.question = "删除这门合成课程；先让我核对影响，再确认。"
+        return (session, store)
+    }
+    @MainActor static func actionProbe(directory: URL) async throws {
+        let (session, store) = try actionSession(directory: directory)
+        let before = store.state
+        session.send()
+        var approvals = 0
+        let deadline = ContinuousClock.now.advanced(by: .seconds(20))
+        while session.busy {
+            guard ContinuousClock.now < deadline else { throw AssistantError.protocolError }
+            if let approval = session.approval { approvals += 1; session.decide(approval.id, allow: true) }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        guard approvals == 1, let pending = session.pendingChange, store.state == before else { throw AssistantError.protocolError }
+        await session.confirmChange(pending.id)
+        guard store.state.courses.isEmpty, session.undoChange != nil, !store.backupEntries.isEmpty else { throw AssistantError.protocolError }
+        await session.confirmChange(pending.id) // A stale/double click cannot apply twice.
+        await session.undoLastChange()
+        guard store.state == before, session.undoChange == nil else { throw AssistantError.protocolError }
+    }
+    @MainActor static func preview(actions: Bool = false) {
         let app = NSApplication.shared
         app.setActivationPolicy(.regular)
         let controller = AssistantWindowController()
-        controller.show(session: session())
+        controller.show(session: actions ? try! actionSession().0 : session())
         // Keep the same controller/session alive for closing/reopening via the menu.
         let menu = NSMenu(), appItem = NSMenuItem(), appMenu = NSMenu()
         menu.addItem(appItem); appItem.submenu = appMenu
@@ -143,7 +182,8 @@ enum AssistantSimulation {
                       task["lesson_match"] as? String == "matched", task["untrusted_lesson_name"] as? String == "合成课节1",
                       lessons.first?["lesson_id"] as? String == reference, lessons.first?["position"] as? Int == 1 else { return false }
             }
-            print("ASSISTANT_PACKAGE_PROBE_PASS protocols=3 queries=18 externalRequests=0 credentialsUsed=0 privacy=verified lessonLinks=verified timeCheck=verified readableDetails=verified")
+            try await actionProbe(directory: directory)
+            print("ASSISTANT_PACKAGE_PROBE_PASS protocols=3 queries=18 externalRequests=0 credentialsUsed=0 privacy=verified lessonLinks=verified timeCheck=verified readableDetails=verified actions=preview-confirm-undo")
             return true
         } catch { print("ASSISTANT_PACKAGE_PROBE_FAIL: \(AssistantError.safe(error).rawValue)"); return false }
     }

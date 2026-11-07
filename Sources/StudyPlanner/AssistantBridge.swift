@@ -80,7 +80,8 @@ actor AssistantRunner {
              currentSnapshotID: @escaping @MainActor () -> String,
              approve: @escaping @MainActor (AssistantApproval) async throws -> Bool,
              activity: @escaping @MainActor (String) -> Void,
-             evidence: @escaping @MainActor (AssistantToolEvidence) -> Void) async throws -> String {
+             evidence: @escaping @MainActor (AssistantToolEvidence) -> Void,
+             proposal: @escaping @MainActor (AssistantChange) -> Void = { _ in }) async throws -> String {
         guard process == nil else { throw AssistantError.protocolError }
         try Task.checkCancellation()
         guard !cancelled else { throw AssistantError.stopped }
@@ -111,13 +112,13 @@ actor AssistantRunner {
             var type = "start"; let provider: String; let baseURL: String; let model: String
             let instructions: String; let messages: [AssistantWireMessage]; let tools: [AssistantToolDefinition]
         }
-        let instructions = AssistantTools.instructions + "\n本机日期：\(snapshot.stamp(snapshot.now))；时区：\(snapshot.calendar.timeZone.identifier)。"
+        let instructions = AssistantTools.instructions + "\n" + AssistantActions.instructions + "\n本机日期：\(snapshot.stamp(snapshot.now))；时区：\(snapshot.calendar.timeZone.identifier)。"
         try Self.write(Start(provider: configuration.provider.wire, baseURL: configuration.baseURL, model: configuration.model,
                              instructions: instructions,
-                             messages: messages, tools: AssistantTools.definitions), input.fileHandleForWriting)
+                             messages: messages, tools: AssistantTools.definitions + AssistantActions.definitions), input.fileHandleForWriting)
         var ready = false, gate = AssistantApprovalGate(), frameIDs = Set<String>()
         var queriedEvidence: [AssistantToolEvidence] = []
-        var scopeConfirmed = false
+        var scopeConfirmed = false, proposed = false
         for try await bytes in frames {
             if cancelled || Task.isCancelled { throw AssistantError.stopped }
             guard await currentSnapshotID() == snapshot.id else { throw AssistantError.changed }
@@ -134,7 +135,7 @@ actor AssistantRunner {
                 let request = AssistantRequest(id: id, configuration: configuration, url: url, body: body)
                 try request.validate(key: key)
                 let findings = try AssistantContentPolicy.findings(in: request, instructions: instructions, evidence: queriedEvidence)
-                // The initial approval covers this turn's read-only scope, including private
+                // The initial approval covers this turn's data scope, including private
                 // free text. Still verify every actual result and reject credentials below.
                 if !scopeConfirmed {
                     let confirmation = try gate.prepare(request, snapshotID: snapshot.id, simulated: transport.simulated,
@@ -161,11 +162,19 @@ actor AssistantRunner {
                 toolCount += 1
                 let evidenceID = "E\(toolCount)"
                 let previous = queriedEvidence
-                let result = try await Task.detached(priority: .userInitiated) {
-                    try AssistantTools.query(name: name, input: arguments, snapshot: snapshot, id: evidenceID, previous: previous)
+                let alreadyProposed = proposed
+                let (result, change) = try await Task.detached(priority: .userInitiated) {
+                    if AssistantActions.definitions.contains(where: { $0.name == name }) {
+                        return try AssistantActions.execute(name: name, input: arguments, snapshot: snapshot, id: evidenceID, alreadyProposed: alreadyProposed)
+                    }
+                    return (try AssistantTools.query(name: name, input: arguments, snapshot: snapshot, id: evidenceID, previous: previous), nil as AssistantChange?)
                 }.value
                 if cancelled || Task.isCancelled { throw AssistantError.stopped }
                 try AssistantSecrets.check(result.json, key: key)
+                if let change {
+                    try AssistantSecrets.check(change.title + change.summary + change.details.joined(separator: "\n"), key: key)
+                    proposed = true; await proposal(change)
+                }
                 queriedEvidence.append(result); await evidence(result)
                 try Self.write(AssistantReply(id: id, resultJSON: result.json), input.fileHandleForWriting)
             case "done":

@@ -67,7 +67,7 @@ struct AssistantView: View {
                 .help("展开或收起聊天记录").accessibilityLabel("聊天记录")
             VStack(alignment: .leading, spacing: 3) {
                 Text("学习助手").font(.headline)
-                Text(session.simulated ? "合成验收 · 不会联网" : "只读课表 · 本机对话").font(.caption).foregroundStyle(.secondary)
+                Text(session.simulated ? "合成验收 · 不会联网" : "日程操作 · 确认后保存").font(.caption).foregroundStyle(.secondary)
             }
             Spacer(minLength: 4)
             Button { session.newConversation() } label: { Image(systemName: "square.and.pencil") }.help("新建对话").accessibilityLabel("新建对话")
@@ -138,9 +138,9 @@ struct AssistantView: View {
                         VStack(alignment: .leading, spacing: 14) {
                             Image(systemName: "bubble.left.and.text.bubble.right").font(.largeTitle).foregroundStyle(Color.accentColor)
                             Text("今天想了解什么？").font(.title2.bold())
-                            Text("查课表、看进度，或一起理清排程冲突。").foregroundStyle(.secondary)
+                            Text("查课表、看进度，也可以按你的指令安排、添加或删除课程和事项。").foregroundStyle(.secondary)
                             Button("今天安排了哪些课程？") { session.question = "今天安排了哪些课程？" }
-                            Text("每轮开始时统一确认发送范围，后续范围内查询不再重复询问。请留意文字中的隐私内容；疑似密钥一律阻止发送。")
+                            Text("每轮开始时统一确认发送范围，后续范围内查询不再重复询问。日程修改会单独显示预览，点击确认后才保存，并可撤销。请留意文字中的隐私内容；疑似密钥一律阻止发送。")
                                 .font(.caption).foregroundStyle(.secondary)
                         }.padding(.vertical, 32)
                     }
@@ -165,6 +165,15 @@ struct AssistantView: View {
                     if let message = session.message { Text(message).font(.callout).foregroundStyle(.orange).textSelection(.enabled) }
                     if let message = session.historyMessage { Text(message).font(.callout).foregroundStyle(.red) }
                     if let approval = session.approval { approvalCard(approval) }
+                    if let change = session.pendingChange, !session.busy { changeCard(change) }
+                    if let undo = session.undoChange {
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text("可撤销：" + undo.title).font(.callout)
+                            Button("撤销上次助手修改") { Task { await session.undoLastChange() } }
+                                .disabled(session.busy || session.applyingChange)
+                            Text("仅在日程未再次变化时恢复；修改前的自动备份也可在「数据与备份」中查看。").font(.caption).foregroundStyle(.secondary)
+                        }
+                    }
                     Color.clear.frame(height: 1).id("bottom")
                 }.frame(maxWidth: 780).frame(maxWidth: .infinity).padding(18)
             }
@@ -172,6 +181,29 @@ struct AssistantView: View {
             .onChange(of: session.approval?.id) { _, _ in proxy.scrollTo("bottom", anchor: .bottom) }
             .onChange(of: session.message) { _, _ in proxy.scrollTo("bottom", anchor: .bottom) }
         }
+    }
+    private func changeCard(_ change: AssistantChange) -> some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Label("核对日程修改", systemImage: "calendar.badge.exclamationmark").font(.headline)
+            Text(change.title).font(.headline).textSelection(.enabled)
+            Text(change.summary).font(.callout).textSelection(.enabled)
+            DisclosureGroup("查看全部差异（\(change.details.count) 条）") {
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: 12) {
+                        ForEach(Array(change.details.enumerated()), id: \.offset) { _, detail in
+                            Text(detail).font(.callout).textSelection(.enabled)
+                            Divider()
+                        }
+                    }
+                }.frame(maxHeight: 300)
+            }
+            Text("尚未保存。删除课程会连同其任务和学习记录一起删除；保存前自动备份。方案两分钟内有效，课表更新或任务开始后需重新生成。").font(.caption).foregroundStyle(.secondary)
+            HStack {
+                Button("取消修改") { session.dismissChange(change.id) }
+                Spacer()
+                Button("确认应用") { Task { await session.confirmChange(change.id) } }.buttonStyle(.borderedProminent)
+            }.disabled(session.applyingChange)
+        }.padding(14).background(Color.orange.opacity(0.08), in: RoundedRectangle(cornerRadius: 12))
     }
     private func approvalCard(_ approval: AssistantApproval) -> some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -199,12 +231,12 @@ struct AssistantView: View {
     private var composer: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(spacing: 8) {
-                if session.busy { ProgressView().controlSize(.mini) }
+                if session.busy || session.applyingChange { ProgressView().controlSize(.mini) }
                 Text(session.activity).font(.caption).foregroundStyle(.secondary).lineLimit(2)
                 Spacer(minLength: 0)
             }
             HStack(alignment: .bottom, spacing: 10) {
-                TextField("询问课程、课表或学习进度…", text: $session.question, axis: .vertical)
+                TextField("询问课表，或描述要做的日程修改…", text: $session.question, axis: .vertical)
                     .lineLimit(2...5).textFieldStyle(.plain).padding(10)
                     .background(.primary.opacity(0.04), in: RoundedRectangle(cornerRadius: 12)).accessibilityLabel("助手问题")
                 if session.busy {
@@ -233,6 +265,9 @@ struct AssistantView: View {
             session = AssistantSession(historyStore: store.demo ? nil : AssistantHistoryStore.local, snapshot: { [weak store] in
                 guard let store, store.isReady, !store.orderSaveBusy else { return nil }
                 return .init(state: store.state, now: Date(), id: store.assistantSnapshotID)
+            }, applyChange: { [weak store] replacement, baseline, validUntil in
+                guard let store else { return nil }
+                return await store.applyAssistantChange(replacement, from: baseline, validUntil: validUntil)
             })
         }
         guard let session else { return }; show(session: session)

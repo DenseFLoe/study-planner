@@ -94,6 +94,10 @@ struct StudyPlannerApp: App {
             let passed = await AssistantSimulation.probe()
             exit(passed ? 0 : 2)
         }
+        if arguments.contains("--assistant-actions-preview") {
+            AssistantSimulation.preview(actions: true)
+            return
+        }
         if arguments.contains("--assistant-preview") {
             AssistantSimulation.preview()
             return

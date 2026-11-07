@@ -415,17 +415,25 @@ final class PlannerStore {
         orderSaveTask = work
         _ = await work.value
     }
-    func restoreBackup(_ backup: PlannerBackup, from reviewedState: PlannerState) async -> Bool {
+    func restoreBackup(_ backup: PlannerBackup, from reviewedState: PlannerState, validUntil: Date? = nil,
+                       backupReason: String = "恢复备份前") async -> Bool {
         guard !syncBusy, !orderSaveBusy else { errorMessage = "请等待当前保存或同步完成后再恢复。"; return false }
         guard state == reviewedState else {
             errorMessage = "日程在核对备份期间已有更新，未执行恢复。请重新选择备份并核对最新记录。"
             return false
         }
-        let restore = PlannerBackupRestore(backup: backup, reviewedState: reviewedState)
-        return await commit(backup.state, replan: false, backupReason: "恢复备份前", backupRestore: restore) { state in
+        let restore = PlannerBackupRestore(backup: backup, reviewedState: reviewedState, validUntil: validUntil)
+        return await commit(backup.state, replan: false, backupReason: backupReason, backupRestore: restore) { state in
             _ = try backup.validated()
             return ScheduleEngine().assessSavedPlan(state: state, now: Date())
         }
+    }
+    /// The repository rechecks the entire reviewed state inside its transaction,
+    /// so a sync arriving before UI refresh cannot be overwritten by a proposal.
+    func applyAssistantChange(_ replacement: PlannerState, from reviewedState: PlannerState, validUntil: Date? = nil) async -> PlannerState? {
+        guard await restoreBackup(PlannerBackup(state: replacement, reason: "助手确认的日程修改"), from: reviewedState,
+                                  validUntil: validUntil, backupReason: "助手修改或撤销前") else { return nil }
+        return state
     }
     func undoCourseDeletion(_ id: UUID) async -> Bool {
         guard !orderSaveBusy else { return false }

@@ -88,7 +88,7 @@ struct AssistantApproval: Identifiable, Sendable {
     var summary: String {
         let destination = simulated ? "本机模拟（不会联网）" : request.url
         let data = confirmsScope
-            ? "本次问题、已完成的对话历史和启用记忆；按需查询课程/课节名称、相关编号、日期时间、学习量与进度、排程规则、冲突及余量。上述文字中若含联系方式、身份、健康、财务信息、私密标记或链接，也包含在本轮授权范围内，请确认适合发送。"
+            ? "本次问题、已完成的对话历史和启用记忆；按需查询课程/课节名称、相关编号、日期时间、学习量与进度、排程规则、冲突及余量，以及按指令生成的修改预览摘要。修改仍需另行点击确认应用。上述文字中若含联系方式、身份、健康、财务信息、私密标记或链接，也包含在本轮授权范围内，请确认适合发送。"
             : (["本次问题、对话历史、启用记忆"] + request.compactCategories).joined(separator: "；") + "。"
         return "接收方：\(destination)\n模型：\(request.configuration.model)\n\(data)"
     }

@@ -26,7 +26,10 @@ import StudyCore
     private(set) var memoryError: String?
     private(set) var approval: AssistantApproval?
     private(set) var busy = false
-    private(set) var activity = "只读查询 · 本轮课表内容确认一次"
+    private(set) var pendingChange: AssistantChange?
+    private(set) var undoChange: AssistantUndo?
+    private(set) var applyingChange = false
+    private(set) var activity = "按需查询 · 修改须核对确认"
     private(set) var message: String?
     private(set) var historyMessage: String?
     private(set) var isLoadingHistory = false
@@ -37,6 +40,7 @@ import StudyCore
     @ObservationIgnored private let snapshotProvider: @MainActor () -> AssistantSnapshot?
     @ObservationIgnored private let transportFactory: @MainActor () -> any AssistantTransport
     @ObservationIgnored private let directory: URL?
+    @ObservationIgnored private let applyChange: @MainActor (PlannerState, PlannerState, Date?) async -> PlannerState?
     @ObservationIgnored private var historyWritable = true
     @ObservationIgnored private var historyLoadTask: Task<Void, Never>?
     @ObservationIgnored private var runner: AssistantRunner?
@@ -45,11 +49,13 @@ import StudyCore
     @ObservationIgnored private var decision: CheckedContinuation<Bool, Error>?
     @ObservationIgnored private var runID: UUID?
     @ObservationIgnored private var knownKeys = Set<String>()
+    @ObservationIgnored private var changeWaiters: [CheckedContinuation<Void, Never>] = []
 
     init(historyStore: (any AssistantHistoryPersistence)? = AssistantHistoryStore.local, directory: URL? = AssistantRunner.bundledDirectory,
          simulated: Bool = false, snapshot: @escaping @MainActor () -> AssistantSnapshot?,
-         transportFactory: @escaping @MainActor () -> any AssistantTransport = { AssistantHTTPTransport() }) {
-        self.snapshotProvider = snapshot; self.directory = directory
+         transportFactory: @escaping @MainActor () -> any AssistantTransport = { AssistantHTTPTransport() },
+         applyChange: @escaping @MainActor (PlannerState, PlannerState, Date?) async -> PlannerState? = { _, _, _ in nil }) {
+        self.snapshotProvider = snapshot; self.directory = directory; self.applyChange = applyChange
         self.historyWriter = AssistantHistoryWriter(store: historyStore)
         self.simulated = simulated; self.transportFactory = transportFactory
         configuration = .init(); memories = []
@@ -78,8 +84,8 @@ import StudyCore
     }
     func waitUntilReady() async { await historyLoadTask?.value }
     var entries: [AssistantChatEntry] { conversations.first { $0.id == selectedID }?.entries ?? [] }
-    var canRetry: Bool { !busy && historyWritable && entries.contains { $0.role == "你" } }
-    var canSend: Bool { !busy && historyWritable && !question.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+    var canRetry: Bool { !busy && !applyingChange && historyWritable && entries.contains { $0.role == "你" } }
+    var canSend: Bool { !busy && !applyingChange && historyWritable && !question.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
     var enabledMemoryCount: Int { memories.filter(\.enabled).count }
     @discardableResult func saveMemory(id: UUID? = nil, text: String, enabled: Bool) -> Bool {
         do {
@@ -114,15 +120,15 @@ import StudyCore
         for secret in knownKeys { try AssistantSecrets.check(text, key: secret) }
     }
     func newConversation() {
-        guard !isLoadingHistory else { return }
+        guard !isLoadingHistory, !applyingChange else { return }
         stop(); guard conversations.count < 100 else { message = "最多保留100个对话。"; return }
         let value = AssistantConversation(); conversations.insert(value, at: 0); selectedID = value.id
-        question = ""; evidence = []; message = nil; activity = "只读查询 · 本轮课表内容确认一次"; schedulePersistence()
+        question = ""; evidence = []; message = nil; activity = "按需查询 · 修改须核对确认"; schedulePersistence()
     }
     func select(_ id: UUID) {
-        guard !isLoadingHistory else { return }
+        guard !isLoadingHistory, !applyingChange else { return }
         guard id != selectedID, conversations.contains(where: { $0.id == id }) else { return }
-        stop(); selectedID = id; question = ""; evidence = []; message = nil; activity = "只读查询 · 本轮课表内容确认一次"; schedulePersistence()
+        stop(); selectedID = id; question = ""; evidence = []; message = nil; activity = "按需查询 · 修改须核对确认"; schedulePersistence()
     }
     func useProvider(_ provider: AssistantProvider) {
         configuration = .init(provider: provider, baseURL: provider.baseURL, model: "")
@@ -143,6 +149,7 @@ import StudyCore
     }
     func send() {
         guard canSend else { return }
+        pendingChange = nil
         do {
             let text = question.trimmingCharacters(in: .whitespacesAndNewlines)
             guard text.utf8.count <= 6000 else { throw AssistantError.limit }
@@ -166,8 +173,8 @@ import StudyCore
                 do {
                     let messages = try await Task.detached(priority: .userInitiated) {
                         let memory = try AssistantMemories.message(memories)
-                        let messages = (memory.map { [$0] } ?? []) + history.filter { $0.status == "完成" && ["你", "助手"].contains($0.role) }
-                            .map { AssistantWireMessage(role: $0.role == "你" ? "user" : "assistant", content: $0.text) }
+                        let messages = (memory.map { [$0] } ?? []) + history.filter { $0.status == "完成" && ["你", "助手", "本机操作"].contains($0.role) }
+                            .map { AssistantWireMessage(role: $0.role == "你" ? "user" : "assistant", content: $0.role == "本机操作" ? "本机操作记录：" + $0.text : $0.text) }
                             + [.init(role: "user", content: text)]
                         let data = try assistantJSON(messages)
                         guard data.count <= 200_000 else { throw AssistantError.limit }
@@ -186,7 +193,8 @@ import StudyCore
                             guard let self, self.runID == id else { throw AssistantError.stopped }
                             return try await self.waitForApproval(approval)
                         }, activity: { [weak self] value in if self?.runID == id { self?.activity = value } },
-                        evidence: { [weak self] value in if self?.runID == id { self?.evidence.append(value) } })
+                        evidence: { [weak self] value in if self?.runID == id { self?.evidence.append(value) } },
+                        proposal: { [weak self] value in if self?.runID == id { self?.pendingChange = value } })
                     guard self.runID == id, self.selectedID == conversationID else { return }
                     self.markPending("完成")
                     for item in self.evidence { self.append(.init(role: "本机证据", text: item.json, status: "完成")) }
@@ -201,6 +209,7 @@ import StudyCore
                     }
                 } catch {
                     guard self.runID == id else { return }
+                    self.pendingChange = nil
                     self.markPending("未完成")
                     self.message = AssistantError.safe(error).rawValue; self.activity = "本轮已结束 · 可重试"
                 }
@@ -210,6 +219,56 @@ import StudyCore
                 self.finish()
             }
         } catch { message = AssistantError.safe(error).rawValue }
+    }
+    func dismissChange(_ id: UUID) {
+        guard !busy, !applyingChange, pendingChange?.id == id else { return }
+        pendingChange = nil
+        append(.init(role: "本机操作", text: "已取消修改方案，日程未改变。", status: "完成"))
+        schedulePersistence()
+    }
+    func confirmChange(_ id: UUID) async {
+        guard !busy, !applyingChange, let change = pendingChange, change.id == id else { return }
+        do {
+            guard let snapshot = snapshotProvider() else { throw AssistantError.changed }
+            try change.validate(snapshot: snapshot)
+        } catch {
+            pendingChange = nil
+            message = "修改方案已过期或日程已变化，未写入；请重新发送指令并核对新预览。"
+            return
+        }
+        pendingChange = nil; applyingChange = true; activity = "正在保存已确认的修改…"
+        defer { finishChange() }
+        let saved = await applyChange(change.after, change.before, change.validUntil)
+        if let actual = saved {
+            undoChange = .init(title: change.title, before: change.before, after: actual)
+            append(.init(role: "本机操作", text: "已应用：" + change.title + "\n" + change.summary + "\n修改前已创建自动备份，可撤销本次修改。", status: "完成"))
+            message = nil
+        } else {
+            message = "修改未保存。课表可能已有更新，或备份/写入失败；请查看主窗口提示，重新查询后再提出方案。"
+        }
+        activity = "本机操作结束"
+        await persistInBackground()
+    }
+    func undoLastChange() async {
+        guard !busy, !applyingChange, let undo = undoChange else { return }
+        guard let current = snapshotProvider(), current.state == undo.after else {
+            message = "修改后日程已有更新，不能直接撤销以免覆盖新数据。请到「数据与备份」核对修改前的自动备份。"; return
+        }
+        pendingChange = nil; applyingChange = true; activity = "正在撤销助手修改…"
+        defer { finishChange() }
+        let saved = await applyChange(undo.before, undo.after, nil)
+        if saved != nil {
+            undoChange = nil; message = nil
+            append(.init(role: "本机操作", text: "已撤销：" + undo.title + "。", status: "完成"))
+        } else { message = "撤销未保存，当前数据已保留。请查看主窗口提示。" }
+        activity = "本机操作结束"
+        await persistInBackground()
+    }
+
+    private func finishChange() {
+        applyingChange = false
+        let waiters = changeWaiters; changeWaiters = []
+        for waiter in waiters { waiter.resume() }
     }
     private func waitForApproval(_ value: AssistantApproval) async throws -> Bool {
         approval = value
@@ -229,6 +288,7 @@ import StudyCore
         decision.resume(returning: allow)
     }
     func stop(reason: AssistantError = .stopped) {
+        pendingChange = nil
         guard busy || decision != nil else { return }
         runID = nil
         if let runner { Task { await runner.cancel() } }
@@ -247,6 +307,7 @@ import StudyCore
     }
     func prepareToQuit() async -> Bool {
         stop(); key = ""
+        if applyingChange { await withCheckedContinuation { changeWaiters.append($0) } }
         await waitUntilReady()
         guard historyWritable else { return true } // Preserve an unreadable original file.
         return await persistInBackground()
