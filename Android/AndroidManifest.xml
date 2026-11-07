@@ -9,6 +9,7 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
     <application android:label="学习日程" android:theme="@style/AppTheme" android:icon="@drawable/app_icon" android:allowBackup="false" android:supportsRtl="true" android:networkSecurityConfig="@xml/network_security_config">
+        <activity android:name="local.studyplanner.AssistantActivity" android:exported="false" android:windowSoftInputMode="adjustResize" />
         <activity android:name="local.studyplanner.CourseImportActivity" android:exported="false" android:process=":importer" android:windowSoftInputMode="adjustResize" />
         <service android:name="local.studyplanner.SyncWindowService" android:exported="false" android:foregroundServiceType="dataSync" />
         <activity android:name="local.studyplanner.WebsiteUpdateActivity" android:exported="false" android:windowSoftInputMode="adjustResize" />

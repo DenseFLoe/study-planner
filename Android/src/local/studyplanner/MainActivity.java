@@ -253,7 +253,7 @@ public class MainActivity extends Activity {
         if(closeCatalog!=null){closeCatalog.run();closeCatalog=null;}
         consequences.refresh(state);consequencePanel=null;
         root=col();root.setBackgroundColor(bg);root.setFitsSystemWindows(true);setContentView(root);
-        if(page!=0){LinearLayout top=row();top.setPadding(dp(18),dp(12),dp(18),dp(8));top.addView(title("学习日程"));root.addView(top);}
+        LinearLayout top=row();top.setPadding(dp(18),dp(8),dp(18),dp(4));weighted(top,title("学习日程"));top.addView(button("智能助手",()->startActivity(new Intent(this,AssistantActivity.class))));root.addView(top);
         syncProgress=row();syncProgress.setPadding(dp(18),dp(6),dp(18),dp(6));ProgressBar syncSpinner=new ProgressBar(this);syncProgress.addView(syncSpinner,new LinearLayout.LayoutParams(dp(22),dp(22)));syncProgress.addView(text("  正在同步中",15,blue));root.addView(syncProgress);updateSyncProgress();
         ScrollView scroll=new ScrollView(this);scroll.setFillViewport(true);body=col();body.setPadding(dp(12),dp(8),dp(12),dp(20));scroll.addView(body);root.addView(scroll,new LinearLayout.LayoutParams(-1,0,1));
         View divider=new View(this);divider.setBackgroundColor(0xffdcdcdc);root.addView(divider,new LinearLayout.LayoutParams(-1,dp(1)));
@@ -599,6 +599,7 @@ public class MainActivity extends Activity {
     }
     void settings()throws Exception{
         SettingsMenu menu=new SettingsMenu(this,body);settingsMenu=menu;
+        LinearLayout assistant=menu.page("assistant","智能助手",4,false);assistant.addView(text("查询课程、日程、进度与冲突，预览并确认日程修改。聊天、记忆与 API 密钥仅保存在此手机。",14,muted));assistant.addView(button("打开智能助手",()->startActivity(new Intent(this,AssistantActivity.class))));
         LinearLayout display=menu.page("display","显示设置",1,false);CalendarZone.controls(this,display);display.addView(title("主页时间字号"));SeekBar font=new SeekBar(this);font.setMax(10);font.setProgress(homeTimeSize()-14);TextView size=text(homeTimeSize()+" 号",16,ink);display.addView(size);display.addView(font);font.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener(){public void onStartTrackingTouch(SeekBar v){}public void onStopTrackingTouch(SeekBar v){}public void onProgressChanged(SeekBar v,int value,boolean user){getPreferences(0).edit().putInt("homeTimeSize",value+14).apply();size.setText((value+14)+" 号");}});display.addView(button("恢复默认字号",()->font.setProgress(3)));
         if(restoredSettingsDraft!=null){
             try{settingsDraft=SettingsDraft.restore(new JSONObject(restoredSettingsDraft));}

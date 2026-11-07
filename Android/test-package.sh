@@ -49,3 +49,4 @@ with zipfile.ZipFile(apk) as bundle:
             raise SystemExit("APK unexpectedly contains personal planner records")
 print(f"APK resources, DEX, signature, source revision, version {version} ({build}) and empty initial state verified")
 PY
+python3 Scripts/test-android-assistant-package.py "$STUDYPLANNER_APK_OUTPUT"

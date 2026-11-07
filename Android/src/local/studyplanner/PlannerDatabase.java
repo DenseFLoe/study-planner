@@ -6,10 +6,12 @@ import android.database.sqlite.*;
 import org.json.*;
 
 /** Business rows, tombstones and sync cursors commit together. Legacy JSON stays as backup. */
-public final class PlannerDatabase extends SQLiteOpenHelper implements StateMutation.Store<JSONObject> {
+public final class PlannerDatabase extends SQLiteOpenHelper implements AssistantSession.VersionedStore {
     private final Context context;
     final PlannerBackupRepository backups;
     volatile String lastDeletedBackup;
+    private volatile long assistantRevision;
+    public long assistantRevision(){return assistantRevision;}
     public PlannerDatabase(Context context){this(context,"planner-sync-v1.db");}
     PlannerDatabase(Context context,String name){super(context,name,null,1);this.context=context.getApplicationContext();backups=new PlannerBackupRepository(new java.io.File(context.getFilesDir(),name+"-backups"));setWriteAheadLoggingEnabled(true);}
     public void onCreate(SQLiteDatabase db){db.execSQL("CREATE TABLE records (id TEXT PRIMARY KEY, body TEXT NOT NULL)");db.execSQL("CREATE TABLE metadata (id TEXT PRIMARY KEY, body TEXT NOT NULL)");}
@@ -24,14 +26,17 @@ public final class PlannerDatabase extends SQLiteOpenHelper implements StateMuta
         SyncLedger l=ledger();long before=l.sequence();JSONObject state=l.materialize();l.capture(state);if(l.sequence()!=before)commit(l);return state;
     }
     public synchronized void save(JSONObject state)throws Exception{
+        saveChecked(state,()->{});
+    }
+    public synchronized void saveChecked(JSONObject state,AssistantActions.Check check)throws Exception{
         Planner.validate(state);SyncLedger l=ledger();JSONObject before=initialized()?l.materialize():null;
         if(before!=null&&!SyncLedger.canonical(PlannerBackupFile.businessState(before)).equals(SyncLedger.canonical(PlannerBackupFile.businessState(state)))){
             java.util.List<String> deleted=new java.util.ArrayList<>();
             for(JSONObject course:Planner.list(before.getJSONArray("courses")))if(Planner.course(state,course.getString("id"))==null)deleted.add(course.getString("id"));
             PlannerBackupRepository.Entry entry=backups.save(before,Planner.now(),deleted.size()==1?"删除课程前":"修改前的日程",deleted.size()==1?deleted.get(0):null);
-            l.capture(state);commit(l);
+            check.run();l.capture(state);commit(l,true,false,check);
             if(!entry.deletedCourseID.isEmpty())lastDeletedBackup=entry.id;
-        }else{l.capture(state);commit(l);}
+        }else{check.run();l.capture(state);commit(l,true,false,check);}
     }
     public JSONObject update(StateMutation.Change<JSONObject> change)throws Exception{return StateMutation.apply(this,change);}
     public synchronized void commit(SyncLedger l)throws Exception{
@@ -52,12 +57,16 @@ public final class PlannerDatabase extends SQLiteOpenHelper implements StateMuta
         return true;
     }
     private void commit(SyncLedger l,boolean enqueueCloud,boolean replace)throws Exception{
+        commit(l,enqueueCloud,replace,()->{});
+    }
+    private void commit(SyncLedger l,boolean enqueueCloud,boolean replace,AssistantActions.Check check)throws Exception{
         long previous=metadata().optLong("sequence");
         l.materialize();SQLiteDatabase db=getWritableDatabase();db.beginTransaction();try{
             if(replace)db.delete("records",null,null);
             JSONObject rows=l.value.getJSONObject("records");java.util.Iterator<String> it=rows.keys();while(it.hasNext()){String key=it.next();ContentValues v=new ContentValues();v.put("id",key);v.put("body",CourseSourcePrivacy.record(rows.getJSONObject(key)).toString());if(db.insertWithOnConflict("records",null,v,SQLiteDatabase.CONFLICT_REPLACE)<0)throw new android.database.SQLException("记录保存失败");}
-            JSONObject meta=l.metadata();ContentValues v=new ContentValues();v.put("id","sync");v.put("body",meta.toString());if(db.insertWithOnConflict("metadata",null,v,SQLiteDatabase.CONFLICT_REPLACE)<0)throw new android.database.SQLException("同步状态保存失败");db.setTransactionSuccessful();
+            JSONObject meta=l.metadata();ContentValues v=new ContentValues();v.put("id","sync");v.put("body",meta.toString());if(db.insertWithOnConflict("metadata",null,v,SQLiteDatabase.CONFLICT_REPLACE)<0)throw new android.database.SQLException("同步状态保存失败");check.run();db.setTransactionSuccessful();
         }finally{db.endTransaction();}
+        assistantRevision++;
         if(enqueueCloud&&l.sequence()!=previous&&CloudSettings.enabled(context)){
             try{CloudSync.enqueue(context,l);}catch(Exception ignored){} // Committed ledger can rebuild the pending snapshot.
             CloudSync.get(context).request(null);
