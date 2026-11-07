@@ -11,6 +11,16 @@ struct AssistantView: View {
         var id: String { rawValue }
     }
     var body: some View {
+        Group {
+            if session.isLoadingHistory {
+                ProgressView("正在读取本机聊天记录…")
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else {
+                content
+            }
+        }.frame(minWidth: 390, minHeight: 520)
+    }
+    private var content: some View {
         GeometryReader { geometry in
             let wide = geometry.size.width >= 900
             HStack(spacing: 0) {
@@ -220,7 +230,7 @@ struct AssistantView: View {
     private(set) var session: AssistantSession?
     func show(store: PlannerStore) {
         if session == nil {
-            session = AssistantSession(historyStore: store.demo ? nil : .local, snapshot: { [weak store] in
+            session = AssistantSession(historyStore: store.demo ? nil : AssistantHistoryStore.local, snapshot: { [weak store] in
                 guard let store, store.isReady, !store.orderSaveBusy else { return nil }
                 return .init(state: store.state, now: Date(), id: store.assistantSnapshotID)
             })

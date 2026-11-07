@@ -29,6 +29,7 @@ import StudyCore
     private(set) var activity = "只读查询 · 本轮课表内容确认一次"
     private(set) var message: String?
     private(set) var historyMessage: String?
+    private(set) var isLoadingHistory = false
     private(set) var evidence: [AssistantToolEvidence] = []
     let simulated: Bool
     @ObservationIgnored private let historyWriter: AssistantHistoryWriter
@@ -37,6 +38,7 @@ import StudyCore
     @ObservationIgnored private let transportFactory: @MainActor () -> any AssistantTransport
     @ObservationIgnored private let directory: URL?
     @ObservationIgnored private var historyWritable = true
+    @ObservationIgnored private var historyLoadTask: Task<Void, Never>?
     @ObservationIgnored private var runner: AssistantRunner?
     @ObservationIgnored private var work: Task<Void, Never>?
     @ObservationIgnored private var expiry: Task<Void, Never>?
@@ -44,29 +46,39 @@ import StudyCore
     @ObservationIgnored private var runID: UUID?
     @ObservationIgnored private var knownKeys = Set<String>()
 
-    init(historyStore: AssistantHistoryStore? = .local, directory: URL? = AssistantRunner.bundledDirectory,
+    init(historyStore: (any AssistantHistoryPersistence)? = AssistantHistoryStore.local, directory: URL? = AssistantRunner.bundledDirectory,
          simulated: Bool = false, snapshot: @escaping @MainActor () -> AssistantSnapshot?,
          transportFactory: @escaping @MainActor () -> any AssistantTransport = { AssistantHTTPTransport() }) {
         self.snapshotProvider = snapshot; self.directory = directory
         self.historyWriter = AssistantHistoryWriter(store: historyStore)
         self.simulated = simulated; self.transportFactory = transportFactory
-        var saved = AssistantWorkspace(), loadFailed = false
-        do { saved = try historyStore?.load() ?? saved } catch { loadFailed = true }
-        configuration = saved.configuration
-        memories = saved.memories
-        let loaded = saved.conversations.isEmpty ? [AssistantConversation()] : saved.conversations
-        conversations = loaded
-        selectedID = loaded.contains { $0.id == saved.selectedID } ? saved.selectedID! : loaded[0].id
-        for i in conversations.indices {
-            for j in conversations[i].entries.indices where conversations[i].entries[j].status == "处理中" {
-                conversations[i].entries[j].status = "上次已中断 · 未续传"
+        configuration = .init(); memories = []
+        let initial = AssistantConversation()
+        conversations = [initial]; selectedID = initial.id
+        if historyStore != nil {
+            isLoadingHistory = true; historyWritable = false
+            historyLoadTask = Task { @MainActor [weak self, historyWriter] in
+                let result = await historyWriter.load()
+                guard let self else { return }
+                switch result {
+                case .success(let saved):
+                    // Keep persistence disabled while applying the loaded configuration.
+                    self.configuration = saved.configuration
+                    self.conversations = saved.conversations
+                    self.selectedID = saved.selectedID ?? saved.conversations[0].id
+                    self.memories = saved.memories
+                    self.historyWritable = true
+                case .failure:
+                    self.historyMessage = AssistantError.history.rawValue
+                }
+                self.isLoadingHistory = false
+                self.historyLoadTask = nil
             }
         }
-        historyWritable = !loadFailed
-        if loadFailed { historyMessage = AssistantError.history.rawValue }
     }
+    func waitUntilReady() async { await historyLoadTask?.value }
     var entries: [AssistantChatEntry] { conversations.first { $0.id == selectedID }?.entries ?? [] }
-    var canRetry: Bool { !busy && entries.contains { $0.role == "你" } }
+    var canRetry: Bool { !busy && historyWritable && entries.contains { $0.role == "你" } }
     var canSend: Bool { !busy && historyWritable && !question.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
     var enabledMemoryCount: Int { memories.filter(\.enabled).count }
     @discardableResult func saveMemory(id: UUID? = nil, text: String, enabled: Bool) -> Bool {
@@ -102,11 +114,13 @@ import StudyCore
         for secret in knownKeys { try AssistantSecrets.check(text, key: secret) }
     }
     func newConversation() {
+        guard !isLoadingHistory else { return }
         stop(); guard conversations.count < 100 else { message = "最多保留100个对话。"; return }
         let value = AssistantConversation(); conversations.insert(value, at: 0); selectedID = value.id
         question = ""; evidence = []; message = nil; activity = "只读查询 · 本轮课表内容确认一次"; schedulePersistence()
     }
     func select(_ id: UUID) {
+        guard !isLoadingHistory else { return }
         guard id != selectedID, conversations.contains(where: { $0.id == id }) else { return }
         stop(); selectedID = id; question = ""; evidence = []; message = nil; activity = "只读查询 · 本轮课表内容确认一次"; schedulePersistence()
     }
@@ -224,9 +238,16 @@ import StudyCore
         markPending("未完成"); busy = false; runner = nil; work = nil
         message = reason.rawValue; activity = "本轮已停止 · 可重试"; schedulePersistence()
     }
-    func close() { stop(); key = ""; persist() }
+    func close() {
+        // AppKit's close callback must return immediately, even with queued disk work.
+        // Keep this session and its writer alive across reopening so saves stay ordered.
+        // Edits already enqueue their snapshots; idle closes must not pile up duplicate writes.
+        stop()
+        key = ""
+    }
     func prepareToQuit() async -> Bool {
         stop(); key = ""
+        await waitUntilReady()
         guard historyWritable else { return true } // Preserve an unreadable original file.
         return await persistInBackground()
     }

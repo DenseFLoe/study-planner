@@ -4,6 +4,29 @@ import StudyPersistence
 @testable import StudyPlanner
 
 final class AssistantResponsivenessTests: XCTestCase {
+    @MainActor func testOpeningAndClosingLargeHistoryDoNotBlockMainActor() async throws {
+        let store = try history(), snapshot = AssistantSimulation.snapshot()
+        let archive = (0..<8).map { _ in
+            AssistantConversation(entries: (0..<20).map { _ in
+                .init(role: "助手", text: String(repeating: "仅用于窗口响应测试的合成记录。", count: 60), status: "完成")
+            })
+        }
+        try await Task.detached {
+            try store.save(.init(configuration: AssistantSimulation.configuration(), conversations: archive, selectedID: archive[0].id))
+        }.value
+        let opening = ContinuousClock.now
+        let session = AssistantSession(historyStore: store, simulated: true, snapshot: { snapshot })
+        let openDuration = opening.duration(to: .now)
+        XCTAssertLessThan(openDuration, .milliseconds(100), "Opening must not synchronously read/validate history")
+        await session.waitUntilReady()
+        let closing = ContinuousClock.now
+        session.close()
+        let closeDuration = closing.duration(to: .now)
+        XCTAssertLessThan(closeDuration, .milliseconds(100), "Closing must not wait for history writes")
+        print("ASSISTANT_WINDOW_RESPONSIVENESS open=\(openDuration) close=\(closeDuration)")
+        let saved = await session.prepareToQuit()
+        XCTAssertTrue(saved)
+    }
     private func runtime() throws -> URL {
         let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
         let url = root.appendingPathComponent(".build/agent-prototype/payload")
@@ -31,6 +54,7 @@ final class AssistantResponsivenessTests: XCTestCase {
                                        snapshot: { snapshot }, transportFactory: {
             AssistantMockTransport(script: Array(AssistantSimulation.script.prefix(2)))
         })
+        await session.waitUntilReady()
         for text in ["第一问", "继续查询"] {
             session.question = text
             let start = ContinuousClock.now
@@ -57,7 +81,9 @@ final class AssistantResponsivenessTests: XCTestCase {
         session.newConversation(); let latest = session.selectedID
         session.select(selected.id); session.select(latest)
         XCTAssertLessThan(start.duration(to: .now), .milliseconds(300))
-        session.close() // A synchronous flush at window close also waits for all older queued writes.
+        session.close()
+        let flushed = await session.prepareToQuit()
+        XCTAssertTrue(flushed)
         let saved = try store.load()
         XCTAssertEqual(saved.selectedID, latest)
         XCTAssertEqual(saved.conversations.count, 10)
@@ -67,6 +93,7 @@ final class AssistantResponsivenessTests: XCTestCase {
         let snapshot = AssistantSimulation.snapshot()
         let session = AssistantSession(historyStore: store, directory: directory, simulated: true,
                                        snapshot: { snapshot }, transportFactory: { mock })
+        await session.waitUntilReady()
         session.configuration = AssistantSimulation.configuration()
         session.question = "待取消的合成问题"; session.send()
         session.newConversation(); let latest = session.selectedID

@@ -24,10 +24,11 @@ final class AssistantPrivacyMemoryTests: XCTestCase {
         }
         XCTFail("Synthetic session did not reach the expected state"); throw AssistantError.protocolError
     }
-    @MainActor private func session(mock: AssistantMockTransport = .init(script: []), history: AssistantHistoryStore? = nil) throws -> AssistantSession {
+    @MainActor private func session(mock: AssistantMockTransport = .init(script: []), history: AssistantHistoryStore? = nil) async throws -> AssistantSession {
         let snapshot = AssistantSimulation.snapshot()
         let session = AssistantSession(historyStore: history, directory: try runtime(), simulated: true,
                                        snapshot: { snapshot }, transportFactory: { mock })
+        await session.waitUntilReady()
         session.configuration = AssistantSimulation.configuration(); session.question = "今天有哪些课程？"
         return session
     }
@@ -67,7 +68,7 @@ final class AssistantPrivacyMemoryTests: XCTestCase {
         for value in values { XCTAssertThrowsError(try AssistantSecrets.check(value, key: synthetic)) }
     }
     @MainActor func testSensitiveQuestionIsShownBeforeAnyRequestAndCanBeRefused() async throws {
-        let mock = AssistantMockTransport(script: []), session = try session(mock: mock)
+        let mock = AssistantMockTransport(script: []), session = try await session(mock: mock)
         session.question = "结合我的合成病历安排复习"; session.send()
         try await waitUntil { session.approval != nil }
         let approval = try XCTUnwrap(session.approval)
@@ -143,7 +144,7 @@ final class AssistantPrivacyMemoryTests: XCTestCase {
     @MainActor func testMemoryCRUDAndEnabledContentActuallyReachAllSDKRequests() async throws {
         for provider in AssistantProvider.allCases {
             let store = try history(), mock = AssistantMockTransport(script: Array(AssistantSimulation.script.prefix(2)))
-            let session = try session(mock: mock, history: store)
+            let session = try await session(mock: mock, history: store)
             session.configuration = AssistantSimulation.configuration(provider: provider)
             XCTAssertTrue(session.saveMemory(text: "回答先给结论", enabled: true))
             XCTAssertTrue(session.saveMemory(text: "仅本机合成笔记", enabled: false))
@@ -161,7 +162,7 @@ final class AssistantPrivacyMemoryTests: XCTestCase {
             XCTAssertNil(try AssistantMemories.message(session.memories))
             session.deleteMemory(id)
             let nextMock = AssistantMockTransport(script: [])
-            let reopened = try self.session(mock: nextMock, history: store)
+            let reopened = try await self.session(mock: nextMock, history: store)
             XCTAssertEqual(reopened.memories.map(\.text), ["仅本机合成笔记"])
             reopened.newConversation(); reopened.question = "继续查课程"; reopened.send(); try await finish(reopened)
             let nextRequests = await nextMock.requests
@@ -171,7 +172,7 @@ final class AssistantPrivacyMemoryTests: XCTestCase {
         }
     }
     @MainActor func testSensitiveMemorySharesPrivacyGateAndDisabledMemoryDoesNotLeaveDevice() async throws {
-        let mock = AssistantMockTransport(script: []), session = try session(mock: mock)
+        let mock = AssistantMockTransport(script: []), session = try await session(mock: mock)
         XCTAssertTrue(session.saveMemory(text: "合成病历：需要休息", enabled: true))
         XCTAssertTrue(session.saveMemory(text: "合成保密地址笔记", enabled: false))
         session.send(); try await waitUntil { session.approval != nil }
@@ -183,7 +184,7 @@ final class AssistantPrivacyMemoryTests: XCTestCase {
     }
     @MainActor func testMemoryChangesInvalidatePendingOrInFlightAnswer() async throws {
         for change in ["edit", "disable", "delete", "inflight"] {
-            let mock = AssistantMockTransport(script: [], delay: .seconds(2)), session = try session(mock: mock)
+            let mock = AssistantMockTransport(script: [], delay: .seconds(2)), session = try await session(mock: mock)
             XCTAssertTrue(session.saveMemory(text: "用中文回答", enabled: true))
             let id = session.memories[0].id
             session.send(); try await waitUntil { session.approval != nil }
@@ -203,8 +204,8 @@ final class AssistantPrivacyMemoryTests: XCTestCase {
             let requests = await mock.requests; XCTAssertEqual(requests.count, change == "inflight" ? 1 : 0)
         }
     }
-    @MainActor func testKnownKeyCannotEnterMemoryQuestionOrConfigurationAfterChangingEndpoint() throws {
-        let store = try history(), session = try session(history: store)
+    @MainActor func testKnownKeyCannotEnterMemoryQuestionOrConfigurationAfterChangingEndpoint() async throws {
+        let store = try history(), session = try await session(history: store)
         session.key = "SYNTHETIC_OPAQUE_CREDENTIAL"
         XCTAssertFalse(session.saveMemory(text: "SYNTHETIC_OPAQUE_CREDENTIAL", enabled: false))
         XCTAssertFalse(session.saveMemory(text: "password=SYNTHETIC_ONLY", enabled: false))
@@ -213,12 +214,14 @@ final class AssistantPrivacyMemoryTests: XCTestCase {
         XCTAssertFalse(session.busy); XCTAssertTrue(session.entries.isEmpty)
         session.configuration.baseURL = "https://example.invalid/SYNTHETIC_OPAQUE_CREDENTIAL"
         XCTAssertTrue(session.key.isEmpty)
-        session.close() // Flush the ordered background saves before inspecting the file.
+        session.close()
+        let saved = await session.prepareToQuit()
+        XCTAssertFalse(saved) // The credential-bearing configuration must still be rejected.
         XCTAssertFalse(try String(contentsOf: store.url, encoding: .utf8).contains("SYNTHETIC_OPAQUE_CREDENTIAL"))
         session.question = "继续查询"; session.send(); XCTAssertFalse(session.busy)
     }
-    @MainActor func testTypingAKeyDoesNotTreatEveryPrefixAsAPersistentSecret() throws {
-        let session = try session()
+    @MainActor func testTypingAKeyDoesNotTreatEveryPrefixAsAPersistentSecret() async throws {
+        let session = try await session()
         session.key = "a"; session.key = "ab"; session.key = "abc-SYNTHETIC_ONLY"
         XCTAssertTrue(session.saveMemory(text: "answer in Chinese", enabled: false))
         XCTAssertFalse(session.saveMemory(text: "abc-SYNTHETIC_ONLY", enabled: false))

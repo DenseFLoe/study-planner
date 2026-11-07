@@ -34,9 +34,10 @@ final class AssistantTests: XCTestCase {
     }
     @MainActor private func session(_ transport: AssistantMockTransport? = nil,
                                    history: AssistantHistoryStore? = nil,
-                                   snapshot: AssistantSnapshot = AssistantSimulation.snapshot()) throws -> AssistantSession {
+                                   snapshot: AssistantSnapshot = AssistantSimulation.snapshot()) async throws -> AssistantSession {
         let value = AssistantSession(historyStore: history, directory: try runtime(), simulated: true, snapshot: { snapshot },
             transportFactory: { transport ?? AssistantMockTransport(script: Array(AssistantSimulation.script.prefix(2))) })
+        await value.waitUntilReady()
         value.configuration = AssistantSimulation.configuration(); value.question = "合成问题"; return value
     }
     @MainActor private func complete(_ session: AssistantSession) async throws {
@@ -293,7 +294,7 @@ final class AssistantTests: XCTestCase {
         let basis = AssistantSimulation.snapshot()
         var state = basis.state; state.courses[0].name = "合成私密课程"
         let snapshot = AssistantSnapshot(state: state, now: basis.now, calendar: basis.calendar)
-        let mock = AssistantMockTransport(), session = try session(mock, snapshot: snapshot)
+        let mock = AssistantMockTransport(), session = try await session(mock, snapshot: snapshot)
         session.send(); try await waitUntil { session.approval != nil }
         XCTAssertEqual(session.approval?.title, "课表内容确认")
         XCTAssertTrue(session.evidence.isEmpty)
@@ -320,7 +321,7 @@ final class AssistantTests: XCTestCase {
         XCTAssertTrue(captured[2].body.contains("result"))
     }
     @MainActor func testRefuseRetryAndDuplicateDecisions() async throws {
-        let session = try session()
+        let session = try await session()
         session.send(); try await waitUntil { session.approval != nil }
         let old = session.approval!.id
         session.decide(old, allow: false); session.decide(old, allow: true)
@@ -334,7 +335,7 @@ final class AssistantTests: XCTestCase {
     }
     @MainActor func testQuestionRecipientModelAndKeyChangesInvalidatePendingApproval() async throws {
         for kind in ["question", "recipient", "model", "key"] {
-            let mock = AssistantMockTransport(), session = try session(mock)
+            let mock = AssistantMockTransport(), session = try await session(mock)
             session.send(); try await waitUntil { session.approval != nil }
             let id = session.approval!.id
             switch kind {
@@ -362,7 +363,7 @@ final class AssistantTests: XCTestCase {
         XCTAssertEqual(session.message, AssistantError.changed.rawValue)
     }
     @MainActor func testSwitchAndCloseCancelPendingApprovalsAndPreserveHistory() async throws {
-        let store = try history(), mock = AssistantMockTransport(), session = try session(mock, history: store)
+        let store = try history(), mock = AssistantMockTransport(), session = try await session(mock, history: store)
         let original = session.selectedID
         session.send(); try await waitUntil { session.approval != nil }
         let id = session.approval!.id
@@ -371,14 +372,16 @@ final class AssistantTests: XCTestCase {
         session.select(original); XCTAssertEqual(session.entries.first?.text, "合成问题")
         session.retry(); try await waitUntil { session.approval != nil }
         session.close(); XCTAssertNil(session.approval); XCTAssertEqual(session.key, "")
-        let reopened = try self.session(history: store)
+        let flushed = await session.prepareToQuit()
+        XCTAssertTrue(flushed)
+        let reopened = try await self.session(history: store)
         XCTAssertEqual(reopened.selectedID, original)
         XCTAssertEqual(reopened.conversations.count, 2)
         XCTAssertTrue(reopened.entries.allSatisfy { $0.status != "处理中" })
         let requests = await mock.requests; XCTAssertTrue(requests.isEmpty)
     }
     @MainActor func testStoppingInFlightIgnoresLateResponse() async throws {
-        let mock = AssistantMockTransport(delay: .seconds(3)), session = try session(mock)
+        let mock = AssistantMockTransport(delay: .seconds(3)), session = try await session(mock)
         session.send(); try await waitUntil { session.approval != nil }
         session.decide(session.approval!.id, allow: true)
         try await Task.sleep(for: .milliseconds(100)); session.stop()
@@ -400,12 +403,12 @@ final class AssistantTests: XCTestCase {
         XCTAssertEqual(session.entries.filter { $0.role == "助手" }.count, 2)
     }
     @MainActor func testFailureIsNotRetriedAndCorruptHistoryDisablesWrites() async throws {
-        let mock = AssistantMockTransport(failAt: 1), session = try session(mock)
+        let mock = AssistantMockTransport(failAt: 1), session = try await session(mock)
         session.send(); try await complete(session)
         let requests = await mock.requests; XCTAssertEqual(requests.count, 1)
         XCTAssertEqual(session.message, AssistantError.network.rawValue)
         let store = try history(); try Data("corrupt".utf8).write(to: store.url)
-        let broken = try self.session(history: store); broken.send()
+        let broken = try await self.session(history: store); broken.send()
         XCTAssertFalse(broken.busy); XCTAssertNotNil(broken.historyMessage)
         XCTAssertEqual(try String(contentsOf: store.url, encoding: .utf8), "corrupt")
     }

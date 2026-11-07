@@ -86,6 +86,10 @@ struct StudyPlannerApp: App {
             return
         }
         // These isolated branches run before PlannerStore / the real database is initialized.
+        if arguments.contains("--assistant-window-check") {
+            AssistantWindowProbe.run()
+            return
+        }
         if arguments.contains("--assistant-check") {
             let passed = await AssistantSimulation.probe()
             exit(passed ? 0 : 2)

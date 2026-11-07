@@ -10,6 +10,7 @@ import tempfile
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("dmg", type=Path)
+    parser.add_argument("--windows", action="store_true", help="Also exercise real AppKit windows in a logged-in desktop session")
     args = parser.parse_args()
     dmg = args.dmg.resolve()
     subprocess.run(["shasum", "-a", "256", "-c", dmg.name + ".sha256"], cwd=dmg.parent, check=True)
@@ -29,6 +30,11 @@ def main():
                                     env=environment, timeout=60, check=True)
             assert "ASSISTANT_PACKAGE_PROBE_PASS protocols=3 queries=18 externalRequests=0 credentialsUsed=0" in result.stdout
             print(result.stdout.strip())
+            if args.windows:
+                windows = subprocess.run([str(executable), "--assistant-window-check"], text=True, capture_output=True,
+                                         env=environment, timeout=90, check=True)
+                assert "ASSISTANT_WINDOW_PROBE_PASS cycles=12" in windows.stdout
+                print(windows.stdout.strip())
             print(json.dumps({"source": metadata["StudyPlannerSourceIdentifier"], "dmgBytes": dmg.stat().st_size}))
         finally:
             subprocess.run(["hdiutil", "detach", str(mount)], check=True)

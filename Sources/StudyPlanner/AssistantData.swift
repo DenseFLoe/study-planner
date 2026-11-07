@@ -161,8 +161,13 @@ struct AssistantWorkspace: Codable, Sendable {
     }
 }
 
+protocol AssistantHistoryPersistence: Sendable {
+    func load() throws -> AssistantWorkspace
+    func save(_ value: AssistantWorkspace) throws
+}
+
 /// Atomic private file outside planner persistence/sync; a corrupt file is never replaced.
-struct AssistantHistoryStore: Sendable {
+struct AssistantHistoryStore: AssistantHistoryPersistence {
     let url: URL
     var legacyURL: URL? = nil
     static var local: Self {
@@ -223,11 +228,30 @@ struct AssistantHistoryStore: Sendable {
     }
 }
 
-/// A single ordered writer prevents an older background save from replacing a newer edit.
+/// One queue owns history IO, including initial validation and ordered saves.
 final class AssistantHistoryWriter: Sendable {
     private let queue = DispatchQueue(label: "local.studyplanner.assistant.history", qos: .userInitiated)
-    private let store: AssistantHistoryStore?
-    init(store: AssistantHistoryStore?) { self.store = store }
+    private let store: (any AssistantHistoryPersistence)?
+    init(store: (any AssistantHistoryPersistence)?) { self.store = store }
+    func load() async -> Result<AssistantWorkspace, Error> {
+        await withCheckedContinuation { continuation in
+            queue.async {
+                continuation.resume(returning: Result {
+                    var saved = try self.store?.load() ?? AssistantWorkspace()
+                    if saved.conversations.isEmpty { saved.conversations = [AssistantConversation()] }
+                    if !saved.conversations.contains(where: { $0.id == saved.selectedID }) {
+                        saved.selectedID = saved.conversations[0].id
+                    }
+                    for i in saved.conversations.indices {
+                        for j in saved.conversations[i].entries.indices where saved.conversations[i].entries[j].status == "处理中" {
+                            saved.conversations[i].entries[j].status = "上次已中断 · 未续传"
+                        }
+                    }
+                    return saved
+                })
+            }
+        }
+    }
     private func write(_ value: AssistantWorkspace, secrets: Set<String>) throws {
         let text = String(decoding: try assistantJSON(value), as: UTF8.self)
         try AssistantSecrets.check(text)
