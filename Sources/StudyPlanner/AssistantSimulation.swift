@@ -3,7 +3,7 @@ import AppKit
 import StudyCore
 import StudyPersistence
 
-/// Fixed synthetic responses exercise SDK-selected tool calls, not real-model reasoning.
+/// Fixed synthetic responses exercise native tool calls, not real-model reasoning.
 /// This transport has no networking, keychain or planner repository dependency.
 actor AssistantMockTransport: AssistantTransport {
     nonisolated let simulated = true
@@ -80,15 +80,15 @@ enum AssistantSimulation {
     static func configuration(provider: AssistantProvider = .openai) -> AssistantConfiguration {
         .init(provider: provider, baseURL: "https://assistant-simulator.invalid/v1", model: "synthetic-chat")
     }
-    @MainActor static func session(history: AssistantHistoryStore? = nil, directory: URL? = AssistantRunner.bundledDirectory) -> AssistantSession {
+    @MainActor static func session(history: AssistantHistoryStore? = nil) -> AssistantSession {
         let snapshot = snapshot()
-        let session = AssistantSession(historyStore: history, directory: directory, simulated: true,
+        let session = AssistantSession(historyStore: history, simulated: true,
                                        snapshot: { snapshot }, transportFactory: { AssistantMockTransport() })
         session.configuration = configuration()
         session.question = "我的课程和课表是什么情况？请核对进度、规则及冲突。"
         return session
     }
-    @MainActor static func actionSession(directory: URL? = AssistantRunner.bundledDirectory) throws -> (AssistantSession, PlannerStore) {
+    @MainActor static func actionSession() throws -> (AssistantSession, PlannerStore) {
         let now = Date(), calendar = Calendar.current
         var state = PlannerState()
         var course = Course(name: "合成课程 · 可安全撤销", totalMinutes: 120, startDate: calendar.startOfDay(for: now),
@@ -98,7 +98,7 @@ enum AssistantSimulation {
         try repository.save(state)
         state = try repository.load()
         let store = PlannerStore(state: state, repository: repository, result: ScheduleEngine().assessSavedPlan(state: state, now: now))
-        let session = AssistantSession(historyStore: nil, directory: directory, simulated: true, snapshot: {
+        let session = AssistantSession(historyStore: nil, simulated: true, snapshot: {
             guard !store.orderSaveBusy else { return nil }
             return .init(state: store.state, now: Date(), id: store.assistantSnapshotID)
         }, transportFactory: {
@@ -108,8 +108,8 @@ enum AssistantSimulation {
         session.question = "删除这门合成课程；先让我核对影响，再确认。"
         return (session, store)
     }
-    @MainActor static func actionProbe(directory: URL) async throws {
-        let (session, store) = try actionSession(directory: directory)
+    @MainActor static func actionProbe() async throws {
+        let (session, store) = try actionSession()
         let before = store.state
         session.send()
         var approvals = 0
@@ -142,7 +142,6 @@ enum AssistantSimulation {
         withExtendedLifetime(actions) { app.run() }
     }
     @MainActor static func probe() async -> Bool {
-        guard let directory = AssistantRunner.bundledDirectory else { return false }
         do {
             let snapshot = snapshot()
             var checkState = snapshot.state
@@ -160,7 +159,7 @@ enum AssistantSimulation {
                 let runner = AssistantRunner(), transport = AssistantMockTransport()
                 var approvals: [AssistantApproval] = [], evidence: [AssistantToolEvidence] = []
                 _ = try await runner.run(configuration: configuration(provider: provider),
-                    messages: [.init(role: "user", content: "合成查询")], snapshot: snapshot, key: "", directory: directory,
+                    messages: [.init(role: "user", content: "合成查询")], snapshot: snapshot, key: "",
                     transport: transport, currentSnapshotID: { snapshot.id }, approve: { approval in
                         approvals.append(approval)
                         guard approvals.count == 1 || !approval.request.categories.isEmpty else { throw AssistantError.protocolError }
@@ -182,7 +181,7 @@ enum AssistantSimulation {
                       task["lesson_match"] as? String == "matched", task["untrusted_lesson_name"] as? String == "合成课节1",
                       lessons.first?["lesson_id"] as? String == reference, lessons.first?["position"] as? Int == 1 else { return false }
             }
-            try await actionProbe(directory: directory)
+            try await actionProbe()
             print("ASSISTANT_PACKAGE_PROBE_PASS protocols=3 queries=18 externalRequests=0 credentialsUsed=0 privacy=verified lessonLinks=verified timeCheck=verified readableDetails=verified actions=preview-confirm-undo")
             return true
         } catch { print("ASSISTANT_PACKAGE_PROBE_FAIL: \(AssistantError.safe(error).rawValue)"); return false }

@@ -176,14 +176,6 @@ final class AssistantActionTests: XCTestCase {
         XCTAssertNil(failed); XCTAssertEqual(store.state, before); XCTAssertEqual(try repo.load(), before)
     }
 
-    private func runtime() throws -> URL {
-        let url = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
-            .appendingPathComponent(".build/agent-prototype/payload")
-        guard FileManager.default.fileExists(atPath: url.appendingPathComponent("assistant-helper.cjs").path) else {
-            throw XCTSkip("Run Scripts/test-assistant.sh to prepare the optional runtime")
-        }
-        return url
-    }
     @MainActor private func finish(_ session: AssistantSession, allow: Bool = true) async throws {
         let deadline = ContinuousClock.now.advanced(by: .seconds(15))
         while session.busy {
@@ -193,11 +185,11 @@ final class AssistantActionTests: XCTestCase {
         }
     }
     @MainActor func testSessionRequiresSeparateConfirmationAndCanUndo() async throws {
-        try await AssistantSimulation.actionProbe(directory: runtime())
+        try await AssistantSimulation.actionProbe()
     }
     @MainActor func testRefusingSendingCancellingProposalAndClosingNeverWrite() async throws {
         for mode in ["refuse", "cancel", "close", "new"] {
-            let (session, store) = try AssistantSimulation.actionSession(directory: runtime())
+            let (session, store) = try AssistantSimulation.actionSession()
             let before = store.state
             session.send(); try await finish(session, allow: mode != "refuse")
             if mode == "refuse" { XCTAssertNil(session.pendingChange) }
@@ -215,7 +207,7 @@ final class AssistantActionTests: XCTestCase {
         }
     }
     @MainActor func testStaleConfirmationAndStaleUndoPreserveNewEdits() async throws {
-        let (session, store) = try AssistantSimulation.actionSession(directory: runtime())
+        let (session, store) = try AssistantSimulation.actionSession()
         session.send(); try await finish(session)
         let oldID = try XCTUnwrap(session.pendingChange?.id)
         var course = store.state.courses[0]; course.name = "手动修改"
@@ -240,7 +232,7 @@ final class AssistantActionTests: XCTestCase {
         course.id = AssistantSimulation.courseID; state.courses = [course]; state.settings.availability = []
         var held: CheckedContinuation<Void, Never>?
         var quitFinished = false
-        let session = AssistantSession(historyStore: nil, directory: try runtime(), simulated: true,
+        let session = AssistantSession(historyStore: nil, simulated: true,
             snapshot: { .init(state: state, now: Date(), id: "current") },
             transportFactory: { AssistantMockTransport(script: [("preview_delete_course", ["course": AssistantSimulation.courseID.uuidString])]) },
             applyChange: { replacement, _, _ in
@@ -269,7 +261,7 @@ final class AssistantActionTests: XCTestCase {
             let transport = AssistantMockTransport(script: [("preview_delete_course", ["course": AssistantSimulation.courseID.uuidString])])
             var changes: [AssistantChange] = []
             _ = try await AssistantRunner().run(configuration: AssistantSimulation.configuration(provider: provider),
-                messages: [.init(role: "user", content: "删除合成课程")], snapshot: s, key: "", directory: runtime(),
+                messages: [.init(role: "user", content: "删除合成课程")], snapshot: s, key: "",
                 transport: transport, currentSnapshotID: { s.id }, approve: { _ in true }, activity: { _ in }, evidence: { _ in }, proposal: { changes.append($0) })
             XCTAssertEqual(changes.count, 1); XCTAssertEqual(changes.first?.before, state)
             let requests = await transport.requests

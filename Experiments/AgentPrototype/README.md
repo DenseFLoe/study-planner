@@ -2,9 +2,11 @@
 
 这里的 `helper.cjs` / `--agent-prototype` 仍是可选合成实验，不是正式客服。入口在 `PlannerStore` 初始化前分流，不加载正式课表、同步配置、浏览器信息或钥匙串。该实验没有真实模型 HTTP 实现，也不接受 API 密钥。
 
-同目录新增的 `assistant-helper.cjs` 使用独立协议 2，为主应用的只读助手提供 SDK 工具循环。它只通过管道向 Swift 请求查询和发送，自己不能联网，也不接收密钥；原生程序核对每份精确请求；正式助手先合并进行一次「课表内容确认」，普通必要工具数据随后自动发送，新增敏感或不确定内容需另行确认，疑似凭证直接阻止。协议 1 的 `syntheticOnly` 字段仅说明原验证入口；协议 2 用单独摘要校验。正式助手与纯合成的 `--assistant-preview` / `--assistant-check` 边界见仓库 README。本轮开发验证只用模拟服务，没有增加真实 API 请求。
+正式助手现已迁为 Swift 原生请求与工具循环，常规包及 `STUDYPLANNER_ASSISTANT=1` 包均不携带 Node.js；现有确认、隐私检查和数据格式保持不变。以下 `assistant-helper.cjs` 协议 2 说明保留为历史 SDK 实验记录，仅随显式开启的原型包提供，不再用于正式助手。
 
-以下三次审批说明仅指协议1的旧合成实验。协议2正式助手及其 `--assistant-preview` / `--assistant-check` 使用上述一次确认流程，记忆、隐私和界面详见仓库 README。
+同目录的 `assistant-helper.cjs` 使用独立协议 2，曾为主应用的助手提供 SDK 工具循环。该脚本通过管道向 Swift 请求查询和发送，不自行联网、不接收密钥，现仅作历史实现参考。正式助手与纯合成的 `--assistant-preview` / `--assistant-check` 边界、每轮一次确认及隐私规则见仓库 README。
+
+以下审批与打包说明仅指协议 1 的旧合成实验，不是正式助手的安装或验收流程。
 
 ## 验证范围
 

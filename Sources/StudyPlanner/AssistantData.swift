@@ -9,7 +9,6 @@ enum AssistantError: String, Error, LocalizedError {
     case keychain = "钥匙串操作未完成，原有凭证未删除。"
     case history = "本机聊天记录无法安全读写，原文件已保留；本次未覆盖保存。"
     case sensitive = "检测到疑似密钥或凭证，已阻止保存和发送。请移除后重试。"
-    case runtime = "此安装包缺少助手运行时，请使用含助手的 DMG。"
     case protocolError = "助手通信未完成或返回了无效内容，未自动重试。"
     case expired = "确认已过期；请重试并重新核对发送内容。"
     case changed = "问题或设置已修改，本轮已停止。"

@@ -22,6 +22,8 @@ def main():
             subprocess.run(["codesign", "--verify", "--deep", "--strict", str(app)], check=True)
             metadata = plistlib.loads((app / "Contents/Info.plist").read_bytes())
             assert metadata.get("StudyPlannerAssistant") is True
+            assert metadata.get("StudyPlannerAssistantRuntime") == "swift"
+            assert not (app / "Contents/Resources/AgentPrototype").exists(), "Production assistant must not carry Node/SDK payload"
             environment = {"PATH": "/usr/bin:/bin", "LANG": "zh_CN.UTF-8", "TMPDIR": "/private/tmp"}
             executable = app / "Contents/MacOS/StudyPlanner"
             version = subprocess.check_output([str(executable), "--version"], text=True, env=environment, timeout=20)

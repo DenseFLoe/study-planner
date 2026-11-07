@@ -3,14 +3,6 @@ import StudyCore
 @testable import StudyPlanner
 
 final class AssistantPrivacyMemoryTests: XCTestCase {
-    private func runtime() throws -> URL {
-        let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
-        let directory = root.appendingPathComponent(".build/agent-prototype/payload")
-        guard FileManager.default.fileExists(atPath: directory.appendingPathComponent("assistant-helper.cjs").path) else {
-            throw XCTSkip("Run Scripts/test-assistant.sh to prepare the synthetic SDK runtime")
-        }
-        return directory
-    }
     private func history() throws -> AssistantHistoryStore {
         let directory = FileManager.default.temporaryDirectory.resolvingSymlinksInPath().appendingPathComponent("assistant-memory-" + UUID().uuidString)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
@@ -26,7 +18,7 @@ final class AssistantPrivacyMemoryTests: XCTestCase {
     }
     @MainActor private func session(mock: AssistantMockTransport = .init(script: []), history: AssistantHistoryStore? = nil) async throws -> AssistantSession {
         let snapshot = AssistantSimulation.snapshot()
-        let session = AssistantSession(historyStore: history, directory: try runtime(), simulated: true,
+        let session = AssistantSession(historyStore: history, simulated: true,
                                        snapshot: { snapshot }, transportFactory: { mock })
         await session.waitUntilReady()
         session.configuration = AssistantSimulation.configuration(); session.question = "今天有哪些课程？"
@@ -91,7 +83,7 @@ final class AssistantPrivacyMemoryTests: XCTestCase {
             let runner = AssistantRunner()
             var approvals: [AssistantApproval] = []
             _ = try await runner.run(configuration: AssistantSimulation.configuration(provider: provider),
-                messages: [.init(role: "user", content: "合成课程查询")], snapshot: snapshot, key: "", directory: runtime(), transport: mock,
+                messages: [.init(role: "user", content: "合成课程查询")], snapshot: snapshot, key: "", transport: mock,
                 currentSnapshotID: { snapshot.id }, approve: { approvals.append($0); return true }, activity: { _ in }, evidence: { _ in })
             XCTAssertEqual(approvals.count, 1)
             XCTAssertTrue(approvals[0].findings.isEmpty)
@@ -104,8 +96,6 @@ final class AssistantPrivacyMemoryTests: XCTestCase {
         }
     }
     @MainActor func testToolCredentialIsBlockedWithoutOfferingOverride() async throws {
-        // Missing optional SDK support must skip the test, not enter the rejection assertion below.
-        let directory = try runtime()
         let basis = AssistantSimulation.snapshot()
         var state = basis.state; state.courses[0].name = "password=SYNTHETIC_ONLY"
         let snapshot = AssistantSnapshot(state: state, now: basis.now, calendar: basis.calendar)
@@ -113,7 +103,7 @@ final class AssistantPrivacyMemoryTests: XCTestCase {
         var approvals = 0
         do {
             _ = try await runner.run(configuration: AssistantSimulation.configuration(), messages: [.init(role: "user", content: "合成查询")],
-                snapshot: snapshot, key: "", directory: directory, transport: mock, currentSnapshotID: { snapshot.id },
+                snapshot: snapshot, key: "", transport: mock, currentSnapshotID: { snapshot.id },
                 approve: { _ in approvals += 1; return true }, activity: { _ in }, evidence: { _ in })
             XCTFail("Credential-shaped course name must be blocked")
         } catch { XCTAssertEqual(error as? AssistantError, .sensitive) }
@@ -141,7 +131,7 @@ final class AssistantPrivacyMemoryTests: XCTestCase {
         try JSONSerialization.data(withJSONObject: legacy).write(to: store.url)
         XCTAssertTrue(try store.load().memories.isEmpty)
     }
-    @MainActor func testMemoryCRUDAndEnabledContentActuallyReachAllSDKRequests() async throws {
+    @MainActor func testMemoryCRUDAndEnabledContentActuallyReachAllNativeRequests() async throws {
         for provider in AssistantProvider.allCases {
             let store = try history(), mock = AssistantMockTransport(script: Array(AssistantSimulation.script.prefix(2)))
             let session = try await session(mock: mock, history: store)

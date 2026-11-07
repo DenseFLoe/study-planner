@@ -158,18 +158,10 @@ final class AssistantConversationTests: XCTestCase {
             try await Task.sleep(for: .milliseconds(10))
         }
     }
-    private func runtime() throws -> URL {
-        let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
-        let directory = root.appendingPathComponent(".build/agent-prototype/payload")
-        guard FileManager.default.fileExists(atPath: directory.appendingPathComponent("assistant-helper.cjs").path) else {
-            throw XCTSkip("Run Scripts/test-assistant.sh to prepare the synthetic runtime")
-        }
-        return directory
-    }
     @MainActor func testDeletingOtherConversationKeepsApprovalThenDeletingActiveCancelsIt() async throws {
         let store = try history(), mock = AssistantMockTransport(script: [])
         let snapshot = AssistantSimulation.snapshot()
-        let session = AssistantSession(historyStore: store, directory: try runtime(), simulated: true, snapshot: { snapshot }, transportFactory: { mock })
+        let session = AssistantSession(historyStore: store, simulated: true, snapshot: { snapshot }, transportFactory: { mock })
         await session.waitUntilReady()
         session.configuration = AssistantSimulation.configuration()
         let other = session.selectedID
@@ -192,7 +184,7 @@ final class AssistantConversationTests: XCTestCase {
     }
     @MainActor func testLateResponseCannotResurrectDeletedConversation() async throws {
         let store = try history(), late = LateTransport(), snapshot = AssistantSimulation.snapshot()
-        let session = AssistantSession(historyStore: store, directory: try runtime(), simulated: true, snapshot: { snapshot }, transportFactory: { late })
+        let session = AssistantSession(historyStore: store, simulated: true, snapshot: { snapshot }, transportFactory: { late })
         await session.waitUntilReady()
         session.configuration = AssistantSimulation.configuration()
         let original = session.selectedID

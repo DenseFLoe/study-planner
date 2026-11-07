@@ -3,14 +3,6 @@ import StudyCore
 @testable import StudyPlanner
 
 final class AssistantTests: XCTestCase {
-    private func runtime() throws -> URL {
-        let url = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
-            .appendingPathComponent(".build/agent-prototype/payload")
-        guard FileManager.default.fileExists(atPath: url.appendingPathComponent("assistant-helper.cjs").path) else {
-            throw XCTSkip("Optional SDK runtime absent; run bash Scripts/test-assistant.sh for required bridge coverage")
-        }
-        return url
-    }
     private func request(id: String = "r1", body: String? = nil, config: AssistantConfiguration = AssistantSimulation.configuration()) throws -> AssistantRequest {
         .init(id: id, configuration: config, url: try config.endpoint().absoluteString,
               body: body ?? "{\"model\":\"synthetic-chat\",\"messages\":[{\"role\":\"user\",\"content\":\"合成问题\"}]}")
@@ -35,7 +27,7 @@ final class AssistantTests: XCTestCase {
     @MainActor private func session(_ transport: AssistantMockTransport? = nil,
                                    history: AssistantHistoryStore? = nil,
                                    snapshot: AssistantSnapshot = AssistantSimulation.snapshot()) async throws -> AssistantSession {
-        let value = AssistantSession(historyStore: history, directory: try runtime(), simulated: true, snapshot: { snapshot },
+        let value = AssistantSession(historyStore: history, simulated: true, snapshot: { snapshot },
             transportFactory: { transport ?? AssistantMockTransport(script: Array(AssistantSimulation.script.prefix(2))) })
         await value.waitUntilReady()
         value.configuration = AssistantSimulation.configuration(); value.question = "合成问题"; return value
@@ -227,13 +219,13 @@ final class AssistantTests: XCTestCase {
         let clean = try history(), conversation = AssistantConversation()
         XCTAssertThrowsError(try clean.save(.init(conversations: [conversation, conversation])))
     }
-    @MainActor func testSDKSerializersExecuteAllSixReadOnlyToolsAfterOneScopeConfirmation() async throws {
+    @MainActor func testNativeSerializersExecuteAllSixReadOnlyToolsAfterOneScopeConfirmation() async throws {
         let snapshot = AssistantSimulation.snapshot()
         for provider in [AssistantProvider.openai, .anthropic, .deepseek] {
             let runner = AssistantRunner(), mock = AssistantMockTransport()
             var approvals: [AssistantApproval] = [], results: [AssistantToolEvidence] = []
             let answer = try await runner.run(configuration: AssistantSimulation.configuration(provider: provider),
-                messages: [.init(role: "user", content: "合成问题")], snapshot: snapshot, key: "", directory: try runtime(),
+                messages: [.init(role: "user", content: "合成问题")], snapshot: snapshot, key: "",
                 transport: mock, currentSnapshotID: { snapshot.id }, approve: { approvals.append($0); return true },
                 activity: { _ in }, evidence: { results.append($0) })
             XCTAssertEqual(approvals.count, 1); XCTAssertEqual(results.count, 6); XCTAssertFalse(answer.isEmpty)
@@ -264,7 +256,7 @@ final class AssistantTests: XCTestCase {
                 let runner = AssistantRunner(), mock = AssistantMockTransport(script: [(tool, input)])
                 var approvals: [AssistantApproval] = [], results: [AssistantToolEvidence] = []
                 _ = try await runner.run(configuration: AssistantSimulation.configuration(provider: provider),
-                    messages: [.init(role: "user", content: "合成单项查询")], snapshot: snapshot, key: "", directory: try runtime(),
+                    messages: [.init(role: "user", content: "合成单项查询")], snapshot: snapshot, key: "",
                     transport: mock, currentSnapshotID: { snapshot.id }, approve: { approvals.append($0); return true },
                     activity: { _ in }, evidence: { results.append($0) })
                 XCTAssertEqual(approvals.count, 1); XCTAssertEqual(results.count, 1)
@@ -304,7 +296,7 @@ final class AssistantTests: XCTestCase {
         XCTAssertTrue(requests.isEmpty)
         XCTAssertFalse(session.entries.contains { $0.role == "助手" })
     }
-    @MainActor func testSDKCalculationUsesNativeEvidenceWithinConfirmedScope() async throws {
+    @MainActor func testNativeCalculationUsesNativeEvidenceWithinConfirmedScope() async throws {
         let snapshot = AssistantSimulation.snapshot(), runner = AssistantRunner()
         let mock = AssistantMockTransport(script: [
             ("inspect_course", ["course": AssistantSimulation.courseID.uuidString, "offset": "0"]),
@@ -312,7 +304,7 @@ final class AssistantTests: XCTestCase {
         ])
         var approvals: [AssistantApproval] = []
         _ = try await runner.run(configuration: AssistantSimulation.configuration(), messages: [.init(role: "user", content: "合成计算")],
-            snapshot: snapshot, key: "", directory: try runtime(), transport: mock, currentSnapshotID: { snapshot.id },
+            snapshot: snapshot, key: "", transport: mock, currentSnapshotID: { snapshot.id },
             approve: { approvals.append($0); return true }, activity: { _ in }, evidence: { _ in })
         XCTAssertEqual(approvals.count, 1)
         let captured = await mock.requests
@@ -352,7 +344,7 @@ final class AssistantTests: XCTestCase {
     @MainActor func testSnapshotChangesBeforeApprovalAutomaticallyRequeriesLatestData() async throws {
         var snapshot = AssistantSimulation.snapshot()
         let mock = AssistantMockTransport()
-        let session = AssistantSession(historyStore: nil, directory: try runtime(), simulated: true, snapshot: { snapshot }, transportFactory: { mock })
+        let session = AssistantSession(historyStore: nil, simulated: true, snapshot: { snapshot }, transportFactory: { mock })
         session.configuration = AssistantSimulation.configuration(); session.question = "合成"; session.send()
         try await waitUntil { session.approval != nil }
         var state = snapshot.state; state.courses[0].name = "已变化"
@@ -406,7 +398,7 @@ final class AssistantTests: XCTestCase {
         }
         let final = AssistantMockTransport(script: [("list_courses", ["offset": "0"])])
         var attempts = 0
-        let session = AssistantSession(historyStore: store, directory: try runtime(), simulated: true, snapshot: { snapshot }, transportFactory: {
+        let session = AssistantSession(historyStore: store, simulated: true, snapshot: { snapshot }, transportFactory: {
             attempts += 1
             return attempts == 1 ? updating : final
         })
@@ -431,7 +423,7 @@ final class AssistantTests: XCTestCase {
     }
     @MainActor func testRepeatedScheduleChangesAreBoundedAndNeverPublishStaleAnswer() async throws {
         var snapshot = AssistantSimulation.snapshot(), attempts = 0
-        let session = AssistantSession(historyStore: nil, directory: try runtime(), simulated: true, snapshot: { snapshot }, transportFactory: {
+        let session = AssistantSession(historyStore: nil, simulated: true, snapshot: { snapshot }, transportFactory: {
             attempts += 1
             return UpdatingTransport {
                 snapshot = .init(state: snapshot.state, now: snapshot.now, calendar: snapshot.calendar, id: UUID().uuidString)
@@ -472,7 +464,7 @@ final class AssistantTests: XCTestCase {
     @MainActor func testContinuousFollowupUsesCompletedConversationOnly() async throws {
         let snapshot = AssistantSimulation.snapshot()
         var mocks: [AssistantMockTransport] = []
-        let session = AssistantSession(historyStore: nil, directory: try runtime(), simulated: true, snapshot: { snapshot }, transportFactory: {
+        let session = AssistantSession(historyStore: nil, simulated: true, snapshot: { snapshot }, transportFactory: {
             let value = AssistantMockTransport(script: Array(AssistantSimulation.script.prefix(2))); mocks.append(value); return value
         })
         session.configuration = AssistantSimulation.configuration(); session.question = "第一问"; session.send(); try await complete(session)

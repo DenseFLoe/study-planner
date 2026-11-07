@@ -22,14 +22,9 @@ final class AssistantWindowLifecycleTests: XCTestCase {
         }
     }
     @MainActor func testClosingInFlightIgnoresLateResponseAfterReopeningAndSendingAgain() async throws {
-        let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
-        let directory = root.appendingPathComponent(".build/agent-prototype/payload")
-        guard FileManager.default.fileExists(atPath: directory.appendingPathComponent("assistant-helper.cjs").path) else {
-            throw XCTSkip("Run Scripts/test-assistant.sh to prepare the synthetic SDK runtime")
-        }
         let snapshot = AssistantSimulation.snapshot(), late = LateTransport(), fast = AssistantMockTransport(script: [])
         var useFast = false
-        let session = AssistantSession(historyStore: nil, directory: directory, simulated: true, snapshot: { snapshot },
+        let session = AssistantSession(historyStore: nil, simulated: true, snapshot: { snapshot },
                                        transportFactory: { if useFast { return fast }; return late })
         session.configuration = AssistantSimulation.configuration()
         session.question = "旧请求"; session.send()

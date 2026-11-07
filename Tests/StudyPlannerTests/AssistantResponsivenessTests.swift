@@ -27,14 +27,6 @@ final class AssistantResponsivenessTests: XCTestCase {
         let saved = await session.prepareToQuit()
         XCTAssertTrue(saved)
     }
-    private func runtime() throws -> URL {
-        let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
-        let url = root.appendingPathComponent(".build/agent-prototype/payload")
-        guard FileManager.default.fileExists(atPath: url.appendingPathComponent("assistant-helper.cjs").path) else {
-            throw XCTSkip("Run Scripts/test-assistant.sh to prepare the synthetic SDK runtime")
-        }
-        return url
-    }
     private func history() throws -> AssistantHistoryStore {
         let root = FileManager.default.temporaryDirectory.resolvingSymlinksInPath().appendingPathComponent("assistant-responsive-" + UUID().uuidString)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
@@ -42,7 +34,7 @@ final class AssistantResponsivenessTests: XCTestCase {
         return .init(url: root.appendingPathComponent("workspace.json"))
     }
     @MainActor func testLargeHistorySendAndFollowupKeepMainActorResponsiveAndConfirmOncePerTurn() async throws {
-        let directory = try runtime(), store = try history(), selected = AssistantConversation()
+        let store = try history(), selected = AssistantConversation()
         let archive = (0..<8).map { _ in
             AssistantConversation(entries: (0..<20).map { _ in
                 .init(role: "助手", text: String(repeating: "仅用于响应测试的合成学习记录。", count: 60), status: "完成")
@@ -50,7 +42,7 @@ final class AssistantResponsivenessTests: XCTestCase {
         }
         try store.save(.init(configuration: AssistantSimulation.configuration(), conversations: [selected] + archive, selectedID: selected.id))
         let snapshot = AssistantSimulation.snapshot()
-        let session = AssistantSession(historyStore: store, directory: directory, simulated: true,
+        let session = AssistantSession(historyStore: store, simulated: true,
                                        snapshot: { snapshot }, transportFactory: {
             AssistantMockTransport(script: Array(AssistantSimulation.script.prefix(2)))
         })
@@ -89,9 +81,9 @@ final class AssistantResponsivenessTests: XCTestCase {
         XCTAssertEqual(saved.conversations.count, 10)
     }
     @MainActor func testStopDuringPreparationCannotSendOrOverwriteNewConversation() async throws {
-        let directory = try runtime(), store = try history(), mock = AssistantMockTransport()
+        let store = try history(), mock = AssistantMockTransport()
         let snapshot = AssistantSimulation.snapshot()
-        let session = AssistantSession(historyStore: store, directory: directory, simulated: true,
+        let session = AssistantSession(historyStore: store, simulated: true,
                                        snapshot: { snapshot }, transportFactory: { mock })
         await session.waitUntilReady()
         session.configuration = AssistantSimulation.configuration()

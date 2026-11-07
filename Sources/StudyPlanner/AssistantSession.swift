@@ -40,7 +40,6 @@ import StudyCore
     @ObservationIgnored private var persistenceID = UUID()
     @ObservationIgnored private let snapshotProvider: @MainActor () -> AssistantSnapshot?
     @ObservationIgnored private let transportFactory: @MainActor () -> any AssistantTransport
-    @ObservationIgnored private let directory: URL?
     @ObservationIgnored private let applyChange: @MainActor (PlannerState, PlannerState, Date?) async -> PlannerState?
     @ObservationIgnored private var historyWritable = true
     @ObservationIgnored private var historyLoadTask: Task<Void, Never>?
@@ -53,11 +52,11 @@ import StudyCore
     @ObservationIgnored private var changeWaiters: [CheckedContinuation<Void, Never>] = []
     @ObservationIgnored private var deletionWaiters: [CheckedContinuation<Void, Never>] = []
 
-    init(historyStore: (any AssistantHistoryPersistence)? = AssistantHistoryStore.local, directory: URL? = AssistantRunner.bundledDirectory,
+    init(historyStore: (any AssistantHistoryPersistence)? = AssistantHistoryStore.local,
          simulated: Bool = false, snapshot: @escaping @MainActor () -> AssistantSnapshot?,
          transportFactory: @escaping @MainActor () -> any AssistantTransport = { AssistantHTTPTransport() },
          applyChange: @escaping @MainActor (PlannerState, PlannerState, Date?) async -> PlannerState? = { _, _, _ in nil }) {
-        self.snapshotProvider = snapshot; self.directory = directory; self.applyChange = applyChange
+        self.snapshotProvider = snapshot; self.applyChange = applyChange
         self.historyWriter = AssistantHistoryWriter(store: historyStore)
         self.simulated = simulated; self.transportFactory = transportFactory
         configuration = .init(); memories = []
@@ -196,7 +195,6 @@ import StudyCore
             try checkContent(String(decoding: assistantJSON(configuration), as: UTF8.self))
             _ = try configuration.endpoint()
             if !simulated { try AssistantSecrets.validateKey(key); knownKeys.insert(key) }
-            guard let directory else { throw AssistantError.runtime }
             let history = entries, memories = memories
             append(.init(role: "你", text: text, status: "处理中"))
             question = ""; evidence = []; message = nil
@@ -231,7 +229,7 @@ import StudyCore
                         guard transport.simulated == self.simulated else { throw AssistantError.protocolError }
                         do {
                             answer = try await runner.run(configuration: config, messages: messages, snapshot: snapshot,
-                                key: secret, directory: directory, transport: transport,
+                                key: secret, transport: transport,
                                 currentSnapshotID: { [weak self] in self?.snapshotProvider()?.id ?? "unavailable" },
                                 scopeAlreadyConfirmed: scopeConfirmed,
                                 approve: { [weak self] approval in
