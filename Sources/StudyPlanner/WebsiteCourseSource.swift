@@ -1,6 +1,6 @@
 import Foundation
 import Security
-import LocalAuthentication
+import StudyCredentials
 import StudyCore
 
 enum CourseWebsite: String, Codable, CaseIterable, Sendable {
@@ -78,25 +78,10 @@ struct WebsiteCredentials: Codable, Sendable {
 
 /// Accounts never enter PlannerState, backups, sync archives or UserDefaults.
 enum WebsiteCredentialVault {
-    private static func query(_ site: CourseWebsite) -> [String: Any] {
-        [kSecClass as String: kSecClassGenericPassword,
-         kSecAttrService as String: "local.studyplanner.website-account",
-         kSecAttrAccount as String: site.rawValue,
-         kSecAttrSynchronizable as String: false]
-    }
     static func load(_ site: CourseWebsite, interactive: Bool = false) throws -> WebsiteCredentials? {
-        var q = query(site)
-        q[kSecReturnData as String] = true
-        q[kSecMatchLimit as String] = kSecMatchLimitOne
-        if !interactive {
-            let context = LAContext()
-            context.interactionNotAllowed = true
-            q[kSecUseAuthenticationContext as String] = context
-        }
-        var result: CFTypeRef?
-        let status = SecItemCopyMatching(q as CFDictionary, &result)
+        let (data, status) = CredentialClient.perform(.init(.load, service: "local.studyplanner.website-account", account: site.rawValue, interactive: interactive))
         if status == errSecItemNotFound { return nil }
-        guard status == errSecSuccess, let data = result as? Data,
+        guard status == errSecSuccess, let data,
               let value = try? JSONDecoder().decode(WebsiteCredentials.self, from: data) else {
             throw WebsiteUpdateError.message("无法读取网站账号钥匙串，请解锁钥匙串或重新保存账号。")
         }
@@ -106,20 +91,11 @@ enum WebsiteCredentialVault {
         guard !value.username.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, !value.password.isEmpty else {
             throw WebsiteUpdateError.message("请填写账号和密码。")
         }
-        let data = try JSONEncoder().encode(value), q = query(site)
-        let status = SecItemUpdate(q as CFDictionary, [kSecValueData as String: data] as CFDictionary)
-        if status == errSecSuccess { return }
-        var item = q
-        item[kSecValueData as String] = data
-        item[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
-        guard status == errSecItemNotFound, SecItemAdd(item as CFDictionary, nil) == errSecSuccess else {
-            throw WebsiteUpdateError.message("网站账号未保存，请检查钥匙串访问权限。")
-        }
+        let (_, status) = CredentialClient.perform(.init(.save, service: "local.studyplanner.website-account", account: site.rawValue, value: try JSONEncoder().encode(value)))
+        guard status == errSecSuccess else { throw WebsiteUpdateError.message("无法保存网站账号钥匙串。") }
     }
     static func delete(_ site: CourseWebsite) throws {
-        let status = SecItemDelete(query(site) as CFDictionary)
-        guard status == errSecSuccess || status == errSecItemNotFound else {
-            throw WebsiteUpdateError.message("未能删除保存的网站账号。")
-        }
+        let (_, status) = CredentialClient.perform(.init(.delete, service: "local.studyplanner.website-account", account: site.rawValue))
+        guard status == errSecSuccess || status == errSecItemNotFound else { throw WebsiteUpdateError.message("无法删除网站账号钥匙串。") }
     }
 }

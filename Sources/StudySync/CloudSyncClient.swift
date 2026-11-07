@@ -1,5 +1,6 @@
 import Foundation
 import Security
+import StudyCredentials
 import StudyCore
 import StudyPersistence
 
@@ -39,23 +40,16 @@ public enum CloudVault {
         get { CloudConnectionMethod(rawValue: UserDefaults.standard.string(forKey: "studyPlannerCloudMethod") ?? "") ?? .https }
         set { UserDefaults.standard.set(newValue.rawValue, forKey: "studyPlannerCloudMethod") }
     }
-    private static func query(_ method: CloudConnectionMethod) -> [String: Any] { [kSecClass as String: kSecClassGenericPassword,
-        kSecAttrService as String: "local.studyplanner.cloud", kSecAttrAccount as String: method == .https ? "server" : "ssh-server"] }
     public static func load(method: CloudConnectionMethod = .https) throws -> CloudCredentials? {
-        var q = query(method); q[kSecReturnData as String] = true; q[kSecMatchLimit as String] = kSecMatchLimitOne
-        var result: CFTypeRef?; let status = SecItemCopyMatching(q as CFDictionary, &result)
+        let (data, status) = CredentialClient.perform(.init(.load, service: "local.studyplanner.cloud", account: method == .https ? "server" : "ssh-server"))
         if status == errSecItemNotFound { return nil }
-        guard status == errSecSuccess, let data = result as? Data else { throw ClientError.message("无法读取云同步钥匙串。") }
+        guard status == errSecSuccess, let data else { throw ClientError.message("无法读取云同步钥匙串。") }
         return try JSONDecoder().decode(CloudCredentials.self, from: data)
     }
     public static func save(_ credentials: CloudCredentials) throws {
         let data = try JSONEncoder().encode(credentials)
-        let q = query(credentials.method)
-        var item = q; item[kSecValueData as String] = data; item[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
-        let status = SecItemUpdate(q as CFDictionary, [kSecValueData as String: data] as CFDictionary)
-        guard status == errSecSuccess || (status == errSecItemNotFound && SecItemAdd(item as CFDictionary, nil) == errSecSuccess) else {
-            throw ClientError.message("无法保存云同步访问码。")
-        }
+        let (_, status) = CredentialClient.perform(.init(.save, service: "local.studyplanner.cloud", account: credentials.method == .https ? "server" : "ssh-server", value: data))
+        guard status == errSecSuccess else { throw ClientError.message("无法保存云同步访问码。") }
     }
 }
 

@@ -16,7 +16,7 @@ class SigningConfigurationTests(unittest.TestCase):
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
         self.config = Path(temporary.name) / "signing-identity.txt"
-        for mocked in [patch.object(signer, "CONFIG", self.config), patch.dict(os.environ, {}, clear=True)]:
+        for mocked in [patch.object(signer, "CONFIG", self.config), patch.object(signer, "LOCAL_CONFIG", self.config.with_name("local.txt")), patch.dict(os.environ, {}, clear=True)]:
             mocked.start()
             self.addCleanup(mocked.stop)
         self.first, self.second = "A" * 40, "B" * 40  # Public synthetic certificate fingerprints.
@@ -49,6 +49,20 @@ class SigningConfigurationTests(unittest.TestCase):
     def test_explicit_ci_adhoc_does_not_access_keychain(self):
         with patch.dict(os.environ, {"STUDYPLANNER_ADHOC_SIGN": "1"}), patch.object(signer, "developer_identities") as lookup:
             self.assertIsNone(signer.selected_identity())
+            lookup.assert_not_called()
+
+    def test_local_identity_is_pinned_and_never_silently_regenerated(self):
+        self.assertIsNone(signer.local_identity())
+        signer.LOCAL_CONFIG.write_text(self.first)
+        with patch.object(signer, "run", return_value=f'1) {self.first} "{signer.LOCAL_NAME}"'.encode()):
+            self.assertEqual(signer.local_identity(), self.first)
+        with patch.object(signer, "run", return_value=b"0 identities found"):
+            with self.assertRaises(ValueError): signer.local_identity()
+
+    def test_explicit_ci_disables_local_identity_without_keychain_access(self):
+        signer.LOCAL_CONFIG.write_text(self.first)
+        with patch.dict(os.environ, {"STUDYPLANNER_ADHOC_SIGN": "1"}), patch.object(signer, "run") as lookup:
+            self.assertIsNone(signer.local_identity())
             lookup.assert_not_called()
 
 

@@ -55,5 +55,6 @@ fi
 swift Scripts/make-icon.swift "$PWD/dist/StudyPlanner.iconset"
 python3 Scripts/package-icon.py "$PWD/dist/StudyPlanner.iconset" "$app/Contents/Resources/AppIcon.icns"
 python3 Scripts/build-metadata.py stamp "$PWD" "$metadata" "$app/Contents/Info.plist"
+python3 Scripts/build-credential-service.py "$app"
 python3 Scripts/sign-app.py sign "$app"
 echo "应用已生成：$app"

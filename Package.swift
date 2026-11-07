@@ -29,12 +29,14 @@ let package = Package(
     targets: [
         .target(name: "StudyCore"),
         .target(name: "StudyPersistence", dependencies: ["StudyCore"]),
-        .target(name: "StudySync", dependencies: ["StudyCore", "StudyPersistence"]),
+        .target(name: "StudyCredentials"),
+        .target(name: "StudySync", dependencies: ["StudyCore", "StudyPersistence", "StudyCredentials"]),
         .target(name: "AgentPrototype", dependencies: ["StudyCore"]),
-        .executableTarget(name: "StudyPlanner", dependencies: ["StudyCore", "StudyPersistence", "StudySync", "AgentPrototype"], resources: [.process("Resources")]),
+        .executableTarget(name: "StudyPlanner", dependencies: ["StudyCore", "StudyPersistence", "StudySync", "AgentPrototype", "StudyCredentials"], resources: [.process("Resources")]),
         .testTarget(name: "AgentPrototypeTests", dependencies: ["AgentPrototype", "StudyCore"]),
         .testTarget(name: "StudyCoreTests", dependencies: ["StudyCore"]),
         .testTarget(name: "StudyPlannerTests", dependencies: ["StudyPlanner"]),
+        .testTarget(name: "StudyCredentialsTests", dependencies: ["StudyCredentials"]),
         .testTarget(name: "StudySyncTests", dependencies: ["StudySync", "StudyCore", "StudyPersistence"]),
         .testTarget(name: "StudyPersistenceTests", dependencies: ["StudyPersistence", "StudyCore"])
     ]

@@ -3,6 +3,7 @@ import AppKit
 import StudyCore
 import UserNotifications
 import AgentPrototype
+import StudyCredentials
 
 @MainActor final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -81,6 +82,19 @@ struct StudyPlannerApp: App {
 @main enum NetdiskProbeMain {
     static func main() async {
         let arguments = CommandLine.arguments
+        // Package acceptance uses only a UUID-named, fixed synthetic value in its own namespace.
+        // This branch never initializes PlannerStore or reads a saved account/API credential.
+        if arguments.contains("--credential-probe") {
+            guard arguments.count == 4, arguments[1] == "--credential-probe",
+                  let operation = CredentialRequest.Operation(rawValue: arguments[2]), operation != .ping,
+                  UUID(uuidString: arguments[3]) != nil else { exit(2) }
+            let (value, status) = CredentialClient.perform(.init(operation, service: "local.studyplanner.credential-probe",
+                account: arguments[3], value: operation == .save ? CredentialRequest.fixture : nil, interactive: false))
+            guard status == 0, operation != .load || value == CredentialRequest.fixture else {
+                print("CREDENTIAL_PROBE_STATUS=\(status)"); exit(3)
+            }
+            print("CREDENTIAL_PROBE_OK"); return
+        }
         if arguments.contains("--version") {
             print(AppBuildInfo.current.diagnosticDescription)
             return

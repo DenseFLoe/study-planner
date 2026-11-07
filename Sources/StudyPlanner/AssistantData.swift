@@ -1,6 +1,7 @@
 import Foundation
 import CryptoKit
 import Security
+import StudyCredentials
 
 enum AssistantError: String, Error, LocalizedError {
     case configuration = "请填写 HTTPS 服务地址和模型名称；地址不能含账号、查询参数或片段。"
@@ -101,29 +102,19 @@ enum AssistantSecrets {
 
 /// Deliberately separate service: never reads or overwrites prior assistant/account credentials.
 enum AssistantVault {
-    private static func query(_ config: AssistantConfiguration) throws -> [String: Any] {
+    private static func account(_ config: AssistantConfiguration) throws -> String {
         let destination = try config.endpoint().absoluteString
-        return [kSecClass as String: kSecClassGenericPassword,
-                kSecAttrService as String: "local.studyplanner.assistant.sdk-v2",
-                kSecAttrAccount as String: assistantHash(Data((config.provider.rawValue + destination).utf8)),
-                kSecAttrSynchronizable as String: false]
+        return assistantHash(Data((config.provider.rawValue + destination).utf8))
     }
     static func load(_ config: AssistantConfiguration) throws -> String {
-        var query = try query(config); query[kSecReturnData as String] = true
-        query[kSecMatchLimit as String] = kSecMatchLimitOne
-        var value: CFTypeRef?
-        guard SecItemCopyMatching(query as CFDictionary, &value) == errSecSuccess,
-              let data = value as? Data, let key = String(data: data, encoding: .utf8) else { throw AssistantError.keychain }
+        let (data, status) = CredentialClient.perform(.init(.load, service: "local.studyplanner.assistant.sdk-v2", account: try account(config)))
+        guard status == errSecSuccess, let data, let key = String(data: data, encoding: .utf8) else { throw AssistantError.keychain }
         try AssistantSecrets.validateKey(key); return key
     }
     static func save(_ key: String, config: AssistantConfiguration) throws {
         try AssistantSecrets.validateKey(key)
-        let query = try query(config), data = Data(key.utf8)
-        let result = SecItemUpdate(query as CFDictionary, [kSecValueData as String: data] as CFDictionary)
-        if result == errSecSuccess { return }
-        var item = query; item[kSecValueData as String] = data
-        item[kSecAttrAccessible as String] = kSecAttrAccessibleWhenUnlockedThisDeviceOnly
-        guard result == errSecItemNotFound, SecItemAdd(item as CFDictionary, nil) == errSecSuccess else { throw AssistantError.keychain }
+        let (_, status) = CredentialClient.perform(.init(.save, service: "local.studyplanner.assistant.sdk-v2", account: try account(config), value: Data(key.utf8)))
+        guard status == errSecSuccess else { throw AssistantError.keychain }
     }
 }
 

@@ -21,7 +21,15 @@ macOS 14 及以上（Apple Silicon）可使用 macOS 版本；Android 8.0 及以
 
 也可在 Xcode 中打开 `Package.swift`，选择 StudyPlanner 运行。`build-app.sh` 与 `build-dmg.sh` 默认 Release；传入 `debug` 可构建调试版。打包会优先使用本机唯一的有效 `Developer ID Application` 签名身份，也可运行 `python3 Scripts/sign-app.py configure <证书SHA-1指纹>` 固定身份（指纹不是私钥）。配置只存入本机 `~/Library/Application Support/StudyPlannerBuild/signing-identity.txt`，私钥留在钥匙串；也支持环境变量 `STUDYPLANNER_SIGN_IDENTITY`。已配置证书缺失或失效时停止打包，不回退到临时签名。CI 使用显式的 `STUDYPLANNER_ADHOC_SIGN=1`。
 
-未配置且没有 Developer ID 时仍生成临时 ad-hoc 签名包，并打印提示；这种包升级后可能再次逐项询问钥匙串密码。“始终允许”不能保证跨版本沿用：现代 macOS 对非 Apple 开发者签名仍按版本哈希隔离钥匙串，自签名证书也不能解决这一点。真正的跨版本授权需要同一开发者团队的 Apple 签名；首次从旧临时签名迁移仍可能需要重新允许。导入证书及私钥后可运行 `python3 Scripts/test-signing.py`，用临时合成条目验证两个版本间无需弹窗读取，同时拒绝不同签名。该测试不读取真实凭证，缺少 Developer ID 时明确报告阻塞。签名选择回归检查为 `python3 Scripts/test-signing-config.py`。当前未提供 Developer ID 公证的对外发行版本。
+本机无需付费开发者证书的凭证方案：运行 `python3 Scripts/sign-app.py setup-local` 创建专用自签名身份，私钥只保存在登录钥匙串，公开指纹保存在 `~/Library/Application Support/StudyPlannerBuild/local-vault-identity.txt`；首次签名时可能需要在系统弹窗允许 `codesign` 使用此密钥。已配置的本机身份优先使用；身份丢失时停止打包，不自动重建。该身份用来校验应用与凭证组件之间的调用，不代表 Apple 公证，也不是仅靠自签名解决钥匙串授权。
+
+本机模式会将独立 XPC 凭证组件放入安装包。组件加入当前登录会话，读写既有的云同步、手机配对、网站账号和助手钥匙串条目；不迁移、不导出凭证，不修改原条目的访问列表。两端通过系统 XPC 签名要求互相校验，组件只接受同一签名的 `local.studyplanner.mac`，并限制可访问的服务名和账号。发送凭证前先完成无凭证握手；通信失败不会回退到主程序直接读取。后台网站读取禁止密码弹窗；用户主动存取仍可显示系统授权。
+
+打包缓存位于同一构建目录的 `credential-service-cache`，按组件源码、构建脚本、架构及签名身份校验复用；只更新主程序时组件保持逐字节一致。不要删除这个缓存或重新生成身份，否则可能重新要求授权。组件本身修改时也可能重新询问。首次从旧版切换时，每个已有凭证仍可能要求输入登录密码并选择“始终允许”；正常主程序更新应沿用组件已有的授权。钥匙串被锁定或手动撤销授权仍由系统要求重新认证。
+
+`python3 Scripts/test-credential-service.py` 使用一次性合成条目，验证两个主程序版本无弹窗存取、组件缓存复用、错误签名/标识及替换组件被拒绝、旧凭证拒绝授权时保持完整，并清理测试条目。正式安装包还支持 `--credential-probe <save|load|delete> <UUID>`，仅操作固定假值的专用测试条目，不加载课表或真实凭证。真实旧凭证的首次授权仍需用户从 DMG 安装后完成。
+
+未配置本机组件且没有 Developer ID 时，仍生成临时 ad-hoc 签名包，并打印提示；这类包更新后可能再次逐项询问钥匙串密码。Developer ID 直接访问模式的跨版本合成验证仍为 `python3 Scripts/test-signing.py`；配置回归为 `python3 Scripts/test-signing-config.py`。CI 显式设置 `STUDYPLANNER_ADHOC_SIGN=1`，不读取本机签名配置或打包本机凭证组件。当前未提供 Apple 公证的对外发行版本。
 
 macOS 的「学习日程 → 关于学习日程」显示当前运行应用的版本、构建号、源码标识、构建时间（UTC）和配置。源码标识来自打包时写入的 Git 提交；有未提交修改时附加 `-modified-<源码指纹前12位>`，DMG 文件名也使用该标识，避免覆盖同一提交的干净构建。若打包过程中源码或提交发生变化，构建会停止，待编辑完成后重新运行即可。直接从 Xcode / SwiftPM 运行、或旧包缺少这些信息时显示「未记录」，不会把当前仓库的版本误当成已安装版本。
 

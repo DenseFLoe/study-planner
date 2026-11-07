@@ -1,5 +1,6 @@
 import Foundation
 import Security
+import StudyCredentials
 import CryptoKit
 import StudyCore
 import StudyPersistence
@@ -39,22 +40,16 @@ public struct PairingRequest: Equatable, Sendable {
     }
 }
 public enum PairingVault {
-    private static var query: [String: Any] { [kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: "local.studyplanner.sync", kSecAttrAccount as String: "android"] }
     public static func load() throws -> Pairing? {
-        var q = query; q[kSecReturnData as String] = true; q[kSecMatchLimit as String] = kSecMatchLimitOne
-        var result: CFTypeRef?; let status = SecItemCopyMatching(q as CFDictionary, &result)
+        let (data, status) = CredentialClient.perform(.init(.load, service: "local.studyplanner.sync", account: "android"))
         if status == errSecItemNotFound { return nil }
-        guard status == errSecSuccess, let data = result as? Data else { throw ClientError.message("无法读取配对凭据：\(status)") }
+        guard status == errSecSuccess, let data else { throw ClientError.message("无法读取配对凭据：\(status)") }
         return try JSONDecoder().decode(Pairing.self, from: data)
     }
     static func save(_ pairing: Pairing) throws {
         let data = try JSONEncoder().encode(pairing)
-        let status = SecItemUpdate(query as CFDictionary, [kSecValueData as String: data] as CFDictionary)
-        if status == errSecItemNotFound {
-            var q = query; q[kSecValueData as String] = data; q[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
-            let added = SecItemAdd(q as CFDictionary, nil)
-            guard added == errSecSuccess else { throw ClientError.message("无法保存配对凭据：\(added)") }
-        } else if status != errSecSuccess { throw ClientError.message("无法更新配对凭据：\(status)") }
+        let (_, status) = CredentialClient.perform(.init(.save, service: "local.studyplanner.sync", account: "android", value: data))
+        guard status == errSecSuccess else { throw ClientError.message("无法保存配对凭据：\(status)") }
     }
 }
 public enum ClientError: Error, LocalizedError {
