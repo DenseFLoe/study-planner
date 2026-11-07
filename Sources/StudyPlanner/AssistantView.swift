@@ -5,11 +5,20 @@ struct AssistantView: View {
     @Bindable var session: AssistantSession
     @State private var sidebarVisible = true
     @State private var historySearch = ""
-    @State private var conversationToDelete: AssistantConversation?
     @State private var panel: Panel?
-    private enum Panel: String, Identifiable {
-        case history, settings, memories, details, deletion
-        var id: String { rawValue }
+    private enum Panel: Identifiable {
+        case history, settings, memories, details
+        case deletion(AssistantConversation)
+        var id: String {
+            switch self {
+            case .history: "history"
+            case .settings: "settings"
+            case .memories: "memories"
+            case .details: "details"
+            case .deletion(let conversation): "deletion-" + conversation.id.uuidString
+            }
+        }
+        var isDeletion: Bool { if case .deletion = self { true } else { false } }
     }
     var body: some View {
         Group {
@@ -39,7 +48,7 @@ struct AssistantView: View {
             }
             .sheet(item: $panel) { selected in
                 VStack(alignment: .leading, spacing: 14) {
-                    if selected != .deletion {
+                    if !selected.isDeletion {
                         HStack {
                             Spacer()
                             Button("完成") { panel = nil }.keyboardShortcut(.cancelAction)
@@ -47,7 +56,7 @@ struct AssistantView: View {
                     }
                     switch selected {
                     case .history: history
-                    case .deletion: deletionConfirmation
+                    case .deletion(let conversation): deletionConfirmation(conversation)
                     case .settings:
                         Text("API 设置").font(.title2.bold())
                         ScrollView { settings }
@@ -57,12 +66,12 @@ struct AssistantView: View {
                         else { Text("此确认已结束。") }
                     }
                 }.padding(18)
-                    .frame(width: max(320, min(680, geometry.size.width - 36)), height: selected == .deletion ? 300 : max(380, min(650, geometry.size.height - 40)))
+                    .frame(width: max(320, min(680, geometry.size.width - 36)), height: selected.isDeletion ? 300 : max(380, min(650, geometry.size.height - 40)))
                     .interactiveDismissDisabled(session.isDeletingConversation)
             }
         }
         .frame(minWidth: 390, minHeight: 520)
-        .onChange(of: session.approval?.id) { _, _ in if panel == .details { panel = nil } }
+        .onChange(of: session.approval?.id) { _, _ in if panel?.id == "details" { panel = nil } }
     }
     private func header(wide: Bool) -> some View {
         HStack(spacing: 14) {
@@ -115,7 +124,7 @@ struct AssistantView: View {
             }
             Button {
                 session.newConversation(); historySearch = ""
-                if panel == .history { panel = nil }
+                if panel?.id == "history" { panel = nil }
             } label: {
                 Label("新建对话", systemImage: "square.and.pencil").frame(maxWidth: .infinity).padding(.vertical, 5)
             }.buttonStyle(.borderedProminent).disabled(!session.canManageConversations)
@@ -144,7 +153,7 @@ struct AssistantView: View {
         HStack(alignment: .top, spacing: 6) {
             Button {
                 session.select(conversation.id)
-                if panel == .history { panel = nil }
+                if panel?.id == "history" { panel = nil }
             } label: {
                 VStack(alignment: .leading, spacing: 6) {
                     Text(conversation.title).font(.callout.weight(.medium)).lineLimit(2)
@@ -167,15 +176,15 @@ struct AssistantView: View {
             .disabled(!session.canManageConversations)
     }
     private func requestDeletion(_ conversation: AssistantConversation) {
-        conversationToDelete = conversation; panel = .deletion
+        panel = .deletion(conversation)
     }
-    private var deletionConfirmation: some View {
+    private func deletionConfirmation(_ conversation: AssistantConversation) -> some View {
         VStack(alignment: .leading, spacing: 16) {
             Label("删除这段对话？", systemImage: "trash").font(.title2.bold())
-            Text(conversationToDelete?.title ?? "").font(.headline).lineLimit(2)
+            Text(conversation.title).font(.headline).lineLimit(2)
             Text("将永久删除本机的这段聊天记录，已保存的课表和本机记忆仍会保留。已发送到服务商的内容无法撤回。")
                 .font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
-            if conversationToDelete?.id == session.selectedID && session.busy {
+            if conversation.id == session.selectedID && session.busy {
                 Text("当前回答也会停止。").font(.callout).foregroundStyle(.orange)
             }
             Spacer(minLength: 0)
@@ -184,11 +193,10 @@ struct AssistantView: View {
                 Spacer()
                 if session.isDeletingConversation { ProgressView().controlSize(.small) }
                 Button("删除对话", role: .destructive) {
-                    guard let id = conversationToDelete?.id else { return }
                     Task {
-                        let deleted = await session.deleteConversation(id)
+                        let deleted = await session.deleteConversation(conversation.id)
                         if deleted { historySearch = "" }
-                        panel = nil; conversationToDelete = nil
+                        panel = nil
                     }
                 }.buttonStyle(.borderedProminent).tint(.red)
             }.disabled(session.isDeletingConversation)
