@@ -6,6 +6,7 @@ cd "$(dirname "$0")/.."
 
 # Fast packaging/dependency checks run before toolchain builds or downloads.
 python3 Scripts/test-build-metadata.py
+python3 Scripts/test-signing-config.py
 python3 Scripts/test-json-bootstrap.py
 node Android/tests/crawlers.test.js
 bash Android/check-api.sh

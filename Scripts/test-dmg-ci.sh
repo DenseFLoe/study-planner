@@ -5,7 +5,7 @@ cd "$(dirname "$0")/.."
 
 # Reuse the debug build from the test suite; release packaging remains the default
 # for manual build-dmg.sh invocations and user deliverables.
-./Scripts/build-dmg.sh debug
+STUDYPLANNER_ADHOC_SIGN=1 ./Scripts/build-dmg.sh debug
 
 python3 - <<'PY'
 from pathlib import Path

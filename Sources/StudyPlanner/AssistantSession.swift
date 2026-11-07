@@ -33,6 +33,7 @@ import StudyCore
     private(set) var message: String?
     private(set) var historyMessage: String?
     private(set) var isLoadingHistory = false
+    private(set) var isDeletingConversation = false
     private(set) var evidence: [AssistantToolEvidence] = []
     let simulated: Bool
     @ObservationIgnored private let historyWriter: AssistantHistoryWriter
@@ -50,6 +51,7 @@ import StudyCore
     @ObservationIgnored private var runID: UUID?
     @ObservationIgnored private var knownKeys = Set<String>()
     @ObservationIgnored private var changeWaiters: [CheckedContinuation<Void, Never>] = []
+    @ObservationIgnored private var deletionWaiters: [CheckedContinuation<Void, Never>] = []
 
     init(historyStore: (any AssistantHistoryPersistence)? = AssistantHistoryStore.local, directory: URL? = AssistantRunner.bundledDirectory,
          simulated: Bool = false, snapshot: @escaping @MainActor () -> AssistantSnapshot?,
@@ -84,8 +86,9 @@ import StudyCore
     }
     func waitUntilReady() async { await historyLoadTask?.value }
     var entries: [AssistantChatEntry] { conversations.first { $0.id == selectedID }?.entries ?? [] }
-    var canRetry: Bool { !busy && !applyingChange && historyWritable && entries.contains { $0.role == "你" } }
-    var canSend: Bool { !busy && !applyingChange && historyWritable && !question.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+    var canRetry: Bool { !busy && canManageConversations && entries.contains { $0.role == "你" } }
+    var canManageConversations: Bool { historyWritable && !isLoadingHistory && !applyingChange && !isDeletingConversation }
+    var canSend: Bool { !busy && canManageConversations && !question.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
     var enabledMemoryCount: Int { memories.filter(\.enabled).count }
     @discardableResult func saveMemory(id: UUID? = nil, text: String, enabled: Bool) -> Bool {
         do {
@@ -120,15 +123,46 @@ import StudyCore
         for secret in knownKeys { try AssistantSecrets.check(text, key: secret) }
     }
     func newConversation() {
-        guard !isLoadingHistory, !applyingChange else { return }
-        stop(); guard conversations.count < 100 else { message = "最多保留100个对话。"; return }
+        guard canManageConversations else { return }
+        stop(); guard conversations.count < 100 else { message = "最多保留100个对话，请先删除不需要的记录。"; return }
         let value = AssistantConversation(); conversations.insert(value, at: 0); selectedID = value.id
         question = ""; evidence = []; message = nil; activity = "按需查询 · 修改须核对确认"; schedulePersistence()
     }
     func select(_ id: UUID) {
-        guard !isLoadingHistory, !applyingChange else { return }
+        guard canManageConversations else { return }
         guard id != selectedID, conversations.contains(where: { $0.id == id }) else { return }
         stop(); selectedID = id; question = ""; evidence = []; message = nil; activity = "按需查询 · 修改须核对确认"; schedulePersistence()
+    }
+    @discardableResult func deleteConversation(_ id: UUID) async -> Bool {
+        guard canManageConversations, conversations.contains(where: { $0.id == id }) else { return false }
+        let wasSelected = selectedID == id
+        if wasSelected { stop() } // Invalidates approval and ignores even a late transport response.
+        guard let index = conversations.firstIndex(where: { $0.id == id }) else { return false }
+        let removed = conversations[index]
+        isDeletingConversation = true
+        defer {
+            isDeletingConversation = false
+            let waiters = deletionWaiters; deletionWaiters = []
+            for waiter in waiters { waiter.resume() }
+        }
+        conversations.remove(at: index)
+        var placeholderID: UUID?
+        if conversations.isEmpty {
+            let placeholder = AssistantConversation()
+            conversations = [placeholder]; placeholderID = placeholder.id
+        }
+        if wasSelected {
+            selectedID = conversations.max(by: { $0.updatedAt < $1.updatedAt })!.id
+            question = ""; evidence = []; message = nil; activity = "按需查询 · 修改须核对确认"
+        }
+        if await persistInBackground() { return true }
+        // Restore only this deletion, retaining any newer answer/configuration changes.
+        if let placeholderID { conversations.removeAll { $0.id == placeholderID } }
+        conversations.insert(removed, at: min(index, conversations.count))
+        if wasSelected { selectedID = id }
+        message = "对话删除未保存，记录已恢复。请稍后重试。"
+        schedulePersistence() // Ordered after any snapshots queued while deletion was saving.
+        return false
     }
     func useProvider(_ provider: AssistantProvider) {
         configuration = .init(provider: provider, baseURL: provider.baseURL, model: "")
@@ -227,7 +261,7 @@ import StudyCore
         schedulePersistence()
     }
     func confirmChange(_ id: UUID) async {
-        guard !busy, !applyingChange, let change = pendingChange, change.id == id else { return }
+        guard !busy, !applyingChange, !isDeletingConversation, let change = pendingChange, change.id == id else { return }
         do {
             guard let snapshot = snapshotProvider() else { throw AssistantError.changed }
             try change.validate(snapshot: snapshot)
@@ -250,7 +284,7 @@ import StudyCore
         await persistInBackground()
     }
     func undoLastChange() async {
-        guard !busy, !applyingChange, let undo = undoChange else { return }
+        guard !busy, !applyingChange, !isDeletingConversation, let undo = undoChange else { return }
         guard let current = snapshotProvider(), current.state == undo.after else {
             message = "修改后日程已有更新，不能直接撤销以免覆盖新数据。请到「数据与备份」核对修改前的自动备份。"; return
         }
@@ -308,6 +342,7 @@ import StudyCore
     func prepareToQuit() async -> Bool {
         stop(); key = ""
         if applyingChange { await withCheckedContinuation { changeWaiters.append($0) } }
+        if isDeletingConversation { await withCheckedContinuation { deletionWaiters.append($0) } }
         await waitUntilReady()
         guard historyWritable else { return true } // Preserve an unreadable original file.
         return await persistInBackground()

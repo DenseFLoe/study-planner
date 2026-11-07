@@ -2,6 +2,7 @@
 set -euo pipefail
 cd "${0:A:h:h}"
 configuration="${1:-release}"
+python3 Scripts/sign-app.py check
 metadata="$(mktemp "${TMPDIR:-/tmp}/study-planner-build.XXXXXX")"
 trap 'rm -f "$metadata"' EXIT
 python3 Scripts/build-metadata.py capture "$PWD" "$configuration" "$metadata"
@@ -54,5 +55,5 @@ fi
 swift Scripts/make-icon.swift "$PWD/dist/StudyPlanner.iconset"
 python3 Scripts/package-icon.py "$PWD/dist/StudyPlanner.iconset" "$app/Contents/Resources/AppIcon.icns"
 python3 Scripts/build-metadata.py stamp "$PWD" "$metadata" "$app/Contents/Info.plist"
-codesign --force --sign - "$app"
+python3 Scripts/sign-app.py sign "$app"
 echo "应用已生成：$app"

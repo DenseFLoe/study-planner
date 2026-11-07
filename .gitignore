@@ -35,3 +35,8 @@ Server/.env
 Server/token
 Server/*.key
 Server/*.pem
+
+# Local Python tooling caches and signing material
+__pycache__/
+*.p12
+*.pfx
