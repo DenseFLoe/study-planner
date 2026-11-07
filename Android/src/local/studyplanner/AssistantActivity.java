@@ -8,7 +8,6 @@ import android.view.*;
 import android.widget.*;
 import android.text.*;
 import org.json.*;
-import java.io.File;
 import java.text.Normalizer;
 import java.util.*;
 import static local.studyplanner.AssistantProtocol.*;
@@ -17,18 +16,18 @@ import static local.studyplanner.AssistantProtocol.*;
 public final class AssistantActivity extends Activity {
     private static AssistantSession shared;
     AssistantSession session;AssistantSession.State state;AssistantSession.View observer;
-    LinearLayout root,chat,actions;ScrollView scroll;EditText question;TextView status,heading;Button send,stop,historyButton,apiButton,memoryButton,newButton,undo;
+    LinearLayout root,chat,actions;ScrollView scroll;EditText question;TextView status,heading;Button send,stop,retry,historyButton,apiButton,memoryButton,newButton,undo;
     boolean foreground,applying,rendering;int shown=40;String selected="",lastEntry="";final List<EditText> secretFields=new ArrayList<>();
     static synchronized AssistantSession get(Context context)throws Exception{
         if(shared==null){Context app=context.getApplicationContext();Contract contract=new Contract(new JSONObject(read(app.getAssets().open("assistant-contract.json"),100000)));
-            shared=new AssistantSession(new AssistantHistory(new File(app.getFilesDir(),"assistant/workspace-v1.json"),contract),PlannerRuntime.get(app).database,new AssistantRunner.HTTP(),()->{
+            shared=new AssistantSession(new AssistantHistory(app.getFilesDir(),contract),PlannerRuntime.get(app).database,new AssistantRunner.HTTP(),()->{
                 app.sendBroadcast(new Intent(CloudSync.ACTION).setPackage(app.getPackageName()).putExtra("changed",true));CloudSync.get(app).request(null);
             });
         }return shared;
     }
     @Override public void onCreate(Bundle saved){super.onCreate(saved);getWindow().addFlags(WindowManager.LayoutParams.FLAG_SECURE);getWindow().setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE);build();
         observer=value->runOnUiThread(()->{if(foreground&&!isDestroyed())render(value);});
-        new Thread(()->{try{AssistantSession ready=get(this);runOnUiThread(()->{if(isDestroyed())return;session=ready;if(foreground)session.attach(observer);});}catch(Exception error){runOnUiThread(()->status.setText("助手未能打开，本机日程未改变。请重新打开或检查安装包。"));}},"assistant-open").start();
+        new Thread(()->{try{AssistantSession ready=get(this);runOnUiThread(()->{if(isDestroyed())return;session=ready;if(foreground)session.attach(observer);});}catch(Exception error){runOnUiThread(()->{if(isDestroyed())return;status.setText("助手未能打开，本机日程未改变。请点击“重新读取聊天”重试或检查安装包。");retry.setEnabled(true);});}},"assistant-open").start();
     }
     @Override protected void onStart(){super.onStart();foreground=true;if(session!=null)session.attach(observer);}
     @Override protected void onStop(){foreground=false;for(EditText field:secretFields)field.setText("");secretFields.clear();if(session!=null)session.detach(observer);super.onStop();}
@@ -47,8 +46,13 @@ public final class AssistantActivity extends Activity {
         status=text("正在读取本机聊天…",13);root.addView(status);scroll=new ScrollView(this);scroll.setFillViewport(true);chat=column();scroll.addView(chat);root.addView(scroll,new LinearLayout.LayoutParams(-1,0,1));
         question=new EditText(this);question.setHint("询问日程，或说明你想怎样调整");question.setMinLines(2);question.setMaxLines(5);question.setGravity(Gravity.TOP);question.setSaveEnabled(false);question.setImportantForAutofill(View.IMPORTANT_FOR_AUTOFILL_NO_EXCLUDE_DESCENDANTS);question.setInputType(android.text.InputType.TYPE_CLASS_TEXT|android.text.InputType.TYPE_TEXT_FLAG_MULTI_LINE|android.text.InputType.TYPE_TEXT_FLAG_CAP_SENTENCES);root.addView(question);
         question.addTextChangedListener(new TextWatcher(){public void beforeTextChanged(CharSequence s,int start,int count,int after){}public void onTextChanged(CharSequence s,int start,int before,int count){if(!rendering&&state!=null&&state.busy&&session!=null)session.stop();}public void afterTextChanged(Editable e){}});
-        actions=row();send=button("发送",()->{String text=question.getText().toString();if(!text.trim().isEmpty()&&session!=null){session.send(text);}});stop=button("停止",()->session.stop());Button retry=button("重试上次问题",()->{try{JSONArray entries=AssistantHistory.selected(state.workspace).getJSONArray("entries");for(int i=entries.length()-1;i>=0;i--)if(entries.getJSONObject(i).getString("role").equals("你")){session.send(entries.getJSONObject(i).getString("text"));break;}}catch(Exception ignored){}});actions.addView(send);actions.addView(stop);actions.addView(retry);root.addView(actions);
-        send.setEnabled(false);newButton.setEnabled(false);historyButton.setEnabled(false);apiButton.setEnabled(false);memoryButton.setEnabled(false);undo.setEnabled(false);
+        actions=row();send=button("发送",()->{String text=question.getText().toString();if(!text.trim().isEmpty()&&session!=null){session.send(text);}});stop=button("停止",()->session.stop());retry=button("重新读取聊天",this::retry);actions.addView(send);actions.addView(stop);actions.addView(retry);root.addView(actions);
+        for(Button b:new Button[]{send,stop,retry,newButton,historyButton,apiButton,memoryButton,undo})b.setEnabled(false);question.setEnabled(false);undo.setVisibility(View.GONE);
+    }
+    void retry(){
+        if(session==null){recreate();return;}
+        if(state==null||!state.ready){session.reloadHistory();return;}
+        try{JSONArray entries=AssistantHistory.selected(state.workspace).getJSONArray("entries");for(int i=entries.length()-1;i>=0;i--)if(entries.getJSONObject(i).getString("role").equals("你")){session.send(entries.getJSONObject(i).getString("text"));break;}}catch(Exception error){notice(HISTORY);}
     }
     LinearLayout card(){LinearLayout box=column();box.setPadding(dp(12),dp(10),dp(12),dp(10));android.graphics.drawable.GradientDrawable bg=new android.graphics.drawable.GradientDrawable();bg.setColor(0xffffffff);bg.setCornerRadius(dp(12));box.setBackground(bg);LinearLayout.LayoutParams params=new LinearLayout.LayoutParams(-1,-2);params.setMargins(0,dp(6),0,dp(6));chat.addView(box,params);return box;}
     void render(AssistantSession.State value){
@@ -57,6 +61,7 @@ public final class AssistantActivity extends Activity {
             JSONObject conversation=AssistantHistory.selected(value.workspace);String current=conversation.getString("id");if(!current.equals(selected)){selected=current;shown=40;question.setText("");lastEntry="";}
             JSONArray entries=conversation.getJSONArray("entries");if(value.busy&&(previous==null||!previous.busy))question.setText("");
             status.setText(value.message.isEmpty()?value.activity:value.message);send.setEnabled(value.ready&&!value.busy&&!value.saving);question.setEnabled(value.ready&&!value.saving);stop.setEnabled(value.busy);
+            retry.setText(value.ready?"重试上次问题":"重新读取聊天");retry.setEnabled(!value.busy&&!value.saving&&(!value.ready||entries.length()>0));
             for(Button b:new Button[]{newButton,historyButton,apiButton,memoryButton})b.setEnabled(value.ready&&!value.saving);undo.setVisibility(value.undo?View.VISIBLE:View.GONE);undo.setEnabled(value.undo&&!value.busy&&!value.saving);
             chat.removeAllViews();if(entries.length()==0){LinearLayout intro=card();intro.addView(text("用自然语言查看和调整学习日程",21));intro.addView(text("可以问“今天有哪些安排”“这周实际学了多久”，也可以提出课程或事项修改。发送前核对接收方和课表范围；修改预览另行确认后才会保存。",15));intro.addView(text("API 密钥、聊天和记忆只保存在此手机，不进入课表同步或日程备份。",13));}
             int first=Math.max(0,entries.length()-shown);if(first>0)chat.addView(button("显示更早消息（还有 "+first+" 条）",()->{shown+=40;render(state);}));

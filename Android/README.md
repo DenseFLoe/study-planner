@@ -8,6 +8,8 @@
 
 范围、验证边界和手机操作步骤见 [功能对照](FEATURE_PARITY.md#2026-11-07-智能助手)。开发使用模拟服务，不调用真实 API；真实接口、手机界面与 Keystore 仍需设备验收。隔离 SQLite 检查入口为 `adb shell am instrument -w local.studyplanner.synctests/local.studyplanner.AssistantInstrumentation`，只在测试设备安装设备测试 APK 后运行，不打开正式日程或聊天目录。
 
+修复助手首次打开时按钮全灰：聊天路径检查以系统提供的应用私有目录为边界，兼容 Android 的系统目录别名，仍拒绝聊天文件及其私有子目录的异常符号链接。聊天读取失败时可点「重新读取聊天」，不会覆盖原文件；正常载入后，无需先填写 API 密钥即可打开「API 设置」「新对话」「聊天记录」「本机记忆」。桌面回归覆盖系统别名、内部链接拒绝和失败后重试。设备原生按钮检查入口为 `adb shell am instrument -w local.studyplanner.synctests/local.studyplanner.AssistantStartupInstrumentation`，使用隔离聊天目录与内存日程，不连接 API；设备检查尚待实际运行。
+
 ## 1.6.3 更新（2026-10-30）
 
 新增浮动课程的具体预估起止时间、全局同步旋转提示，以及固定课表的本机文字识别；修复保存课表的风险核算和课程编辑删除课节时的进度保护。课程页的极限压缩方案只展示新版 Mac 经云同步传来的结果，不在手机计算，也不修改正式课表；手机输入变化后旧结果标为“待更新”。学习监督仅支持 Mac，Android 明确不加入，后续宽泛的功能对齐要求也不能覆盖此边界。范围与手机验收见 [功能对照](FEATURE_PARITY.md)。

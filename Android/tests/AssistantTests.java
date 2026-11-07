@@ -128,27 +128,56 @@ public final class AssistantTests {
         for(String endpoint:new String[]{"http://fixture.invalid","https://EXAMPLE_USERNAME:EXAMPLE_PASSWORD@fixture.invalid","https://fixture.invalid/?q=value","https://fixture.invalid/#fragment"})rejects(()->new Configuration(input("baseURL",endpoint,"model","fixture")).endpoint(),"Invalid recipient accepted");
         Path directory=temporary("study-assistant-tests-");
         try{
-            File file=directory.resolve("workspace.json").toFile();AssistantHistory history=new AssistantHistory(file,contract);JSONObject workspace=history.load();history.save(workspace,Collections.emptySet());check(history.load().getJSONArray("conversations").length()==1,"History roundtrip failed");
+            AssistantHistory history=new AssistantHistory(directory.toFile(),contract);File file=history.file;JSONObject workspace=history.load();history.save(workspace,Collections.emptySet());check(history.load().getJSONArray("conversations").length()==1,"History roundtrip failed");
             JSONObject conversation=AssistantHistory.selected(workspace);conversation.getJSONArray("entries").put(input("id",Planner.id(),"role","你","text","合成问题","status","处理中"));history.save(workspace,Collections.emptySet());check(AssistantHistory.selected(history.load()).getJSONArray("entries").getJSONObject(0).getString("status").contains("中断"),"Interrupted chat resumed");
             String original=new String(Files.readAllBytes(file.toPath()),java.nio.charset.StandardCharsets.UTF_8);workspace.getJSONArray("memories").put(input("id",Planner.id(),"text","fixture-auth-value","enabled",false));rejects(()->history.save(workspace,Collections.singleton("fixture-auth-value")),"Known key persisted in memory");check(original.equals(new String(Files.readAllBytes(file.toPath()),java.nio.charset.StandardCharsets.UTF_8)),"Failed save damaged file");
             Files.write(file.toPath(),"broken-json".getBytes(java.nio.charset.StandardCharsets.UTF_8));rejects(history::load,"Corrupt history accepted");check(Files.size(file.toPath())==11,"Corrupt original replaced");
             Files.delete(file.toPath());Files.createSymbolicLink(file.toPath(),directory.resolve("other.json"));rejects(history::load,"History symlink followed");
         }finally{try(java.util.stream.Stream<Path> paths=Files.walk(directory)){paths.sorted(Comparator.reverseOrder()).forEach(p->{try{Files.deleteIfExists(p);}catch(Exception ignored){}});}}
     }
+    static void startupPaths()throws Exception{
+        Path base=temporary("assistant-android-path-tests-");
+        try{
+            Path actual=Files.createDirectories(base.resolve("data/data/local.studyplanner.android/files"));Files.createDirectories(base.resolve("data/user"));
+            Path alias=Files.createSymbolicLink(base.resolve("data/user/0"),base.resolve("data/data"));
+            AssistantHistory history=new AssistantHistory(alias.resolve("local.studyplanner.android/files").toFile(),contract);
+            JSONObject workspace=history.load();check(workspace.getJSONArray("conversations").length()==1,"Android system alias blocked first launch");
+            history.save(workspace,Collections.emptySet());check(history.file.toPath().equals(actual.resolve("assistant/workspace-v1.json")),"Workspace escaped canonical private files");
+            check(history.load().getString("selectedID").equals(workspace.getString("selectedID")),"Workspace through system alias did not roundtrip");
+            Path original=history.file.toPath(),kept=base.resolve("preserved.json");Files.move(original,kept);Files.createSymbolicLink(original,kept);
+            rejects(history::load,"Workspace file symlink accepted under system alias");rejects(()->history.save(workspace,Collections.emptySet()),"Workspace file symlink overwritten");Files.delete(original);Files.move(kept,original);
+            Path directory=original.getParent(),relocated=base.resolve("relocated");Files.move(directory,relocated);Files.createSymbolicLink(directory,relocated);
+            String before=new String(Files.readAllBytes(relocated.resolve("workspace-v1.json")),java.nio.charset.StandardCharsets.UTF_8);
+            rejects(history::load,"Assistant directory symlink accepted");rejects(()->history.save(workspace,Collections.emptySet()),"Assistant directory symlink followed on save");
+            check(before.equals(new String(Files.readAllBytes(relocated.resolve("workspace-v1.json")),java.nio.charset.StandardCharsets.UTF_8)),"Rejected directory link changed history");
+        }finally{try(java.util.stream.Stream<Path> paths=Files.walk(base)){paths.sorted(Comparator.reverseOrder()).forEach(p->{try{Files.deleteIfExists(p);}catch(Exception ignored){}});}}
+    }
+    static void startupRecovery()throws Exception{
+        Path dir=temporary("assistant-startup-recovery-");AssistantHistory history=new AssistantHistory(dir.toFile(),contract);history.save(history.load(),Collections.emptySet());
+        Path file=history.file.toPath();byte[] valid=Files.readAllBytes(file);Files.write(file,"broken-json".getBytes(java.nio.charset.StandardCharsets.UTF_8));Store store=new Store(fixture());AtomicInteger requests=new AtomicInteger();
+        AssistantSession s=new AssistantSession(history,store,(r,k,t)->{requests.incrementAndGet();throw new AssertionError("Startup called API");},()->{});
+        try{
+            s.queue.submit(()->{}).get();check(s.queue.submit(()->!s.ready&&s.message.contains("重新读取聊天")).get(),"Load failure has no recovery action");
+            s.reloadHistory();s.queue.submit(()->{}).get();check(Files.size(file)==11&&!s.queue.submit(()->s.ready).get(),"Retry overwrote unreadable history");
+            Files.write(file,valid);s.reloadHistory();s.queue.submit(()->{}).get();check(s.queue.submit(()->s.ready&&s.message.isEmpty()&&s.key.isEmpty()).get(),"Retry did not recover without an API key");
+            s.newConversation();s.queue.submit(()->{}).get();check(history.load().getJSONArray("conversations").length()==2,"Recovered session could not save a new conversation");
+            check(store.saves==0&&requests.get()==0,"Loading history changed schedule or called API");
+        }finally{s.queue.shutdownNow();s.network.shutdownNow();try(java.util.stream.Stream<Path> paths=Files.walk(dir)){paths.sorted(Comparator.reverseOrder()).forEach(p->{try{Files.deleteIfExists(p);}catch(Exception ignored){}});}}
+    }
     static void session()throws Exception{
-        Path dir=temporary("assistant-session-tests-");Store store=new Store(fixture());AssistantSession s=new AssistantSession(new AssistantHistory(dir.resolve("workspace.json").toFile(),contract),store,(r,k,t)->response(new JSONArray(),"合成答复"),()->{});
+        Path dir=temporary("assistant-session-tests-");Store store=new Store(fixture());AssistantHistory history=new AssistantHistory(dir.toFile(),contract);AssistantSession s=new AssistantSession(history,store,(r,k,t)->response(new JSONArray(),"合成答复"),()->{});
         try{
             s.queue.submit(()->{}).get();s.configure(configuration("openai").json(),"fixture-auth-value",false,null);s.queue.submit(()->{}).get();check(s.queue.submit(()->s.ready&&!s.key.isEmpty()).get(),"Session configure failed");
             CountDownLatch done=new CountDownLatch(1);s.attach(value->{if(value.approval!=null)s.decide(true);if(!value.busy)try{for(JSONObject e:Planner.list(AssistantHistory.selected(value.workspace).getJSONArray("entries")))if(e.optString("role").equals("助手"))done.countDown();}catch(Exception ignored){}});s.send("合成问题");check(done.await(5,TimeUnit.SECONDS),"Session never finished");
             s.newConversation();s.newConversation();s.queue.submit(()->{}).get();check(s.queue.submit(()->s.workspace.getJSONArray("conversations").length()).get()==3,"New conversation not persisted");
             s.queue.submit(()->{try{Set<String> ids=new HashSet<>();for(JSONObject c:Planner.list(s.workspace.getJSONArray("conversations")))ids.add(c.getString("id"));s.delete(ids);}catch(Exception error){throw new RuntimeException(error);}}).get();s.queue.submit(()->{}).get();check(s.queue.submit(()->s.workspace.getJSONArray("conversations").length()).get()==1,"Delete all didn't create blank chat");
             s.memory("","请简洁回答",false,false);s.queue.submit(()->{}).get();check(s.queue.submit(()->s.workspace.getJSONArray("memories").getJSONObject(0).getBoolean("enabled")).get()==false,"New memory enabled automatically");
-            String selected=s.queue.submit(()->s.workspace.getString("selectedID")).get();Path original=dir.resolve("workspace.json"),preserved=dir.resolve("preserved.json");Files.move(original,preserved);Files.createSymbolicLink(original,preserved);
+            String selected=s.queue.submit(()->s.workspace.getString("selectedID")).get();Path original=history.file.toPath(),preserved=dir.resolve("preserved.json");Files.move(original,preserved);Files.createSymbolicLink(original,preserved);
             s.delete(Collections.singleton(selected));s.queue.submit(()->{}).get();check(s.queue.submit(()->s.workspace.getString("selectedID").equals(selected)).get(),"Failed batch delete wasn't rolled back");Files.delete(original);Files.move(preserved,original);
-            s.detach(s.view);s.queue.submit(()->{}).get();check(s.queue.submit(()->s.key.isEmpty()).get(),"Closing retained key");check(!new String(Files.readAllBytes(dir.resolve("workspace.json")),java.nio.charset.StandardCharsets.UTF_8).contains("fixture-auth-value"),"Key saved in workspace");
+            s.detach(s.view);s.queue.submit(()->{}).get();check(s.queue.submit(()->s.key.isEmpty()).get(),"Closing retained key");check(!new String(Files.readAllBytes(original),java.nio.charset.StandardCharsets.UTF_8).contains("fixture-auth-value"),"Key saved in workspace");
         }finally{s.queue.shutdownNow();s.network.shutdownNow();try(java.util.stream.Stream<Path> paths=Files.walk(dir)){paths.sorted(Comparator.reverseOrder()).forEach(p->{try{Files.deleteIfExists(p);}catch(Exception ignored){}});}}
     }
     public static void main(String[] args)throws Exception{
-        contract=new Contract(new JSONObject(read(new FileInputStream("Android/build/assets/assistant-contract.json"),100000)));tools();timeChecks();actions();runners();privacyHistory();session();System.out.println("AssistantTests: "+checks+" synthetic checks passed; no real API, credentials or personal data used");
+        contract=new Contract(new JSONObject(read(new FileInputStream("Android/build/assets/assistant-contract.json"),100000)));startupPaths();startupRecovery();tools();timeChecks();actions();runners();privacyHistory();session();System.out.println("AssistantTests: "+checks+" synthetic checks passed; no real API, credentials or personal data used");
     }
 }

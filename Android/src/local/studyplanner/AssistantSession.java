@@ -22,7 +22,13 @@ final class AssistantSession {
     final Set<String> knownKeys=new HashSet<>();JSONObject workspace;boolean ready,busy,saving;String key="",message="",activity="正在读取本机聊天…",runID;
     volatile AssistantRunner runner;View view;AssistantActions.Proposal change;AssistantRunner.Request approval;JSONArray findings=new JSONArray();CompletableFuture<Boolean> decision;
     JSONObject undoBefore;String undoAfter,undoTitle;
-    AssistantSession(AssistantHistory history,StateMutation.Store<JSONObject> database,AssistantRunner.Transport transport,Runnable changed){this.history=history;this.database=database;this.transport=transport;this.changed=changed;queue.execute(()->{try{workspace=history.load();ready=true;activity="可发送问题";}catch(Exception error){try{workspace=AssistantHistory.empty();}catch(Exception ignored){}message=HISTORY;}publish();});}
+    AssistantSession(AssistantHistory history,StateMutation.Store<JSONObject> database,AssistantRunner.Transport transport,Runnable changed){this.history=history;this.database=database;this.transport=transport;this.changed=changed;reloadHistory();}
+    void reloadHistory(){queue.execute(()->{
+        if(ready||busy||saving)return;
+        try{workspace=history.load();ready=true;message="";activity="可发送问题";}
+        catch(Exception error){try{workspace=AssistantHistory.empty();}catch(Exception ignored){}message=HISTORY+" 请点击“重新读取聊天”重试。";}
+        publish();
+    });}
     void attach(View view){queue.execute(()->{this.view=view;publish();});}
     void detach(View view){AssistantRunner active=runner;if(active!=null)active.token.cancel();queue.execute(()->{if(this.view==view){this.view=null;stopInternal();key="";}});}
     void publish(){if(view==null||workspace==null)return;try{view.update(new State(this));}catch(Exception error){message=HISTORY;}}

@@ -9,11 +9,21 @@ import static local.studyplanner.AssistantProtocol.*;
 
 /** Private, atomic workspace. Deliberately outside planner state, backup and sync. */
 final class AssistantHistory {
-    final File file;final Contract contract;
-    AssistantHistory(File file,Contract contract){this.file=file;this.contract=contract;}
+    final File root,file;final Contract contract;
+    AssistantHistory(File privateFiles,Contract contract)throws IOException{
+        // Android owns aliases above getFilesDir(), such as /data/user/0. Resolve
+        // that trusted boundary once; reject links only at or inside our files.
+        root=privateFiles.getCanonicalFile();file=new File(root,"assistant/workspace-v1.json");this.contract=contract;
+    }
     static JSONObject conversation()throws Exception{return object("id",Planner.id(),"updatedAt",Planner.now(),"entries",new JSONArray());}
     static JSONObject empty()throws Exception{JSONObject c=conversation();return object("configuration",object("provider","openai","baseURL","https://api.openai.com/v1","model",""),"conversations",new JSONArray().put(c),"selectedID",c.getString("id"),"memories",new JSONArray());}
-    void safePath()throws Exception{for(File p=file;p!=null;p=p.getParentFile())if(Files.isSymbolicLink(p.toPath()))throw new Failure(HISTORY);}
+    void safePath()throws Exception{
+        for(File p=file;p!=null;p=p.getParentFile()){
+            if(Files.isSymbolicLink(p.toPath()))throw new Failure(HISTORY);
+            if(p.equals(root))return;
+        }
+        throw new Failure(HISTORY);
+    }
     JSONObject load()throws Exception {
         safePath();JSONObject value=file.exists()?BoundedJSONFile.read(new FileInputStream(file),8000000,"本机聊天记录"):empty();validate(value,Collections.emptySet());
         for(JSONObject conversation:Planner.list(value.getJSONArray("conversations")))for(JSONObject entry:Planner.list(conversation.getJSONArray("entries")))if(entry.optString("status").equals("处理中"))entry.put("status","上次已中断 · 未续传");
