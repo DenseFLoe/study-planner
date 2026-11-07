@@ -2,6 +2,10 @@ import SwiftUI
 
 /// Small, deterministic Markdown renderer. It never loads images, HTML or remote content.
 enum AssistantMarkdown {
+    /// Hide internal reference tokens in new answers and previously saved conversations.
+    static func answerText(_ text: String) -> String {
+        text.replacingOccurrences(of: #"\[E[0-9]+(?:\s*[,，、]\s*E?[0-9]+)*\]"#, with: "", options: .regularExpression)
+    }
     enum Block: Equatable {
         case paragraph(String), heading(String, Int), item(String, String, Int), quote(String), code(String), table([[String]])
     }
@@ -67,7 +71,7 @@ struct AssistantMarkdownView: View {
     let text: String
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            ForEach(Array(AssistantMarkdown.blocks(text).enumerated()), id: \.offset) { _, block in
+            ForEach(Array(AssistantMarkdown.blocks(AssistantMarkdown.answerText(text)).enumerated()), id: \.offset) { _, block in
                 switch block {
                 case .paragraph(let text): inline(text)
                 case .heading(let text, let level): inline(text).font(level == 1 ? .title3.bold() : .headline).padding(.top, 4)

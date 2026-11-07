@@ -78,6 +78,7 @@ actor AssistantRunner {
     func run(configuration: AssistantConfiguration, messages: [AssistantWireMessage], snapshot: AssistantSnapshot,
              key: String, directory: URL, transport: any AssistantTransport,
              currentSnapshotID: @escaping @MainActor () -> String,
+             scopeAlreadyConfirmed: Bool = false,
              approve: @escaping @MainActor (AssistantApproval) async throws -> Bool,
              activity: @escaping @MainActor (String) -> Void,
              evidence: @escaping @MainActor (AssistantToolEvidence) -> Void,
@@ -118,10 +119,10 @@ actor AssistantRunner {
                              messages: messages, tools: AssistantTools.definitions + AssistantActions.definitions), input.fileHandleForWriting)
         var ready = false, gate = AssistantApprovalGate(), frameIDs = Set<String>()
         var queriedEvidence: [AssistantToolEvidence] = []
-        var scopeConfirmed = false, proposed = false
+        var scopeConfirmed = scopeAlreadyConfirmed, proposed = false
         for try await bytes in frames {
             if cancelled || Task.isCancelled { throw AssistantError.stopped }
-            guard await currentSnapshotID() == snapshot.id else { throw AssistantError.changed }
+            guard await currentSnapshotID() == snapshot.id else { throw AssistantError.snapshotChanged }
             let frame = try JSONDecoder().decode(AssistantFrame.self, from: bytes)
             switch frame.type {
             case "ready":
@@ -143,22 +144,25 @@ actor AssistantRunner {
                     await activity("请确认本轮课表内容")
                     let allow = try await approve(confirmation)
                     if cancelled || Task.isCancelled { gate.cancel(); throw AssistantError.stopped }
-                    guard try gate.decide(id: confirmation.id, request: request, snapshotID: await currentSnapshotID(), allow: allow) else { throw AssistantError.refused }
+                    // Approval covers the turn's query scope. A newer schedule is re-read
+                    // below before sending; the recipient and request remain immutable.
+                    guard try gate.decide(id: confirmation.id, request: request, snapshotID: snapshot.id, allow: allow) else { throw AssistantError.refused }
                     scopeConfirmed = true
                 }
                 if cancelled || Task.isCancelled { gate.cancel(); throw AssistantError.stopped }
-                guard await currentSnapshotID() == snapshot.id else { throw AssistantError.changed }
-                await activity(transport.simulated ? "模拟服务正在回答…" : "等待模型回答…")
+                guard await currentSnapshotID() == snapshot.id else { throw AssistantError.snapshotChanged }
+                await activity(sentRequests == 0 ? "正在分析问题…" : "正在整理查询结果…")
                 sentRequests += 1
                 let response = try await transport.send(request, key: key)
                 if cancelled || Task.isCancelled { throw AssistantError.stopped }
+                guard await currentSnapshotID() == snapshot.id else { throw AssistantError.snapshotChanged }
                 guard response.utf8.count <= 1_048_576 else { throw AssistantError.limit }
                 try AssistantSecrets.check(response, key: key)
                 try Self.write(AssistantReply(id: id, approved: true, body: response), input.fileHandleForWriting)
             case "tool":
                 guard ready, sentRequests > 0, toolCount < 24, let id = frame.id, frameIDs.insert(id).inserted,
                       let name = frame.name, let arguments = frame.input else { throw AssistantError.protocolError }
-                await activity("正在本机查询：\(AssistantTools.definitions.first { $0.name == name }?.description ?? "受限查询")")
+                await activity(AssistantTools.activity(for: name))
                 toolCount += 1
                 let evidenceID = "E\(toolCount)"
                 let previous = queriedEvidence
@@ -170,6 +174,7 @@ actor AssistantRunner {
                     return (try AssistantTools.query(name: name, input: arguments, snapshot: snapshot, id: evidenceID, previous: previous), nil as AssistantChange?)
                 }.value
                 if cancelled || Task.isCancelled { throw AssistantError.stopped }
+                guard await currentSnapshotID() == snapshot.id else { throw AssistantError.snapshotChanged }
                 try AssistantSecrets.check(result.json, key: key)
                 if let change {
                     try AssistantSecrets.check(change.title + change.summary + change.details.joined(separator: "\n"), key: key)

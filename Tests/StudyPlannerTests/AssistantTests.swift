@@ -349,7 +349,7 @@ final class AssistantTests: XCTestCase {
             let requests = await mock.requests; XCTAssertTrue(requests.isEmpty)
         }
     }
-    @MainActor func testSnapshotChangesBeforeApprovalSendNothing() async throws {
+    @MainActor func testSnapshotChangesBeforeApprovalAutomaticallyRequeriesLatestData() async throws {
         var snapshot = AssistantSimulation.snapshot()
         let mock = AssistantMockTransport()
         let session = AssistantSession(historyStore: nil, directory: try runtime(), simulated: true, snapshot: { snapshot }, transportFactory: { mock })
@@ -359,8 +359,14 @@ final class AssistantTests: XCTestCase {
         snapshot = .init(state: state, now: snapshot.now, calendar: snapshot.calendar)
         session.decide(session.approval!.id, allow: true)
         try await waitUntil { !session.busy }
-        let requests = await mock.requests; XCTAssertTrue(requests.isEmpty)
-        XCTAssertEqual(session.message, AssistantError.changed.rawValue)
+        let requests = await mock.requests
+        XCTAssertEqual(requests.count, 7)
+        XCTAssertTrue(requests.last?.body.contains("已变化") == true)
+        XCTAssertNil(session.message)
+        XCTAssertEqual(session.entries.filter { $0.role == "你" }.count, 1)
+        XCTAssertEqual(session.entries.filter { $0.role == "助手" }.count, 1)
+        XCTAssertTrue(session.entries.first?.steps?.contains("课表已更新，正在重新查询…") == true)
+        XCTAssertFalse(session.entries.contains { $0.role == "本机证据" || $0.text.contains("[E1]") })
     }
     @MainActor func testSwitchAndCloseCancelPendingApprovalsAndPreserveHistory() async throws {
         let store = try history(), mock = AssistantMockTransport(), session = try await session(mock, history: store)
@@ -379,6 +385,80 @@ final class AssistantTests: XCTestCase {
         XCTAssertEqual(reopened.conversations.count, 2)
         XCTAssertTrue(reopened.entries.allSatisfy { $0.status != "处理中" })
         let requests = await mock.requests; XCTAssertTrue(requests.isEmpty)
+    }
+    private actor UpdatingTransport: AssistantTransport {
+        nonisolated let simulated = true
+        let mock = AssistantMockTransport(script: [("list_courses", ["offset": "0"])])
+        let update: @MainActor () -> Void
+        init(update: @escaping @MainActor () -> Void) { self.update = update }
+        func send(_ request: AssistantRequest, key: String) async throws -> String {
+            let response = try await mock.send(request, key: key)
+            if await mock.requests.count == 2 { await update() }
+            return response
+        }
+    }
+    @MainActor func testChangeDuringResponseDiscardsOldEvidenceAndPersistsProcessWithoutRepeatingApproval() async throws {
+        let store = try history()
+        var snapshot = AssistantSimulation.snapshot()
+        let updating = UpdatingTransport {
+            var state = snapshot.state; state.courses[0].name = "合成最新课程"
+            snapshot = .init(state: state, now: snapshot.now, calendar: snapshot.calendar)
+        }
+        let final = AssistantMockTransport(script: [("list_courses", ["offset": "0"])])
+        var attempts = 0
+        let session = AssistantSession(historyStore: store, directory: try runtime(), simulated: true, snapshot: { snapshot }, transportFactory: {
+            attempts += 1
+            return attempts == 1 ? updating : final
+        })
+        await session.waitUntilReady()
+        session.configuration = AssistantSimulation.configuration(); session.question = "查看课程进度"; session.send()
+        try await waitUntil { session.approval != nil }
+        session.decide(try XCTUnwrap(session.approval).id, allow: true)
+        try await waitUntil { !session.busy }
+        XCTAssertEqual(attempts, 2)
+        XCTAssertNil(session.message)
+        XCTAssertEqual(session.evidence.count, 1)
+        XCTAssertTrue(session.evidence[0].json.contains("合成最新课程"))
+        let requests = await final.requests
+        XCTAssertFalse(requests[0].body.contains("合成课程 A"))
+        XCTAssertTrue(requests[1].body.contains("合成最新课程"))
+        XCTAssertEqual(session.entries.filter { $0.role == "你" }.count, 1)
+        XCTAssertEqual(session.entries.filter { $0.role == "助手" }.count, 1)
+        XCTAssertTrue(session.entries.first?.steps?.contains("课表已更新，正在重新查询…") == true)
+        let saved = try store.load()
+        XCTAssertEqual(saved.conversations[0].entries[0].steps, session.entries[0].steps)
+        XCTAssertFalse(saved.conversations[0].entries.contains { $0.role == "本机证据" })
+    }
+    @MainActor func testRepeatedScheduleChangesAreBoundedAndNeverPublishStaleAnswer() async throws {
+        var snapshot = AssistantSimulation.snapshot(), attempts = 0
+        let session = AssistantSession(historyStore: nil, directory: try runtime(), simulated: true, snapshot: { snapshot }, transportFactory: {
+            attempts += 1
+            return UpdatingTransport {
+                snapshot = .init(state: snapshot.state, now: snapshot.now, calendar: snapshot.calendar, id: UUID().uuidString)
+            }
+        })
+        session.configuration = AssistantSimulation.configuration(); session.question = "合成连续变化"; session.send()
+        try await waitUntil { session.approval != nil }
+        session.decide(try XCTUnwrap(session.approval).id, allow: true)
+        try await waitUntil { !session.busy }
+        XCTAssertEqual(attempts, 4)
+        XCTAssertTrue(session.evidence.isEmpty)
+        XCTAssertNil(session.pendingChange)
+        XCTAssertFalse(session.entries.contains { $0.role == "助手" })
+        XCTAssertEqual(session.message, AssistantError.snapshotChanged.rawValue)
+    }
+    @MainActor func testLegacyEvidenceIsHiddenAndAnswerReferencesAreRemoved() async throws {
+        let store = try history()
+        let conversation = AssistantConversation(entries: [
+            .init(role: "你", text: "合成问题", status: "完成"),
+            .init(role: "本机证据", text: "合成证据", status: "完成"),
+            .init(role: "助手", text: "已完成60分钟。[E1][E2, E3]", status: "完成")
+        ])
+        try store.save(.init(conversations: [conversation], selectedID: conversation.id))
+        let session = AssistantSession(historyStore: store, simulated: true, snapshot: { nil })
+        await session.waitUntilReady()
+        XCTAssertEqual(session.visibleEntries.map(\.role), ["你", "助手"])
+        XCTAssertEqual(AssistantMarkdown.answerText(session.visibleEntries[1].text), "已完成60分钟。")
     }
     @MainActor func testStoppingInFlightIgnoresLateResponse() async throws {
         let mock = AssistantMockTransport(delay: .seconds(3)), session = try await session(mock)

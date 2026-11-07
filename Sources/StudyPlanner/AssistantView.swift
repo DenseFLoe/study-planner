@@ -5,17 +5,19 @@ struct AssistantView: View {
     @Bindable var session: AssistantSession
     @State private var sidebarVisible = true
     @State private var historySearch = ""
+    @State private var selectingHistory = false
+    @State private var selectedConversations = Set<UUID>()
     @State private var panel: Panel?
     private enum Panel: Identifiable {
         case history, settings, memories, details
-        case deletion(AssistantConversation)
+        case deletion([AssistantConversation])
         var id: String {
             switch self {
             case .history: "history"
             case .settings: "settings"
             case .memories: "memories"
             case .details: "details"
-            case .deletion(let conversation): "deletion-" + conversation.id.uuidString
+            case .deletion(let conversations): "deletion-" + conversations.map(\.id.uuidString).joined(separator: "-")
             }
         }
         var isDeletion: Bool { if case .deletion = self { true } else { false } }
@@ -56,7 +58,7 @@ struct AssistantView: View {
                     }
                     switch selected {
                     case .history: history
-                    case .deletion(let conversation): deletionConfirmation(conversation)
+                    case .deletion(let conversations): deletionConfirmation(conversations)
                     case .settings:
                         Text("API 设置").font(.title2.bold())
                         ScrollView { settings }
@@ -93,6 +95,13 @@ struct AssistantView: View {
                         requestDeletion(conversation)
                     }
                 }.disabled(!session.canManageConversations)
+                Button("多选删除对话…", systemImage: "checklist") {
+                    selectingHistory = true; selectedConversations = []
+                    if wide { sidebarVisible = true } else { panel = .history }
+                }.disabled(!session.canManageConversations)
+                Button("清空全部对话…", systemImage: "trash.slash", role: .destructive) {
+                    panel = .deletion(session.conversations)
+                }.disabled(!session.canManageConversations)
             } label: { Image(systemName: "ellipsis.circle") }
                 .menuStyle(.borderlessButton).fixedSize().help("对话操作").accessibilityLabel("对话操作")
             Button { panel = .settings } label: { Image(systemName: "slider.horizontal.3") }.help("API 设置").accessibilityLabel("API 设置")
@@ -121,6 +130,9 @@ struct AssistantView: View {
                 Text("对话").font(.title3.bold())
                 Spacer()
                 Text("\(session.conversations.count)").font(.caption.monospacedDigit()).foregroundStyle(.secondary)
+                Button(selectingHistory ? "完成" : "多选") {
+                    selectingHistory.toggle(); selectedConversations = []
+                }.buttonStyle(.borderless).disabled(!session.canManageConversations)
             }
             Button {
                 session.newConversation(); historySearch = ""
@@ -136,6 +148,15 @@ struct AssistantView: View {
                         .buttonStyle(.plain).foregroundStyle(.secondary).accessibilityLabel("清除搜索")
                 }
             }.padding(9).background(.primary.opacity(0.04), in: RoundedRectangle(cornerRadius: 9))
+            if selectingHistory {
+                HStack {
+                    Button("全选结果") { selectedConversations.formUnion(filteredConversations.map(\.id)) }
+                    Spacer()
+                    Button("删除已选（\(selectedConversations.count)）", role: .destructive) {
+                        panel = .deletion(session.conversations.filter { selectedConversations.contains($0.id) })
+                    }.disabled(selectedConversations.isEmpty)
+                }.font(.caption).disabled(!session.canManageConversations)
+            }
             ScrollView {
                 LazyVStack(spacing: 5) {
                     ForEach(filteredConversations) { conversation in
@@ -146,23 +167,39 @@ struct AssistantView: View {
                     }
                 }
             }
-            Text("聊天记录仅保存在这台 Mac").font(.caption2).foregroundStyle(.secondary)
+            HStack {
+                Text("聊天记录仅保存在这台 Mac").font(.caption2).foregroundStyle(.secondary)
+                Spacer()
+                Button("清空…", role: .destructive) { panel = .deletion(session.conversations) }
+                    .buttonStyle(.borderless).font(.caption).disabled(!session.canManageConversations)
+            }
         }
     }
     private func conversationRow(_ conversation: AssistantConversation) -> some View {
         HStack(alignment: .top, spacing: 6) {
             Button {
-                session.select(conversation.id)
-                if panel?.id == "history" { panel = nil }
+                if selectingHistory {
+                    if !selectedConversations.insert(conversation.id).inserted { selectedConversations.remove(conversation.id) }
+                } else {
+                    session.select(conversation.id)
+                    if panel?.id == "history" { panel = nil }
+                }
             } label: {
-                VStack(alignment: .leading, spacing: 6) {
-                    Text(conversation.title).font(.callout.weight(.medium)).lineLimit(2)
-                    Text(conversation.entries.last(where: { ["你", "助手"].contains($0.role) })?.text ?? "开始一个新问题")
-                        .font(.caption).foregroundStyle(.secondary).lineLimit(1)
-                    Text(conversation.updatedAt, format: .dateTime.month().day().hour().minute())
-                        .font(.caption2).foregroundStyle(.tertiary)
+                HStack(alignment: .top, spacing: 8) {
+                    if selectingHistory {
+                        Image(systemName: selectedConversations.contains(conversation.id) ? "checkmark.circle.fill" : "circle")
+                            .foregroundStyle(Color.accentColor)
+                    }
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text(conversation.title).font(.callout.weight(.medium)).lineLimit(2)
+                        Text(conversation.entries.last(where: { ["你", "助手"].contains($0.role) })?.text ?? "开始一个新问题")
+                            .font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                        Text(conversation.updatedAt, format: .dateTime.month().day().hour().minute())
+                            .font(.caption2).foregroundStyle(.tertiary)
+                    }
                 }.frame(maxWidth: .infinity, alignment: .leading).contentShape(Rectangle())
             }.buttonStyle(.plain)
+                .accessibilityValue(selectingHistory ? (selectedConversations.contains(conversation.id) ? "已选择" : "未选择") : "")
             Menu {
                 Button("删除对话…", systemImage: "trash", role: .destructive) { requestDeletion(conversation) }
             } label: { Image(systemName: "ellipsis") }
@@ -176,15 +213,16 @@ struct AssistantView: View {
             .disabled(!session.canManageConversations)
     }
     private func requestDeletion(_ conversation: AssistantConversation) {
-        panel = .deletion(conversation)
+        panel = .deletion([conversation])
     }
-    private func deletionConfirmation(_ conversation: AssistantConversation) -> some View {
+    private func deletionConfirmation(_ conversations: [AssistantConversation]) -> some View {
         VStack(alignment: .leading, spacing: 16) {
-            Label("删除这段对话？", systemImage: "trash").font(.title2.bold())
-            Text(conversation.title).font(.headline).lineLimit(2)
-            Text("将永久删除本机的这段聊天记录，已保存的课表和本机记忆仍会保留。已发送到服务商的内容无法撤回。")
+            Label(conversations.count == 1 ? "删除这段对话？" : "删除这 \(conversations.count) 段对话？", systemImage: "trash").font(.title2.bold())
+            Text(conversations.prefix(3).map(\.title).joined(separator: "、") + (conversations.count > 3 ? "等" : ""))
+                .font(.headline).lineLimit(2)
+            Text("删除后无法恢复。课表、设置和本机记忆会保留。")
                 .font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
-            if conversation.id == session.selectedID && session.busy {
+            if conversations.contains(where: { $0.id == session.selectedID }) && session.busy {
                 Text("当前回答也会停止。").font(.callout).foregroundStyle(.orange)
             }
             Spacer(minLength: 0)
@@ -194,8 +232,8 @@ struct AssistantView: View {
                 if session.isDeletingConversation { ProgressView().controlSize(.small) }
                 Button("删除对话", role: .destructive) {
                     Task {
-                        let deleted = await session.deleteConversation(conversation.id)
-                        if deleted { historySearch = "" }
+                        let deleted = await session.deleteConversations(Set(conversations.map(\.id)))
+                        if deleted { historySearch = ""; selectedConversations = []; selectingHistory = false }
                         panel = nil
                     }
                 }.buttonStyle(.borderedProminent).tint(.red)
@@ -232,9 +270,12 @@ struct AssistantView: View {
         ScrollViewReader { proxy in
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 20) {
-                    if session.entries.isEmpty { welcome }
-                    ForEach(session.entries) { entry in
+                    if session.visibleEntries.isEmpty { welcome }
+                    ForEach(session.visibleEntries) { entry in
                         messageRow(entry).id(entry.id)
+                        if let steps = entry.steps, !steps.isEmpty {
+                            AssistantProgressView(steps: steps, status: entry.status)
+                        }
                     }
                     if let message = session.message { Text(message).font(.callout).foregroundStyle(.orange).textSelection(.enabled) }
                     if let message = session.historyMessage { Text(message).font(.callout).foregroundStyle(.red) }
@@ -254,6 +295,7 @@ struct AssistantView: View {
             .onChange(of: session.entries.last?.id) { _, _ in proxy.scrollTo("bottom", anchor: .bottom) }
             .onChange(of: session.approval?.id) { _, _ in proxy.scrollTo("bottom", anchor: .bottom) }
             .onChange(of: session.message) { _, _ in proxy.scrollTo("bottom", anchor: .bottom) }
+            .onChange(of: session.activity) { _, _ in if session.busy { proxy.scrollTo("bottom", anchor: .bottom) } }
         }
     }
     private var welcome: some View {
@@ -286,21 +328,15 @@ struct AssistantView: View {
         HStack(alignment: .top, spacing: 0) {
             if entry.role == "你" { Spacer(minLength: 30) }
             VStack(alignment: .leading, spacing: 9) {
-                if entry.role == "本机证据" {
-                    DisclosureGroup {
-                        ForEach(AssistantDetailNode.parse(entry.text)) { AssistantDetailTree(node: $0) }
-                    } label: { Label("查看本机证据", systemImage: "doc.text.magnifyingglass") }.font(.callout)
-                } else {
-                    HStack(spacing: 8) {
-                        Label(entry.role, systemImage: entry.role == "你" ? "person.crop.circle" : "sparkles")
-                            .font(.caption.bold()).foregroundStyle(.secondary)
-                        if let status = entry.status, status != "完成" {
-                            Text(status).font(.caption).foregroundStyle(.secondary)
-                        }
+                HStack(spacing: 8) {
+                    Label(entry.role, systemImage: entry.role == "你" ? "person.crop.circle" : "sparkles")
+                        .font(.caption.bold()).foregroundStyle(.secondary)
+                    if let status = entry.status, status != "完成" {
+                        Text(status).font(.caption).foregroundStyle(.secondary)
                     }
-                    if entry.role == "助手" { AssistantMarkdownView(text: entry.text) }
-                    else { Text(entry.text).font(.system(size: 15)).lineSpacing(5).textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading) }
                 }
+                if entry.role == "助手" { AssistantMarkdownView(text: entry.text) }
+                else { Text(entry.text).font(.system(size: 15)).lineSpacing(5).textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading) }
             }.padding(16)
                 .frame(maxWidth: entry.role == "你" ? 600 : .infinity, alignment: .leading)
                 .background(entry.role == "你" ? Color.accentColor.opacity(0.09) : Color(nsColor: .controlBackgroundColor),
@@ -382,6 +418,31 @@ struct AssistantView: View {
                 Button("重试上个问题") { session.retry() }.buttonStyle(.borderless).disabled(!session.canRetry)
             }.font(.caption)
         }.padding(14).frame(maxWidth: 820).frame(maxWidth: .infinity).background(Color(nsColor: .windowBackgroundColor))
+    }
+}
+
+private struct AssistantProgressView: View {
+    let steps: [String]
+    let status: String?
+    @State private var expanded = true
+    var body: some View {
+        DisclosureGroup(isExpanded: $expanded) {
+            VStack(alignment: .leading, spacing: 8) {
+                ForEach(Array(steps.enumerated()), id: \.offset) { index, step in
+                    HStack(spacing: 8) {
+                        if index == steps.count - 1 && status == "处理中" {
+                            ProgressView().controlSize(.mini).frame(width: 14)
+                        } else {
+                            Image(systemName: index == steps.count - 1 && status != "完成" ? "pause.circle" : "checkmark.circle")
+                                .frame(width: 14).foregroundStyle(.secondary)
+                        }
+                        Text(step).fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+            }.padding(.top, 8)
+        } label: {
+            Label("查询过程 · \(status == "处理中" ? "进行中" : status == "完成" ? "已完成" : "已停止")", systemImage: "list.bullet")
+        }.font(.caption).foregroundStyle(.secondary).padding(.horizontal, 16)
     }
 }
 

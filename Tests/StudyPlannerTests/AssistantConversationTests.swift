@@ -49,6 +49,41 @@ final class AssistantConversationTests: XCTestCase {
         func load() throws -> AssistantWorkspace { initial }
         func save(_ value: AssistantWorkspace) throws { throw AssistantError.history }
     }
+    @MainActor func testBatchDeleteAndClearAllPersistWithoutChangingSettingsOrMemories() async throws {
+        let store = try history()
+        let records = (0..<5).map { AssistantConversation(entries: [.init(role: "你", text: "合成对话 \($0)", status: "完成")]) }
+        let config = AssistantSimulation.configuration(), memory = AssistantMemory(text: "合成记忆", enabled: true)
+        try store.save(.init(configuration: config, conversations: records, selectedID: records[0].id, memories: [memory]))
+        let session = AssistantSession(historyStore: store, simulated: true, snapshot: { nil })
+        await session.waitUntilReady()
+        let batch = await session.deleteConversations([records[1].id, records[3].id, UUID()])
+        XCTAssertTrue(batch)
+        XCTAssertEqual(session.selectedID, records[0].id)
+        XCTAssertEqual(try store.load().conversations.map(\.id), [records[0].id, records[2].id, records[4].id])
+        let cleared = await session.deleteConversations(Set(session.conversations.map(\.id)))
+        XCTAssertTrue(cleared)
+        let reopened = AssistantSession(historyStore: store, simulated: true, snapshot: { nil })
+        await reopened.waitUntilReady()
+        XCTAssertEqual(reopened.conversations.count, 1)
+        XCTAssertTrue(reopened.entries.isEmpty)
+        XCTAssertFalse(records.map(\.id).contains(reopened.selectedID))
+        XCTAssertEqual(reopened.configuration, config)
+        XCTAssertEqual(reopened.memories.map(\.id), [memory.id])
+    }
+    @MainActor func testFailedBatchDeletionRestoresAllRecordsAndOriginalOrder() async throws {
+        let records = (0..<5).map { AssistantConversation(entries: [.init(role: "你", text: "保留合成对话 \($0)", status: "完成")]) }
+        let session = AssistantSession(historyStore: FailingHistory(initial: .init(conversations: records, selectedID: records[2].id)),
+                                       simulated: true, snapshot: { nil })
+        await session.waitUntilReady()
+        let deleted = await session.deleteConversations([records[0].id, records[2].id, records[4].id])
+        XCTAssertFalse(deleted)
+        XCTAssertEqual(session.conversations.map(\.id), records.map(\.id))
+        XCTAssertEqual(session.selectedID, records[2].id)
+        let cleared = await session.deleteConversations(Set(records.map(\.id)))
+        XCTAssertFalse(cleared)
+        XCTAssertEqual(session.conversations.map(\.id), records.map(\.id))
+        XCTAssertEqual(session.selectedID, records[2].id)
+    }
     @MainActor func testFailedDeletionRestoresOriginalSelectionAndDoesNotKeepPlaceholder() async throws {
         let original = AssistantConversation(entries: [.init(role: "你", text: "必须保留的合成问题", status: "完成")])
         let session = AssistantSession(historyStore: FailingHistory(initial: .init(conversations: [original], selectedID: original.id)),

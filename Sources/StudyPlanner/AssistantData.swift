@@ -12,7 +12,8 @@ enum AssistantError: String, Error, LocalizedError {
     case runtime = "此安装包缺少助手运行时，请使用含助手的 DMG。"
     case protocolError = "助手通信未完成或返回了无效内容，未自动重试。"
     case expired = "确认已过期；请重试并重新核对发送内容。"
-    case changed = "内容、接收方或课表已经变化；原确认已作废，请重新发送。"
+    case changed = "问题或设置已修改，本轮已停止。"
+    case snapshotChanged = "课表仍在更新，稍后可重试查询。"
     case refused = "已拒绝发送，本轮已停止。"
     case stopped = "已停止；已经发出的请求无法撤回，服务商仍可能计费。"
     case network = "接口请求失败或超时；未自动重试。请核对服务地址、模型及账户后重试。"
@@ -124,6 +125,7 @@ struct AssistantChatEntry: Codable, Identifiable, Sendable {
     var role: String
     var text: String
     var status: String?
+    var steps: [String]?
 }
 struct AssistantConversation: Codable, Identifiable, Sendable {
     var id = UUID()

@@ -86,6 +86,7 @@ import StudyCore
     }
     func waitUntilReady() async { await historyLoadTask?.value }
     var entries: [AssistantChatEntry] { conversations.first { $0.id == selectedID }?.entries ?? [] }
+    var visibleEntries: [AssistantChatEntry] { entries.filter { $0.role != "本机证据" } }
     var canRetry: Bool { !busy && canManageConversations && entries.contains { $0.role == "你" } }
     var canManageConversations: Bool { historyWritable && !isLoadingHistory && !applyingChange && !isDeletingConversation }
     var canSend: Bool { !busy && canManageConversations && !question.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
@@ -134,18 +135,22 @@ import StudyCore
         stop(); selectedID = id; question = ""; evidence = []; message = nil; activity = "按需查询 · 修改须核对确认"; schedulePersistence()
     }
     @discardableResult func deleteConversation(_ id: UUID) async -> Bool {
-        guard canManageConversations, conversations.contains(where: { $0.id == id }) else { return false }
-        let wasSelected = selectedID == id
+        await deleteConversations([id])
+    }
+    @discardableResult func deleteConversations(_ ids: Set<UUID>) async -> Bool {
+        guard canManageConversations else { return false }
+        guard conversations.contains(where: { ids.contains($0.id) }) else { return false }
+        let originalSelection = selectedID
+        let wasSelected = ids.contains(selectedID)
         if wasSelected { stop() } // Invalidates approval and ignores even a late transport response.
-        guard let index = conversations.firstIndex(where: { $0.id == id }) else { return false }
-        let removed = conversations[index]
+        let removed = conversations.enumerated().filter { ids.contains($0.element.id) }
         isDeletingConversation = true
         defer {
             isDeletingConversation = false
             let waiters = deletionWaiters; deletionWaiters = []
             for waiter in waiters { waiter.resume() }
         }
-        conversations.remove(at: index)
+        conversations.removeAll { ids.contains($0.id) }
         var placeholderID: UUID?
         if conversations.isEmpty {
             let placeholder = AssistantConversation()
@@ -158,8 +163,8 @@ import StudyCore
         if await persistInBackground() { return true }
         // Restore only this deletion, retaining any newer answer/configuration changes.
         if let placeholderID { conversations.removeAll { $0.id == placeholderID } }
-        conversations.insert(removed, at: min(index, conversations.count))
-        if wasSelected { selectedID = id }
+        for item in removed { conversations.insert(item.element, at: min(item.offset, conversations.count)) }
+        if wasSelected { selectedID = originalSelection }
         message = "对话删除未保存，记录已恢复。请稍后重试。"
         schedulePersistence() // Ordered after any snapshots queued while deletion was saving.
         return false
@@ -191,17 +196,13 @@ import StudyCore
             try checkContent(String(decoding: assistantJSON(configuration), as: UTF8.self))
             _ = try configuration.endpoint()
             if !simulated { try AssistantSecrets.validateKey(key); knownKeys.insert(key) }
-            guard let snapshot = snapshotProvider() else { throw AssistantError.changed }
             guard let directory else { throw AssistantError.runtime }
             let history = entries, memories = memories
-            let transport = transportFactory()
-            guard transport.simulated == simulated else { throw AssistantError.protocolError }
             append(.init(role: "你", text: text, status: "处理中"))
             question = ""; evidence = []; message = nil
             let id = UUID(), conversationID = selectedID, config = configuration, secret = key
             let secrets = knownKeys.union([secret])
-            runID = id; busy = true; activity = "正在准备本机查询…"
-            let runner = AssistantRunner(); self.runner = runner
+            runID = id; busy = true; recordActivity("正在准备查询…")
             work = Task { @MainActor [weak self] in
                 guard let self else { return }
                 do {
@@ -220,27 +221,45 @@ import StudyCore
                     guard self.runID == id else { return }
                     guard await self.persistInBackground() else { throw AssistantError.history }
                     guard self.runID == id else { return }
-                    let answer = try await runner.run(configuration: config, messages: messages, snapshot: snapshot,
-                        key: secret, directory: directory, transport: transport,
-                        currentSnapshotID: { [weak self] in self?.snapshotProvider()?.id ?? "unavailable" },
-                        approve: { [weak self] approval in
-                            guard let self, self.runID == id else { throw AssistantError.stopped }
-                            return try await self.waitForApproval(approval)
-                        }, activity: { [weak self] value in if self?.runID == id { self?.activity = value } },
-                        evidence: { [weak self] value in if self?.runID == id { self?.evidence.append(value) } },
-                        proposal: { [weak self] value in if self?.runID == id { self?.pendingChange = value } })
-                    guard self.runID == id, self.selectedID == conversationID else { return }
-                    self.markPending("完成")
-                    for item in self.evidence { self.append(.init(role: "本机证据", text: item.json, status: "完成")) }
-                    self.append(.init(role: "助手", text: answer, status: "完成"))
-                    self.activity = "回答完成 · 可继续追问"
-                    // Citation presence is only a reference check, never a semantic correctness claim.
-                    let pattern = #"\[E[0-9]+\]"#
-                    let refs = answer.matches(of: try! Regex(pattern)).map { String($0.output[0].substring!) }
-                    let valid = Set(self.evidence.map { "[\($0.id)]" })
-                    if refs.isEmpty || refs.contains(where: { !valid.contains($0) }) {
-                        self.message = "回答缺少有效证据引用，请展开本机证据核对；模型文字尚未作语义核验。"
+                    var answer = "", scopeConfirmed = false, refreshes = 0
+                    while true {
+                        try Task.checkCancellation()
+                        guard self.runID == id else { return }
+                        let snapshot = try await self.freshSnapshot()
+                        let runner = AssistantRunner(); self.runner = runner
+                        let transport = self.transportFactory()
+                        guard transport.simulated == self.simulated else { throw AssistantError.protocolError }
+                        do {
+                            answer = try await runner.run(configuration: config, messages: messages, snapshot: snapshot,
+                                key: secret, directory: directory, transport: transport,
+                                currentSnapshotID: { [weak self] in self?.snapshotProvider()?.id ?? "unavailable" },
+                                scopeAlreadyConfirmed: scopeConfirmed,
+                                approve: { [weak self] approval in
+                                    guard let self, self.runID == id else { throw AssistantError.stopped }
+                                    let allow = try await self.waitForApproval(approval)
+                                    if allow { scopeConfirmed = true }
+                                    return allow
+                                }, activity: { [weak self] value in if self?.runID == id { self?.recordActivity(value) } },
+                                evidence: { [weak self] value in if self?.runID == id { self?.evidence.append(value) } },
+                                proposal: { [weak self] value in if self?.runID == id { self?.pendingChange = value } })
+                            guard self.runID == id else { return }
+                            guard self.snapshotProvider()?.id == snapshot.id else { throw AssistantError.snapshotChanged }
+                            break
+                        } catch AssistantError.snapshotChanged {
+                            guard self.runID == id else { return }
+                            self.evidence = []; self.pendingChange = nil
+                            // Bound automatic re-queries so continuous edits cannot incur unlimited requests.
+                            guard refreshes < 3 else { throw AssistantError.snapshotChanged }
+                            refreshes += 1
+                            self.recordActivity("课表已更新，正在重新查询…")
+                            try await Task.sleep(for: .milliseconds(250))
+                        }
                     }
+                    guard self.runID == id, self.selectedID == conversationID else { return }
+                    self.recordActivity("查询完成")
+                    self.markPending("完成")
+                    self.append(.init(role: "助手", text: AssistantMarkdown.answerText(answer), status: "完成"))
+                    self.activity = "回答完成 · 可继续追问"
                 } catch {
                     guard self.runID == id else { return }
                     self.pendingChange = nil
@@ -253,6 +272,24 @@ import StudyCore
                 self.finish()
             }
         } catch { message = AssistantError.safe(error).rawValue }
+    }
+    private func freshSnapshot() async throws -> AssistantSnapshot {
+        let deadline = ContinuousClock.now.advanced(by: .seconds(30))
+        while true {
+            try Task.checkCancellation()
+            if let snapshot = snapshotProvider() { return snapshot }
+            guard ContinuousClock.now < deadline else { throw AssistantError.snapshotChanged }
+            recordActivity("正在等待课表更新完成…")
+            try await Task.sleep(for: .milliseconds(100))
+        }
+    }
+    private func recordActivity(_ value: String) {
+        activity = value
+        guard let index = conversations.firstIndex(where: { $0.id == selectedID }),
+              let entry = conversations[index].entries.lastIndex(where: { $0.role == "你" && $0.status == "处理中" }) else { return }
+        var steps = conversations[index].entries[entry].steps ?? []
+        guard steps.last != value, steps.count < 120 else { return }
+        steps.append(value); conversations[index].entries[entry].steps = steps
     }
     func dismissChange(_ id: UUID) {
         guard !busy, !applyingChange, pendingChange?.id == id else { return }
