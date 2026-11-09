@@ -182,7 +182,9 @@ public enum AgentPrototypeProbe {
         guard let directory = PrototypeRunner.bundledDirectory else { print("Missing prototype bundle"); return false }
         do {
             for provider in ["openai", "anthropic"] {
-                let result = try await PrototypeRunner().run(provider: provider, directory: directory, approve: { _ in true })
+                let runner = PrototypeRunner()
+                defer { withExtendedLifetime(runner) {} }
+                let result = try await runner.run(provider: provider, directory: directory, approve: { _ in true })
                 print(String(decoding: try wireData(result), as: UTF8.self))
             }
             for rejectAt in [1, 2] {
