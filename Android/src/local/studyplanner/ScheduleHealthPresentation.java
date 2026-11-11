@@ -63,10 +63,10 @@ final class ScheduleHealthPresentation {
         return prefix+duration(warningMinutes)+"的提醒线。最重的是 "+Planner.date(peak.optDouble("date"))+"，安排了 "+duration(peak.optLong("plannedMinutes"))+"。";
     }
     String recoverySummary(){
-        if(recoveryRemainingMinutes==0)return "今天确认过的内容中，目前没有仍需补学的部分。";
-        if(recoveryScheduledMinutes==0)return "这批内容还有 "+duration(recoveryRemainingMinutes)+"需要补学，目前尚未排入课表。请到“课程安排”检查原因。";
-        String text=duration(recoveryScheduledMinutes)+"已排到下面 "+ScheduleHealth.array(health,"recovery").length()+" 个日期，已包含在每日学习量中，按当天课表学习即可。";
-        return health.optLong("recoveryUnscheduledMinutes")==0?text:text+"另外 "+duration(health.optLong("recoveryUnscheduledMinutes"))+"还未排入，可到“课程安排”检查原因。";
+        if(recoveryRemainingMinutes==0)return "今天没有需要重新安排的未学内容。";
+        if(recoveryScheduledMinutes==0)return "还有 "+duration(recoveryRemainingMinutes)+"没学完，暂时没有安排好学习日期。请到“课程安排”查看原因。";
+        String text="其中 "+duration(recoveryScheduledMinutes)+"已安排在下面 "+ScheduleHealth.array(health,"recovery").length()+" 天的课表里。按当天课表学习就行。";
+        return health.optLong("recoveryUnscheduledMinutes")==0?text:text+"另有 "+duration(health.optLong("recoveryUnscheduledMinutes"))+"还没有安排好日期，可到“课程安排”查看原因。";
     }
     static String duration(long minutes){
         long n=Math.max(0,minutes);if(n<60)return n+" 分钟";

@@ -39,9 +39,9 @@ public final class ScheduleHealthPresentationTests {
         check(p.health.getInt("reviewedMinutes")==240&&p.recoveryRemainingMinutes==120,"Repeated lesson attempts inflated recovery");reconcile(state,p);
         double later=Planner.at(DAY,540);confirm(state,45,later);later=Planner.at(DAY,600);confirm(state,30,later);
         p=assess(state,later);check(p.recoveryRemainingMinutes==45&&p.recoveryScheduledMinutes==45,"Later progress did not reduce lesson recovery");reconcile(state,p);
-        check(p.recoverySummary().contains("已包含在每日学习量中"),"Recovery must not request extra study time");
+        check(p.recoverySummary().contains("天的课表里。按当天课表学习就行"),"Recovery must not request extra study time");
         confirm(state,45,Planner.at(DAY,660));p=assess(state,Planner.at(DAY,660));
-        check(p.recoveryRemainingMinutes==0&&p.recoverySummary().contains("没有仍需补学"),"Completed lesson retained recovery debt");
+        check(p.recoveryRemainingMinutes==0&&p.recoverySummary().contains("没有需要重新安排的未学内容"),"Completed lesson retained recovery debt");
     }
     static void unplacedAndRemovedLessons()throws Exception{
         JSONObject state=DailyConsequenceTests.state(60,60);Planner.replan(state,NOW);
@@ -50,7 +50,7 @@ public final class ScheduleHealthPresentationTests {
         ScheduleHealthPresentation p=assess(state,NOW);
         check(p.recoveryScheduledMinutes==60&&p.health.getLong("recoveryUnscheduledMinutes")==60&&p.recoveryRemainingMinutes==120,"Partial recovery allocation lost unplaced portion");reconcile(state,p);
         state.getJSONObject("settings").put("availability",new JSONArray());Planner.replan(state,NOW);p=assess(state,NOW);
-        check(p.recoveryRemainingMinutes==120&&p.recoveryScheduledMinutes==0&&p.recoverySummary().contains("目前尚未排入课表"),"Unplaced recovery confused with no recovery");
+        check(p.recoveryRemainingMinutes==120&&p.recoveryScheduledMinutes==0&&p.recoverySummary().contains("暂时没有安排好学习日期"),"Unplaced recovery confused with no recovery");
         state.getJSONArray("courses").getJSONObject(0).getJSONArray("manualLessons").remove(0);
         state.getJSONArray("courses").getJSONObject(0).put("totalMinutes",60);Planner.replan(state,NOW);p=assess(state,NOW);
         check(p.recoveryRemainingMinutes==60,"Removed lesson left phantom recovery debt");

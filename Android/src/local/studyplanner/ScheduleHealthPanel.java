@@ -25,7 +25,7 @@ final class ScheduleHealthPanel {
         dialog=new Dialog(app);dialog.requestWindowFeature(Window.FEATURE_NO_TITLE);
         LinearLayout root=app.col();root.setPadding(app.dp(16),app.dp(8),app.dp(16),app.dp(8));root.setBackgroundColor(app.bg);
         PlannerUi.Flow navigation=new PlannerUi.Flow(app);root.addView(navigation);
-        String[] labels={"课程安排","每日负担","补学安排"};
+        String[] labels={"课程安排","每日负担","未学课程分配"};
         for(int i=0;i<labels.length;i++){final int section=i;tabs[i]=app.pill(labels[i],()->app.run(()->render(section)));navigation.addView(tabs[i]);}
         scroll=new ScrollView(app);scroll.setFillViewport(true);content=app.col();scroll.addView(content);root.addView(scroll,new LinearLayout.LayoutParams(-1,0,1));
         PlannerUi.Flow actions=new PlannerUi.Flow(app);root.addView(actions);
@@ -40,8 +40,8 @@ final class ScheduleHealthPanel {
             tabs[i].setTypeface(null,selected?android.graphics.Typeface.BOLD:android.graphics.Typeface.NORMAL);
             tabs[i].setBackground(app.rounded(selected?0xffc5efd7:0xffedf2ef,20));
         }
-        content.addView(app.title(section==2?"未完成的内容，接下来怎么学":presentation.health.optLong("remainingMinutes")>0?presentation.title():"学习安排检查"));
-        if(section==2)note(content,"这里查看今天确认任务后，仍需补学的内容及其安排。");
+        content.addView(app.title(section==2?"未学课程分配":presentation.health.optLong("remainingMinutes")>0?presentation.title():"学习安排检查"));
+        if(section==2)note(content,"查看你今天标记为没学完的内容，以及它们接下来在哪天学习。");
         else if(presentation.health.optLong("remainingMinutes")>0)StudyTimeBar.overview(app,content,presentation);
         else note(content,"当前没有待排课程，可在下方检查事项安排。");
         if(section==0)courses();else if(section==1)load();else recovery();scroll.scrollTo(0,0);
@@ -116,26 +116,25 @@ final class ScheduleHealthPanel {
     }
     void recovery(){
         long unplaced=presentation.health.optLong("recoveryUnscheduledMinutes");
-        if(presentation.recoveryRemainingMinutes>0)StudyTimeBar.add(app,content,"这批内容仍需补学",ScheduleHealthPresentation.duration(presentation.recoveryRemainingMinutes),
-            "已排入课表",presentation.recoveryScheduledMinutes,"还未排入",unplaced,0,0);
+        if(presentation.recoveryRemainingMinutes>0)StudyTimeBar.add(app,content,"这些内容还要学多久",ScheduleHealthPresentation.duration(presentation.recoveryRemainingMinutes),
+            "已安排日期",presentation.recoveryScheduledMinutes,"尚未安排",unplaced,0,0);
         content.addView(app.text(presentation.recoverySummary(),16,app.ink));
-        if(unplaced>0)content.addView(app.pill("查看未排入的课程",()->app.run(()->render(0))));
+        if(unplaced>0)content.addView(app.pill("查看还没安排好的课程",()->app.run(()->render(0))));
         Map<LocalDate,List<JSONObject>> byDay=new TreeMap<>();
         for(JSONObject item:Planner.list(ScheduleHealth.array(presentation.health,"recoveryItems")))byDay.computeIfAbsent(Planner.day(item.optDouble("start")),k->new ArrayList<>()).add(item);
-        if(!byDay.isEmpty())note(content,"按下面日期的课表学习即可，无需额外加时。");
         for(JSONObject day:Planner.list(ScheduleHealth.array(presentation.health,"recovery"))){
             double date=day.optDouble("date");LinearLayout box=app.card(content);
-            box.addView(app.text((Planner.day(date).equals(Planner.day(now))?"今天 · ":"")+Planner.date(date)+" · 补学 "+ScheduleHealthPresentation.duration(day.optLong("plannedMinutes")),17,app.ink));
+            box.addView(app.text((Planner.day(date).equals(Planner.day(now))?"今天 · ":"")+Planner.date(date)+" · 安排学习 "+ScheduleHealthPresentation.duration(day.optLong("plannedMinutes")),17,app.ink));
             for(JSONObject item:byDay.getOrDefault(Planner.day(date),Collections.emptyList())){
                 JSONObject course=Planner.course(state,item.optString("courseID"));String lesson=item.optString("lessonName","");
                 box.addView(app.text(Planner.clock(item.optDouble("start"))+" · "+(course==null?"课程":course.optString("name"))+"\n"+
-                    (lesson.isEmpty()?"学习任务":lesson)+" · 补学 "+ScheduleHealthPresentation.duration(item.optLong("minutes")),15,app.ink));
+                    (lesson.isEmpty()?"学习任务":lesson)+" · 安排学习 "+ScheduleHealthPresentation.duration(item.optLong("minutes")),15,app.ink));
             }
             box.addView(app.pill("查看当天课表",()->openDay(date)));
         }
         LinearLayout explanation=app.col();explanation.setVisibility(View.GONE);
-        content.addView(app.pill("这里的补学时间是怎么算的？",()->explanation.setVisibility(explanation.getVisibility()==View.VISIBLE?View.GONE:View.VISIBLE)));
-        note(explanation,"统计今天确认时未完成或只完成一部分的内容，再扣除后来已经学完的部分。同一课节的重复确认不会重复累计。确认的任务可能原本排在不同日期，所以不把确认记录的原计划时长当作今天的学习目标。");content.addView(explanation);
+        content.addView(app.pill("这页怎么看？",()->explanation.setVisibility(explanation.getVisibility()==View.VISIBLE?View.GONE:View.VISIBLE)));
+        note(explanation,"例如：一节课有 60 分钟，你确认只学了 20 分钟。剩下的 40 分钟如果安排在明天，这里就会显示“明天，安排学习 40 分钟”。这些时间已经在主页课表里，照着当天课表学习就行。");content.addView(explanation);
     }
     void openDay(double date){dialog.dismiss();app.selected=Planner.day(date);app.month=app.selected.withDayOfMonth(1);app.page=0;app.render();}
 }

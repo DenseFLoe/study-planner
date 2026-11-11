@@ -15,7 +15,7 @@ final class PlannerFeatures {
    box.addView(app.text(presentation.guidance(),15,app.muted));
    box.addView(app.text(presentation.loadSummary(),15,app.ink));
    if(presentation.peak!=null)StudyTimeBar.daily(app,box,presentation.peak,presentation,"最重一天 · "+Planner.date(presentation.peak.optDouble("date")));
-   if(health.getJSONArray("recovery").length()>0)box.addView(app.text("今天确认后仍需补学的部分内容已排入 "+health.getJSONArray("recovery").length()+" 天的课表，可在“补学安排”查看课程与课节。",15,app.muted));
+   if(health.getJSONArray("recovery").length()>0)box.addView(app.text("今天标记为没学完的部分内容，已安排在 "+health.getJSONArray("recovery").length()+" 天的课表里。可到“未学课程分配”查看具体日期和课节。",15,app.muted));
    box.addView(app.pill("查看课程安排与每日负担",()->app.run(()->new ScheduleHealthPanel(app).show())));
   }
   LinearLayout threshold=app.card(app.body);threshold.addView(app.text("每日负担提醒线 · "+app.hours(app.consequences.warning()),16,app.ink));
