@@ -1111,7 +1111,7 @@ private struct CalendarScheduleHealthView: View {
 
     var body: some View {
         if let health = ScheduleHealthAnalyzer().assess(state: store.state, result: store.result, now: Date(), heavyDayMinutes: dailyLoadWarningMinutes) {
-            ScheduleHealthWarning(health: health, adjustments: store.result.adjustments, showDetails: { sheet = .risks })
+            ScheduleHealthWarning(health: health, warningMinutes: dailyLoadWarningMinutes, showDetails: { sheet = .risks })
         }
     }
 }
@@ -1760,6 +1760,9 @@ struct CourseProgressPanel: View {
                             Text(dailyRecommendation(course, completedMinutes: completed))
                                 .foregroundStyle(.secondary).font(.caption2)
                         }
+                        .padding(12)
+                        .background(courseColor(course.color).opacity(0.07), in: RoundedRectangle(cornerRadius: 10))
+                        .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(courseColor(course.color).opacity(0.2)))
                         .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
