@@ -24,9 +24,10 @@ def assistant_contract(root):
             definitions.append(dict(name=tool, description=description, fields=dict(pairs)))
         instructions.append(re.search(r'static let instructions = """\n(.*?)\n    """', source, re.S)[1])
     privacy = (root / "Sources/StudyPlanner/AssistantContentPolicy.swift").read_text()
-    secrets = (root / "Sources/StudyPlanner/AssistantData.swift").read_text().split("let patterns = [", 1)[1].split("\n            ]", 1)[0]
+    # Public detection regexes from tracked source, never runtime credentials.
+    detection_source = (root / "Sources/StudyPlanner/AssistantData.swift").read_text().split("let patterns = [", 1)[1].split("\n            ]", 1)[0]
     return dict(version=1, tools=definitions, instructions="\n".join(instructions),
-                secretPatterns=re.findall(r'#"(.*?)"#', secrets),
+                secretPatterns=re.findall(r'#"(.*?)"#', detection_source),
                 privacyRules=[dict(pattern=p, reason=r) for p, r in re.findall(r'\(#"(.*?)"#, "(.*?)"\)', privacy)])
 
 

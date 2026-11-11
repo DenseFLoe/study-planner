@@ -20,6 +20,14 @@ final class PlannerBackupRepository {
         }
     }
     PlannerBackupRepository(File directory) { this.directory=directory; }
+    private File file(String id)throws IOException {
+        if(!Planner.canonicalID(id))throw new IOException("备份编号无效。");
+        // Reconstruct the filename from a UUID, never from imported JSON text.
+        String name=UUID.fromString(id).toString().toUpperCase(Locale.ROOT)+".json";
+        File result=new File(directory,name);
+        if(Files.isSymbolicLink(result.toPath()))throw new IOException("备份文件不能是符号链接。");
+        return result;
+    }
     synchronized List<Entry> entries() throws Exception {
         unreadable=0; List<Entry> result=new ArrayList<>();
         if(!directory.exists())return result;
@@ -33,8 +41,7 @@ final class PlannerBackupRepository {
         return result;
     }
     synchronized PlannerBackupFile load(String id) throws Exception {
-        if(!Planner.canonicalID(id))throw new IOException("备份编号无效。");
-        PlannerBackupFile value=PlannerBackupFile.read(new FileInputStream(new File(directory,id+".json")));
+        PlannerBackupFile value=PlannerBackupFile.read(new FileInputStream(file(id)));
         if(!id.equals(value.id()))throw new IOException("备份编号不匹配，原文件已保留。");
         return value;
     }
@@ -50,11 +57,11 @@ final class PlannerBackupRepository {
                 backup.write(new FilterOutputStream(bytes){public void close()throws IOException{flush();}});
                 bytes.getFD().sync();
             }
-            Files.move(temporary.toPath(),new File(directory,backup.id()+".json").toPath(),StandardCopyOption.ATOMIC_MOVE);
+            Files.move(temporary.toPath(),file(backup.id()).toPath(),StandardCopyOption.ATOMIC_MOVE);
         } finally { Files.deleteIfExists(temporary.toPath()); }
         int retained=0;
         for(Entry entry:entries())if(!entry.id.equals(backup.id())&&++retained>=20)
-            Files.delete(new File(directory,entry.id+".json").toPath());
+            Files.delete(file(entry.id).toPath());
         return new Entry(backup);
     }
     static void restoreCourse(JSONObject current,PlannerBackupFile backup) throws Exception {

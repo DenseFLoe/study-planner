@@ -127,6 +127,8 @@ mkdir -p Android/build/controller-tests
 "$JDK/bin/java" -cp Android/tools/json.jar:Android/build/tests local.studyplanner.CloudSyncEngineTests
 "$JDK/bin/javac" -cp Android/tools/json.jar:Android/build/tests -d Android/build/tests Android/tests/CloudMergeRegressionTests.java
 "$JDK/bin/java" -cp Android/tools/json.jar:Android/build/tests local.studyplanner.CloudMergeRegressionTests
+"$JDK/bin/javac" -cp Android/tools/json.jar:Android/build/tests -d Android/build/tests Android/tests/LocalFileBoundaryTests.java
+"$JDK/bin/java" -cp Android/tools/json.jar:Android/build/tests local.studyplanner.LocalFileBoundaryTests
 
 "$JDK/bin/javac" -cp Android/tools/json.jar:Android/build/tests -d Android/build/tests Android/tests/FixedEventEditingTests.java
 "$JDK/bin/java" -cp Android/tools/json.jar:Android/build/tests local.studyplanner.FixedEventEditingTests
