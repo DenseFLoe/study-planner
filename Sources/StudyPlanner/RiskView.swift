@@ -22,8 +22,12 @@ struct RiskView: View {
         VStack(alignment: .leading, spacing: 18) {
             VStack(alignment: .leading, spacing: 10) {
                 Text(presentation?.title ?? "学习安排检查").font(.title2.bold())
-                Text(presentation?.overview ?? "当前没有待排课程，可在下方检查事项安排。")
-                    .font(.body).fixedSize(horizontal: false, vertical: true)
+                if let presentation {
+                    ScheduleTimeOverview(presentation: presentation)
+                } else {
+                    Text("当前没有待排课程，可在下方检查事项安排。")
+                        .font(.body).fixedSize(horizontal: false, vertical: true)
+                }
             }
             Picker("查看内容", selection: $section) {
                 ForEach(Section.allCases, id: \.self) { Text($0.rawValue).tag($0) }
@@ -96,15 +100,16 @@ struct RiskView: View {
             VStack(alignment: .leading, spacing: 10) {
                 Text(item.course.name).font(.headline).fixedSize(horizontal: false, vertical: true)
                 Text("截止日期：\(studyDate(item.course.deadline))").font(.callout).foregroundStyle(.secondary)
+                StudyTimeBar(title: "还需学习", summary: studyDuration(item.remainingMinutes),
+                             firstLabel: "已安排", firstMinutes: item.plannedMinutes,
+                             secondLabel: "未安排", secondMinutes: item.unplacedMinutes)
                 if item.course.autoScheduleEnabled {
-                    Text("还需学习 \(studyDuration(item.remainingMinutes))，其中 \(studyDuration(item.plannedMinutes))已安排，\(studyDuration(item.unplacedMinutes))尚未安排。")
-                        .fixedSize(horizontal: false, vertical: true)
                     Text(item.course.type == .lessonBasedRecorded
                          ? "这门课按整节安排。请先检查课节时长和顺序，并为整节课留出连续学习时段。"
                          : "请检查课程设置及截止日期前的可学习时段，必要时增加学习时间。")
                         .font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                 } else {
-                    Text("剩余 \(studyDuration(item.remainingMinutes))尚未安排，因为这门课已暂停自动排程。恢复自动排程后再核对课表。")
+                    Text("这门课已暂停自动排程。恢复自动排程后再核对课表。")
                         .fixedSize(horizontal: false, vertical: true)
                 }
                 Button("查看课程与课节") { editCourse(item.course) }
@@ -124,9 +129,15 @@ struct RiskView: View {
                 Text(rest.recovery)
                 Button("查看此日事项与空档") { reviewEvents(conflict.windowStart) }
             } else if let continuous = conflict.minimumContinuousMinutes {
-                Text("有一块内容需要连续 \(studyDuration(continuous))，现有最长连续空档只有 \(studyDuration(conflict.availableMinutes))。")
+                StudyTimeBar(title: "需要连续时间", summary: studyDuration(continuous),
+                             firstLabel: "最长连续空档", firstMinutes: conflict.availableMinutes,
+                             secondLabel: "空档差额", secondMinutes: max(0, continuous - conflict.availableMinutes))
             } else {
-                Text("从 \(studyDate(conflict.windowStart))起需要 \(studyDuration(conflict.requiredMinutes))，即使暂不扣除浮动事项和课间休息，最多也只有 \(studyDuration(conflict.availableMinutes))，至少缺少 \(studyDuration(conflict.provenDeficit ?? 0))。")
+                Text("核对范围：\(studyDate(conflict.windowStart))起。可用时间暂未扣除浮动事项和课间休息。")
+                    .font(.callout).foregroundStyle(.secondary)
+                StudyTimeBar(title: "需要学习时间", summary: studyDuration(conflict.requiredMinutes),
+                             firstLabel: "最多可用", firstMinutes: conflict.availableMinutes,
+                             secondLabel: "至少缺少", secondMinutes: conflict.provenDeficit ?? 0)
             }
             Text("涉及课程：" + conflict.courseNames.joined(separator: "、")).font(.callout).foregroundStyle(.secondary)
         }
@@ -136,9 +147,10 @@ struct RiskView: View {
 
     private func dailyLoad(_ presentation: ScheduleHealthPresentation) -> some View {
         let days = showAllDays || presentation.heavyDays.isEmpty ? presentation.health.dayPlans : presentation.heavyDays
+        let scale = max(presentation.warningMinutes, presentation.health.dayPlans.map(\.plannedMinutes).max() ?? 0)
         return VStack(alignment: .leading, spacing: 12) {
             Text(presentation.loadSummary).font(.headline).fixedSize(horizontal: false, vertical: true)
-            Text("下表是已排进课表的学习时间，不含课间休息和未排入的内容。橙色表示超过提醒线，并不表示当天排不下。")
+            Text("条形图只统计已安排的学习时间，不含课间休息和未排入的内容。青绿色为提醒线内，橙色为超出部分；超出不代表当天排不下。各天使用同一刻度，竖线标出每日提醒线。")
                 .font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             HStack {
                 Text("每日提醒线：\(studyDuration(presentation.warningMinutes))").font(.callout)
@@ -147,24 +159,13 @@ struct RiskView: View {
                     Toggle("显示全部 \(presentation.health.dayPlans.count) 天", isOn: $showAllDays).toggleStyle(.checkbox)
                 }
             }
-            HStack {
-                Text("日期").frame(maxWidth: .infinity, alignment: .leading)
-                Text("已安排学习").frame(width: 160, alignment: .trailing)
-                Text("与提醒线相比").frame(width: 170, alignment: .trailing)
-            }.font(.callout.weight(.semibold)).padding(.horizontal, 12)
             Divider()
             ScrollView {
                 LazyVStack(spacing: 6) {
                     ForEach(days) { day in
                         let excess = day.plannedMinutes - presentation.warningMinutes
-                        HStack {
-                            Text(studyDate(day.date)).frame(maxWidth: .infinity, alignment: .leading)
-                            Text(studyDuration(day.plannedMinutes)).monospacedDigit().frame(width: 160, alignment: .trailing)
-                            Text(excess > 0 ? "超出 \(studyDuration(excess))" : "提醒线内")
-                                .foregroundStyle(excess > 0 ? Color.orange : Color.secondary)
-                                .frame(width: 170, alignment: .trailing)
-                        }
-                        .font(.callout).padding(12)
+                        DailyStudyTimeBar(day: day, warningMinutes: presentation.warningMinutes, scaleMinutes: scale)
+                        .padding(12)
                         .background(excess > 0 ? Color.orange.opacity(0.07) : Color.primary.opacity(0.03), in: RoundedRectangle(cornerRadius: 8))
                     }
                 }
@@ -178,8 +179,9 @@ struct RiskView: View {
         VStack(alignment: .leading, spacing: 14) {
             Text(presentation.recoverySummary).fixedSize(horizontal: false, vertical: true)
             if presentation.health.reviewedMinutes > 0 {
-                Text("今天确认过的任务：原计划 \(studyDuration(presentation.health.reviewedMinutes))，实际完成 \(studyDuration(presentation.health.creditedMinutes))。")
-                    .font(.callout).foregroundStyle(.secondary)
+                StudyTimeBar(title: "今天确认过的任务", summary: "原计划 \(studyDuration(presentation.health.reviewedMinutes))",
+                             firstLabel: "实际完成", firstMinutes: presentation.health.creditedMinutes,
+                             secondLabel: "尚未完成", secondMinutes: max(0, presentation.health.reviewedMinutes - presentation.health.creditedMinutes))
             }
             ScrollView {
                 VStack(spacing: 8) {

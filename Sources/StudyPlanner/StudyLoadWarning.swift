@@ -17,13 +17,17 @@ struct ScheduleHealthWarning: View {
         VStack(alignment: .leading, spacing: 12) {
             Label(presentation.title, systemImage: health.status == .scheduled ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
                 .font(.system(size: 14, weight: .bold)).foregroundStyle(tint)
-            Text(presentation.overview)
-                .font(.callout).fixedSize(horizontal: false, vertical: true)
+            ScheduleTimeOverview(presentation: presentation)
             Text(presentation.guidance)
                 .font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             Divider()
             Text(presentation.loadSummary)
                 .font(.callout).fixedSize(horizontal: false, vertical: true)
+            if let peak = health.dayPlans.max(by: { $0.plannedMinutes < $1.plannedMinutes }) {
+                DailyStudyTimeBar(day: peak, warningMinutes: presentation.warningMinutes,
+                                  scaleMinutes: max(peak.plannedMinutes, presentation.warningMinutes),
+                                  title: "最重一天 · \(studyDate(peak.date))")
+            }
             if !health.recovery.isEmpty {
                 Text("今天未完成的部分内容已安排到 \(health.recovery.count) 个日期，可查看具体补回安排。")
                     .font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
