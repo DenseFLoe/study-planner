@@ -77,13 +77,13 @@ struct ScheduleHealthPresentation {
     var recoveryRemainingMinutes: Int { recoveryScheduledMinutes + health.recoveryUnscheduledMinutes }
 
     var recoverySummary: String {
-        guard recoveryRemainingMinutes > 0 else { return "今天确认过的内容中，目前没有仍需补学的部分。" }
+        guard recoveryRemainingMinutes > 0 else { return "今天没有需要重新安排的未学内容。" }
         if recoveryScheduledMinutes == 0 {
-            return "这批内容还有 \(studyDuration(recoveryRemainingMinutes))需要补学，目前尚未排入课表。请到“课程安排”检查原因。"
+            return "还有 \(studyDuration(recoveryRemainingMinutes))没学完，暂时没有安排好学习日期。请到“课程安排”查看原因。"
         }
-        let scheduled = "\(studyDuration(recoveryScheduledMinutes))已排到下面 \(health.recovery.count) 个日期，已包含在每日学习量中，按当天课表学习即可。"
+        let scheduled = "其中 \(studyDuration(recoveryScheduledMinutes))已安排在下面 \(health.recovery.count) 天的课表里。按当天课表学习就行。"
         guard health.recoveryUnscheduledMinutes > 0 else { return scheduled }
-        return scheduled + "另外 \(studyDuration(health.recoveryUnscheduledMinutes))还未排入，可到“课程安排”检查原因。"
+        return scheduled + "另有 \(studyDuration(health.recoveryUnscheduledMinutes))还没有安排好日期，可到“课程安排”查看原因。"
     }
 }
 

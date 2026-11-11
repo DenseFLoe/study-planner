@@ -12,7 +12,7 @@ struct RiskView: View {
     @State private var showAllDays = false
 
     private enum Section: String, CaseIterable {
-        case courses = "课程安排", load = "每日负担", recovery = "补学安排"
+        case courses = "课程安排", load = "每日负担", recovery = "未学课程分配"
     }
 
     var body: some View {
@@ -21,10 +21,10 @@ struct RiskView: View {
         let presentation = health.map { ScheduleHealthPresentation(health: $0, warningMinutes: dailyLoadWarningMinutes) }
         VStack(alignment: .leading, spacing: 18) {
             VStack(alignment: .leading, spacing: 10) {
-                Text(section == .recovery ? "未完成的内容，接下来怎么学" : presentation?.title ?? "学习安排检查")
+                Text(section == .recovery ? "未学课程分配" : presentation?.title ?? "学习安排检查")
                     .font(.title2.bold())
                 if section == .recovery {
-                    Text("这里查看今天确认任务后，仍需补学的内容及其安排。")
+                    Text("查看你今天标记为没学完的内容，以及它们接下来在哪天学习。")
                         .font(.callout).foregroundStyle(.secondary)
                 } else if let presentation {
                     ScheduleTimeOverview(presentation: presentation)
@@ -42,7 +42,7 @@ struct RiskView: View {
             case .load:
                 if let presentation { dailyLoad(presentation) } else { emptyMessage("目前没有已排入的学习任务。") }
             case .recovery:
-                if let presentation { recovery(presentation) } else { emptyMessage("今天确认过的内容中，目前没有仍需补学的部分。") }
+                if let presentation { recovery(presentation) } else { emptyMessage("今天没有需要重新安排的未学内容。") }
             }
             Divider()
             HStack {
@@ -185,23 +185,21 @@ struct RiskView: View {
         return ScrollView {
             VStack(alignment: .leading, spacing: 18) {
                 if presentation.recoveryRemainingMinutes > 0 {
-                    StudyTimeBar(title: "这批内容仍需补学", summary: studyDuration(presentation.recoveryRemainingMinutes),
-                                 firstLabel: "已排入课表", firstMinutes: presentation.recoveryScheduledMinutes,
-                                 secondLabel: "还未排入", secondMinutes: presentation.health.recoveryUnscheduledMinutes)
+                    StudyTimeBar(title: "这些内容还要学多久", summary: studyDuration(presentation.recoveryRemainingMinutes),
+                                 firstLabel: "已安排日期", firstMinutes: presentation.recoveryScheduledMinutes,
+                                 secondLabel: "尚未安排", secondMinutes: presentation.health.recoveryUnscheduledMinutes)
                 }
                 Text(presentation.recoverySummary).fixedSize(horizontal: false, vertical: true)
                 if presentation.health.recoveryUnscheduledMinutes > 0 {
-                    Button("查看未排入的课程") { section = .courses }
+                    Button("查看还没安排好的课程") { section = .courses }
                 }
                 if !presentation.health.recovery.isEmpty {
-                    Label("按下面日期的课表学习即可，无需额外加时。", systemImage: "calendar.badge.checkmark")
-                        .font(.callout).foregroundStyle(.secondary)
                     ForEach(presentation.health.recovery) { day in
                         VStack(alignment: .leading, spacing: 10) {
                             HStack {
                                 Text((Calendar.current.isDateInToday(day.date) ? "今天 · " : "") + studyDate(day.date))
                                 Spacer()
-                                Text("补学 \(studyDuration(day.plannedMinutes))").monospacedDigit().fontWeight(.semibold)
+                                Text("安排学习 \(studyDuration(day.plannedMinutes))").monospacedDigit().fontWeight(.semibold)
                             }
                             ForEach(itemsByDay[day.date, default: []]) { item in
                                 HStack(alignment: .top, spacing: 12) {
@@ -219,8 +217,8 @@ struct RiskView: View {
                         .padding(14).background(Color.teal.opacity(0.06), in: RoundedRectangle(cornerRadius: 10))
                     }
                 }
-                DisclosureGroup("这里的补学时间是怎么算的？") {
-                    Text("统计今天确认时未完成或只完成一部分的内容，再扣除后来已经学完的部分。同一课节的重复确认不会重复累计。确认的任务可能原本排在不同日期，所以不把确认记录的原计划时长当作今天的学习目标。")
+                DisclosureGroup("这页怎么看？") {
+                    Text("例如：一节课有 60 分钟，你确认只学了 20 分钟。剩下的 40 分钟如果安排在明天，这里就会显示“明天，安排学习 40 分钟”。这些时间已经在主页课表里，照着当天课表学习就行。")
                         .font(.callout).foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true).padding(.top, 6)
                 }
