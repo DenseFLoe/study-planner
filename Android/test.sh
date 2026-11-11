@@ -60,6 +60,8 @@ mkdir -p Android/build/tests
 "$JDK/bin/javac" -cp Android/tools/json.jar:Android/build/tests -d Android/build/tests Android/tests/ScheduleRestConflictTests.java
 "$JDK/bin/java" -cp Android/tools/json.jar:Android/build/tests local.studyplanner.ScheduleRestConflictTests
 "$JDK/bin/java" -cp Android/tools/json.jar:Android/build/tests local.studyplanner.DailyConsequenceTests
+"$JDK/bin/javac" --release 8 -encoding UTF-8 -cp Android/tools/json.jar:Android/build/tests -d Android/build/tests Android/src/local/studyplanner/ScheduleHealthPresentation.java Android/tests/ScheduleHealthPresentationTests.java
+"$JDK/bin/java" -cp Android/tools/json.jar:Android/build/tests local.studyplanner.ScheduleHealthPresentationTests
 "$JDK/bin/javac" -cp Android/tools/json.jar:Android/build/tests -d Android/build/tests Android/tests/DailyConsequenceTargetTests.java
 "$JDK/bin/java" -cp Android/tools/json.jar:Android/build/tests local.studyplanner.DailyConsequenceTargetTests
 "$JDK/bin/javac" -cp Android/tools/json.jar:Android/build/tests -d Android/build/tests Android/tests/DailyConsequenceSumTests.java

@@ -43,18 +43,25 @@ final class ScheduleHealth {
         for(JSONObject t:Planner.list(state.getJSONArray("tasks")))if(Planner.hasConfirmationTime(t)&&Planner.day(t.optDouble("confirmedAt")).equals(Planner.day(now))){
             reviewed+=t.optInt("durationMinutes");credited+=t.optInt("completedMinutes");JSONObject c=Planner.course(state,t.optString("courseID"));
             if(c==null||c.optBoolean("isArchived"))continue;int cap=Planner.remaining(state,c);
-            if(Planner.hasLessonID(t))for(Planner.Work w:Planner.lessonWorkAll(state,c))if(w.lessonID.equals(t.optString("lessonID"))){cap=w.minutes;break;}
+            if(Planner.hasLessonID(t)){cap=0;for(Planner.Work w:Planner.lessonWorkAll(state,c))if(w.lessonID.equals(t.optString("lessonID"))){cap=w.minutes;break;}}
             int debt=Math.max(0,Math.min(cap,t.optInt("durationMinutes")-t.optInt("completedMinutes"))),old=debts.getOrDefault(key(t),0);
             debts.put(key(t),Planner.hasLessonID(t)?Math.max(old,debt):Math.min(cap,old+debt));
         }
         for(JSONObject day:Planner.list(array(state,"androidDayPlans"))){int n=day.optInt("plannedMinutes");if(n>0){count++;total+=n;peak=Math.max(peak,n);if(n>Math.max(30,warning))heavy++;}}
         Map<LocalDate,Integer> recovery=new TreeMap<>();List<JSONObject> tasks=Planner.list(state.getJSONArray("tasks"));tasks.sort(Comparator.comparingDouble(t->t.optDouble("start")));
-        for(JSONObject t:tasks)if(Planner.pending(t)&&Planner.planningEnd(t)>now){String key=key(t);int n=Math.min(t.optInt("durationMinutes"),debts.getOrDefault(key,0));if(n>0){recovery.merge(Planner.day(t.optDouble("start")),n,Integer::sum);debts.put(key,debts.get(key)-n);}}
+        JSONArray recoveryItems=new JSONArray();
+        for(JSONObject t:tasks)if(Planner.pending(t)&&Planner.planningEnd(t)>now){String key=key(t);int n=Math.min(t.optInt("durationMinutes"),debts.getOrDefault(key,0));if(n>0){
+            recovery.merge(Planner.day(t.optDouble("start")),n,Integer::sum);debts.put(key,debts.get(key)-n);
+            recoveryItems.put(new JSONObject().put("id",t.optString("id")).put("courseID",t.optString("courseID"))
+                .put("lessonName",t.optString("lessonName","")).put("start",t.optDouble("start")).put("minutes",n));
+        }}
+        long recoveryUnscheduled=0;for(int debt:debts.values())recoveryUnscheduled+=debt;
         JSONArray recoveries=new JSONArray();for(Map.Entry<LocalDate,Integer> e:recovery.entrySet())recoveries.put(new JSONObject().put("date",Planner.at(e.getKey(),0)).put("plannedMinutes",e.getValue()));
         String kind=array(state,"androidConflicts").length()>0?"shortage":missing>0||paused>0||array(state,"androidWarnings").length()>0?"pending":heavy>0?"heavy":"scheduled";
         return new JSONObject().put("kind",kind).put("remainingMinutes",remaining).put("unplacedMinutes",missing).put("pausedMinutes",paused)
             .put("peakMinutes",peak).put("heavyDays",heavy).put("averageMinutes",count==0?0:Math.round((double)total/count))
-            .put("reviewedMinutes",reviewed).put("creditedMinutes",credited).put("recovery",recoveries);
+            .put("reviewedMinutes",reviewed).put("creditedMinutes",credited).put("recovery",recoveries)
+            .put("recoveryUnscheduledMinutes",recoveryUnscheduled).put("recoveryItems",recoveryItems);
     }
     static JSONObject outcome(JSONObject state,double now,int warning) throws Exception {
         JSONObject result=assess(state,now,warning),proof=null;

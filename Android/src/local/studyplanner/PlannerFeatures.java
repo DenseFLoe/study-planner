@@ -9,13 +9,14 @@ final class PlannerFeatures {
   JSONObject health=ScheduleHealth.assess(app.state,Planner.now(),app.consequences.warning());
   if(health.optInt("remainingMinutes")>0){
    LinearLayout box=app.card(app.body);String kind=health.optString("kind");int tint=kind.equals("shortage")?0xffbd3333:kind.equals("scheduled")?0xff126346:0xff874b00;
-   box.addView(app.text(ScheduleHealth.title(kind),17,tint));
-   box.addView(app.text(kind.equals("pending")?"尚未找到完整排法，不等于客观上学不完。请查看未排入内容和可调整时段。":kind.equals("shortage")?"已发现总时长、连续空档或课间休息无法满足的硬约束，请查看具体原因。":"截止日期保持不变；科目混排和倍率会在需要时让步。",15,app.muted));
-   box.addView(app.text("剩余学习量 "+app.hours(health.optInt("remainingMinutes"))+" · 暂未排入 "+app.hours(health.optInt("unplacedMinutes")),15,app.ink));
-   if(health.optInt("pausedMinutes")>0)box.addView(app.text("暂停自动排程 "+app.hours(health.optInt("pausedMinutes"))+"，恢复后再核对。",15,app.muted));
-   box.addView(app.text("后续最重一天 "+app.hours(health.optInt("peakMinutes"))+" · 有安排的日均 "+app.hours(health.optInt("averageMinutes"))+"\n"+health.optInt("heavyDays")+" 天超过每日负担提醒线",15,app.ink));
-   if(health.optInt("reviewedMinutes")>0)box.addView(app.text("今日已确认：实际学习 "+app.hours(health.optInt("creditedMinutes"))+" / 原计划 "+app.hours(health.optInt("reviewedMinutes")),15,app.muted));
-   box.addView(app.pill("查看补回安排与每日负担",()->app.run(()->healthDetails(health))));
+   ScheduleHealthPresentation presentation=new ScheduleHealthPresentation(app.state,health,app.consequences.warning());
+   box.addView(app.text(presentation.title(),17,tint));
+   StudyTimeBar.overview(app,box,presentation);
+   box.addView(app.text(presentation.guidance(),15,app.muted));
+   box.addView(app.text(presentation.loadSummary(),15,app.ink));
+   if(presentation.peak!=null)StudyTimeBar.daily(app,box,presentation.peak,presentation,"最重一天 · "+Planner.date(presentation.peak.optDouble("date")));
+   if(health.getJSONArray("recovery").length()>0)box.addView(app.text("今天确认后仍需补学的部分内容已排入 "+health.getJSONArray("recovery").length()+" 天的课表，可在“补学安排”查看课程与课节。",15,app.muted));
+   box.addView(app.pill("查看课程安排与每日负担",()->app.run(()->new ScheduleHealthPanel(app).show())));
   }
   LinearLayout threshold=app.card(app.body);threshold.addView(app.text("每日负担提醒线 · "+app.hours(app.consequences.warning()),16,app.ink));
   threshold.addView(app.pill("调整提醒线",()->{LinearLayout form=app.col();EditText minutes=app.field(form,"每天超过多少分钟提醒（至少30）",String.valueOf(app.consequences.warning()),true);
@@ -24,18 +25,6 @@ final class PlannerFeatures {
   threshold.addView(app.pill("查看理论容量估算",()->app.run(()->{StudyLoad.Assessment load=StudyLoad.assess(app.state,Planner.now());if(load==null){app.alert("理论容量估算","当前没有待学课程。");return;}
    app.alert("理论容量估算（粗略）",String.format(Locale.CHINA,"日均最低 %.2f 小时 · 临界日均上限 %.2f 小时\n按此粗略模型，连续停学约 %d 天后容量紧张，约 %d 天后容量不足。\n最紧张区间：%s 至 %s。\n按完整自然日估算，包含暂停课程，仅扣每天重复事项；未计入整节、课间休息及非每日事项。实际能否排完以上方实时排程为准。",load.dailyRequired(),load.dailyCapacity(),load.warningAfter,load.criticalAfter,load.start,load.deadline));})));
   weekly();
- }
- void healthDetails(JSONObject health)throws Exception{
-  StringBuilder details=new StringBuilder();
-  for(JSONObject proof:Planner.list(ScheduleHealth.array(app.state,"androidConflicts"))){details.append(Planner.date(proof.optDouble("windowStart"))).append(" 至 ").append(Planner.date(proof.optDouble("deadline"))).append(" · ").append(DailyConsequencesView.names(proof.optJSONArray("courseNames"))).append("\n");
-   if(proof.has("provenDeficit"))details.append("已证实至少缺少 ").append(proof.optLong("provenDeficit")).append(" 分钟；需要 ").append(proof.optLong("requiredMinutes")).append("，乐观容量上界 ").append(proof.optLong("availableMinutes"));
-   else if(proof.optJSONObject("restConflict")!=null)details.append(ScheduleRestConflict.explanation(proof.optJSONObject("restConflict"))).append("\n").append(ScheduleRestConflict.recovery());
-   else details.append("需要连续 ").append(proof.optInt("minimumContinuousMinutes")).append(" 分钟，最长空档只有 ").append(proof.optInt("availableMinutes")).append(" 分钟");details.append("\n\n");}
-  for(JSONObject day:Planner.list(health.getJSONArray("recovery")))details.append("待补内容 · ").append(Planner.date(day.optDouble("date"))).append(" · ").append(day.optInt("plannedMinutes")).append(" 分钟\n");
-  details.append("\n每日预排 / 可用分钟\n");for(JSONObject day:Planner.list(ScheduleHealth.array(app.state,"androidDayPlans")))if(day.optInt("plannedMinutes")>0)details.append(Planner.date(day.optDouble("date"))).append(" · ").append(day.optInt("plannedMinutes")).append(" / ").append(day.optInt("availableMinutes")).append("\n");
-  JSONArray notes=ScheduleHealth.array(app.state,"androidWarnings");for(int i=0;i<notes.length();i++)details.append("\n").append(notes.getString(i));
-  JSONArray adjustments=ScheduleHealth.array(app.state,"androidAdjustments");for(int i=0;i<adjustments.length();i++)details.append("\n").append(adjustments.getString(i));
-  app.alert("补回安排与每日负担",details.toString());
  }
  void showStatisticsWeek(LocalDate date){
   if(app.busy||!app.ready||app.isDestroyed())return;
