@@ -14,6 +14,69 @@ final class WebsiteLoginTests: XCTestCase {
     }
     private let credential = WebsiteCredentials(username: "PLACEHOLDER_ACCOUNT", password: "PLACEHOLDER_PASSWORD")
 
+    @MainActor func testYantuSwitchesFromSMSAndSubmitsPasswordFormDivButton() async throws {
+        // The public Yantu login page keeps both tab panels in the DOM and uses
+        // a div.btn inside .a-login-form for password submission (not a button).
+        let reader = try await page("""
+            <div id="fixture" class="login-app">
+              <ul role="tablist">
+                <li><div role="tab">手机快捷登录</div></li>
+                <li onclick="setTimeout(() => { document.querySelector('#home').style.display='none'; document.querySelector('#profile').style.display='block'; }, 0)">
+                  <div role="tab">账号密码登录</div>
+                </li>
+              </ul>
+              <div id="home" role="tabpanel"><div class="a-login-form">
+                <input placeholder="请输入手机号"><input placeholder="手机验证码">
+                <button onclick="window.smsRequested=true">获取验证码</button>
+                <div class="btn btn-primary" onclick="window.smsSubmitted=true">登录</div>
+              </div></div>
+              <div id="profile" role="tabpanel" style="display:none"><div class="a-login-form">
+                <input id="f1mobile" placeholder="请输入手机号" oninput="window.accountUpdated=true">
+                <input id="f1" type="password" placeholder="请输入密码" oninput="window.passwordUpdated=true">
+                <div class="btn btn-primary ui-full-w" onclick="window.submissions=(window.submissions||0)+1">登录</div>
+              </div></div>
+              <div class="btn btn-primary" onclick="window.unrelatedSubmitted=true">登录</div>
+            </div>
+            """, host: "www.kaoyanvip.cn")
+        defer { reader.stop() }
+        let switching = try await reader.webView.evaluateJavaScript(BrowserCourseSession.loginScript(site: .yantu, credentials: nil))
+        XCTAssertEqual(switching as? String, "switching")
+        try await Task.sleep(for: .milliseconds(100))
+        let readyForCredentials = try await reader.webView.evaluateJavaScript(BrowserCourseSession.loginScript(site: .yantu, credentials: nil))
+        XCTAssertEqual(readyForCredentials as? String, "login-required")
+        let submitted = try await reader.webView.evaluateJavaScript(BrowserCourseSession.loginScript(site: .yantu, credentials: credential))
+        XCTAssertEqual(submitted as? String, "submitted")
+        try await Task.sleep(for: .milliseconds(400))
+        let correctForm = try await reader.webView.evaluateJavaScript("""
+            window.submissions === 1 && window.accountUpdated && window.passwordUpdated &&
+            !window.smsRequested && !window.smsSubmitted && !window.unrelatedSubmitted &&
+            [...document.querySelectorAll('#home input')].every(e => !e.value) &&
+            [...document.querySelectorAll('#profile input')].every(e => !!e.value)
+            """)
+        XCTAssertEqual(correctForm as? Bool, true)
+    }
+
+    @MainActor func testYantuDivButtonMustBelongToPasswordFormAndBeEnabled() async throws {
+        for button in [
+            "<div class='btn btn-primary disabled'>登录</div>",
+            "<div class='btn btn-primary' aria-disabled='true'>登录</div>",
+            "<div>登录</div>",
+            ""
+        ] {
+            let reader = try await page("""
+                <div id="fixture"><div class="a-login-form">
+                  <input placeholder="手机号"><input type="password">
+                  \(button)
+                </div><div class="btn btn-primary" onclick="window.unrelatedSubmitted=true">登录</div></div>
+                """, host: "www.kaoyanvip.cn")
+            defer { reader.stop() }
+            let result = try await reader.webView.evaluateJavaScript(BrowserCourseSession.loginScript(site: .yantu, credentials: credential))
+            XCTAssertEqual(result as? String, "verification")
+            let untouched = try await reader.webView.evaluateJavaScript("!window.unrelatedSubmitted && [...document.querySelectorAll('input')].every(e => !e.value)")
+            XCTAssertEqual(untouched as? Bool, true)
+        }
+    }
+
     @MainActor func testYantuFormFillsAndSubmitsItsExternalButtonOnce() async throws {
         let reader = try await page("""
             <div id="fixture"><form><input placeholder="请输入手机号"><input type="password" placeholder="请输入密码"></form>

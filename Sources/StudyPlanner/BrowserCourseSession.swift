@@ -321,12 +321,17 @@ actor BrowserCourseSession {
           if (!credential) return 'login-required';
           const password = passwords[0], form = password.closest('form');
           if (form?.action && new URL(form.action, location.href).origin !== location.origin) return 'verification';
-          const scope = password.closest('.login-sub-wrapper, [role=dialog], .ant-modal, .el-dialog') || document;
+          // Yantu renders a div.btn inside .a-login-form, including on its standalone login page.
+          // Keep that extra selector inside the password form so another login/SMS control cannot be clicked.
+          const yantuForm = \(site == .yantu ? "password.closest('.a-login-form')" : "null");
+          const scope = yantuForm || password.closest('.login-sub-wrapper, [role=dialog], .ant-modal, .el-dialog') || document;
           const usernames = [...scope.querySelectorAll('input')].filter(e => visible(e) && ['text','tel','email'].includes(e.type) &&
             /账号|帐号|手机|电话|邮箱|username|account|phone|mobile|email/i.test([e.placeholder,e.name,e.id,e.autocomplete].join(' ')));
           if (usernames.length !== 1 || [...scope.querySelectorAll('input[type=checkbox]')].some(e => visible(e) && !e.checked)) return 'verification';
-          const submit = [...scope.querySelectorAll('button, [role=button], input[type=submit]')].filter(visible)
-            .find(e => \(site == .yantu ? "/^(开启我的上岸之旅|登\\s*录|立即登录)$/" : "/^(登\\s*录|立即登录)$/").test((e.textContent || e.value || '').trim()) && !e.disabled);
+          const submitSelector = 'button, [role=button], input[type=submit]' + (yantuForm ? ', div.btn' : '');
+          const submit = [...scope.querySelectorAll(submitSelector)].filter(visible)
+            .find(e => \(site == .yantu ? "/^(开启我的上岸之旅|登\\s*录|立即登录)$/" : "/^(登\\s*录|立即登录)$/").test((e.textContent || e.value || '').trim()) &&
+              !e.disabled && e.getAttribute('aria-disabled') !== 'true' && !e.classList.contains('disabled'));
           if (!submit) return 'verification';
           const set = (element, value) => {
             Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(element, value);
