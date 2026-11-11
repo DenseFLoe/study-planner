@@ -12,7 +12,7 @@ struct RiskView: View {
     @State private var showAllDays = false
 
     private enum Section: String, CaseIterable {
-        case courses = "课程安排", load = "每日负担", recovery = "补回安排"
+        case courses = "课程安排", load = "每日负担", recovery = "补学安排"
     }
 
     var body: some View {
@@ -21,8 +21,12 @@ struct RiskView: View {
         let presentation = health.map { ScheduleHealthPresentation(health: $0, warningMinutes: dailyLoadWarningMinutes) }
         VStack(alignment: .leading, spacing: 18) {
             VStack(alignment: .leading, spacing: 10) {
-                Text(presentation?.title ?? "学习安排检查").font(.title2.bold())
-                if let presentation {
+                Text(section == .recovery ? "未完成的内容，接下来怎么学" : presentation?.title ?? "学习安排检查")
+                    .font(.title2.bold())
+                if section == .recovery {
+                    Text("这里查看今天确认任务后，仍需补学的内容及其安排。")
+                        .font(.callout).foregroundStyle(.secondary)
+                } else if let presentation {
                     ScheduleTimeOverview(presentation: presentation)
                 } else {
                     Text("当前没有待排课程，可在下方检查事项安排。")
@@ -38,7 +42,7 @@ struct RiskView: View {
             case .load:
                 if let presentation { dailyLoad(presentation) } else { emptyMessage("目前没有已排入的学习任务。") }
             case .recovery:
-                if let presentation { recovery(presentation) } else { emptyMessage("目前没有需要补回的学习安排。") }
+                if let presentation { recovery(presentation) } else { emptyMessage("今天确认过的内容中，目前没有仍需补学的部分。") }
             }
             Divider()
             HStack {
@@ -176,25 +180,52 @@ struct RiskView: View {
     }
 
     private func recovery(_ presentation: ScheduleHealthPresentation) -> some View {
-        VStack(alignment: .leading, spacing: 14) {
-            Text(presentation.recoverySummary).fixedSize(horizontal: false, vertical: true)
-            if presentation.health.reviewedMinutes > 0 {
-                StudyTimeBar(title: "今天确认过的任务", summary: "原计划 \(studyDuration(presentation.health.reviewedMinutes))",
-                             firstLabel: "实际完成", firstMinutes: presentation.health.creditedMinutes,
-                             secondLabel: "尚未完成", secondMinutes: max(0, presentation.health.reviewedMinutes - presentation.health.creditedMinutes))
-            }
-            ScrollView {
-                VStack(spacing: 8) {
+        let itemsByDay = Dictionary(grouping: presentation.health.recoveryItems) { Calendar.current.startOfDay(for: $0.start) }
+        let courseNames = Dictionary(store.state.courses.map { ($0.id, $0.name) }, uniquingKeysWith: { first, _ in first })
+        return ScrollView {
+            VStack(alignment: .leading, spacing: 18) {
+                if presentation.recoveryRemainingMinutes > 0 {
+                    StudyTimeBar(title: "这批内容仍需补学", summary: studyDuration(presentation.recoveryRemainingMinutes),
+                                 firstLabel: "已排入课表", firstMinutes: presentation.recoveryScheduledMinutes,
+                                 secondLabel: "还未排入", secondMinutes: presentation.health.recoveryUnscheduledMinutes)
+                }
+                Text(presentation.recoverySummary).fixedSize(horizontal: false, vertical: true)
+                if presentation.health.recoveryUnscheduledMinutes > 0 {
+                    Button("查看未排入的课程") { section = .courses }
+                }
+                if !presentation.health.recovery.isEmpty {
+                    Label("按下面日期的课表学习即可，无需额外加时。", systemImage: "calendar.badge.checkmark")
+                        .font(.callout).foregroundStyle(.secondary)
                     ForEach(presentation.health.recovery) { day in
-                        HStack {
-                            Text(studyDate(day.date))
-                            Spacer()
-                            Text("补回 \(studyDuration(day.plannedMinutes))").monospacedDigit()
-                        }.padding(12).background(Color.primary.opacity(0.04), in: RoundedRectangle(cornerRadius: 8))
+                        VStack(alignment: .leading, spacing: 10) {
+                            HStack {
+                                Text((Calendar.current.isDateInToday(day.date) ? "今天 · " : "") + studyDate(day.date))
+                                Spacer()
+                                Text("补学 \(studyDuration(day.plannedMinutes))").monospacedDigit().fontWeight(.semibold)
+                            }
+                            ForEach(itemsByDay[day.date, default: []]) { item in
+                                HStack(alignment: .top, spacing: 12) {
+                                    VStack(alignment: .leading, spacing: 4) {
+                                        Text(courseNames[item.courseID] ?? "课程").fontWeight(.medium)
+                                        if let lesson = item.lessonName, !lesson.isEmpty {
+                                            Text(lesson).foregroundStyle(.secondary)
+                                        }
+                                    }.frame(maxWidth: .infinity, alignment: .leading)
+                                    Text(studyDuration(item.minutes)).monospacedDigit()
+                                }
+                                .font(.callout).fixedSize(horizontal: false, vertical: true)
+                            }
+                        }
+                        .padding(14).background(Color.teal.opacity(0.06), in: RoundedRectangle(cornerRadius: 10))
                     }
-                }.frame(maxWidth: .infinity)
-            }.frame(maxHeight: .infinity)
-        }
+                }
+                DisclosureGroup("这里的补学时间是怎么算的？") {
+                    Text("统计今天确认时未完成或只完成一部分的内容，再扣除后来已经学完的部分。同一课节的重复确认不会重复累计。确认的任务可能原本排在不同日期，所以不把确认记录的原计划时长当作今天的学习目标。")
+                        .font(.callout).foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true).padding(.top, 6)
+                }
+            }.frame(maxWidth: .infinity, alignment: .leading).padding(.trailing, 8)
+        }.frame(maxHeight: .infinity)
     }
 
     private func emptyMessage(_ text: String) -> some View {

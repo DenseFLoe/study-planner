@@ -87,6 +87,24 @@ final class ScheduleHealthPresentationTests: XCTestCase {
         XCTAssertTrue(presentation.recoverySummary.contains("已包含在每日学习量中"))
     }
 
+    func testRecoveryTotalUsesOneDeduplicatedBudgetInsteadOfRawConfirmations() {
+        var health = health()
+        health.reviewedMinutes = 240
+        health.creditedMinutes = 30
+        health.recovery = [.init(date: day, availableMinutes: 0, plannedMinutes: 60)]
+        health.recoveryUnscheduledMinutes = 15
+        let presentation = ScheduleHealthPresentation(health: health, warningMinutes: 480)
+        XCTAssertEqual(presentation.recoveryScheduledMinutes, 60)
+        XCTAssertEqual(presentation.recoveryRemainingMinutes, 75)
+        XCTAssertTrue(presentation.recoverySummary.contains("15 分钟还未排入"))
+        health.recovery = []
+        let unplaced = ScheduleHealthPresentation(health: health, warningMinutes: 480)
+        XCTAssertEqual(unplaced.recoveryRemainingMinutes, 15)
+        XCTAssertTrue(unplaced.recoverySummary.contains("目前尚未排入课表"))
+        health.recoveryUnscheduledMinutes = 0
+        XCTAssertTrue(ScheduleHealthPresentation(health: health, warningMinutes: 480).recoverySummary.contains("没有仍需补学"))
+    }
+
     private func health() -> ScheduleHealth {
         .init(status: .pending, remainingMinutes: 0, unscheduledMinutes: 0, pausedMinutes: 0,
               peakMinutes: 0, heavyDays: 0, averageMinutes: 0, reviewedMinutes: 0, creditedMinutes: 0,

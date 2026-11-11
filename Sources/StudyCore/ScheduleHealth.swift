@@ -21,6 +21,14 @@ public struct ScheduleDayPlan: Sendable, Equatable, Identifiable {
     public var plannedMinutes: Int
 }
 
+public struct ScheduleRecoveryItem: Sendable, Equatable, Identifiable {
+    public var id: UUID
+    public var courseID: UUID
+    public var lessonName: String?
+    public var start: Date
+    public var minutes: Int
+}
+
 public struct ScheduleHealth: Sendable {
     public enum Status: Sendable { case scheduled, heavy, pending, shortage }
     public var status: Status
@@ -34,6 +42,9 @@ public struct ScheduleHealth: Sendable {
     public var creditedMinutes: Int
     public var recovery: [ScheduleDayPlan]
     public var dayPlans: [ScheduleDayPlan]
+    /// The remainder of the same deduplicated budget used to attribute recovery rows.
+    public var recoveryUnscheduledMinutes: Int = 0
+    public var recoveryItems: [ScheduleRecoveryItem] = []
     public var title: String {
         switch status {
         case .scheduled: "已安排 · 仍可按期完成"
@@ -72,7 +83,7 @@ public struct ScheduleHealthAnalyzer: Sendable {
             let remaining = Dictionary(uniqueKeysWithValues: state.lessonWorkItems(for: course).map { ($0.id, $0.remainingMinutes) })
             for task in reviewed where task.courseID == course.id && task.completedMinutes < task.durationMinutes {
                 let key = DebtKey(course: course.id, lesson: task.lessonID)
-                let cap = task.lessonID.flatMap { remaining[$0] } ?? state.remainingMinutes(for: course)
+                let cap = task.lessonID.map { remaining[$0, default: 0] } ?? state.remainingMinutes(for: course)
                 let debt = min(cap, task.durationMinutes - task.completedMinutes)
                 // Repeated attempts on the same lesson must not create extra debt.
                 if task.lessonID != nil { recoveryBudget[key] = max(recoveryBudget[key, default: 0], debt) }
@@ -80,15 +91,22 @@ public struct ScheduleHealthAnalyzer: Sendable {
             }
         }
         var recovery: [Date: Int] = [:]
+        var recoveryItems: [ScheduleRecoveryItem] = []
         for task in result.tasks.sorted(by: { $0.start < $1.start }) {
             let key = DebtKey(course: task.courseID, lesson: task.lessonID)
             let amount = min(task.durationMinutes, recoveryBudget[key, default: 0])
-            if amount > 0 { recovery[calendar.startOfDay(for: task.start), default: 0] += amount; recoveryBudget[key]! -= amount }
+            if amount > 0 {
+                recovery[calendar.startOfDay(for: task.start), default: 0] += amount
+                recoveryBudget[key]! -= amount
+                recoveryItems.append(.init(id: task.id, courseID: task.courseID, lessonName: task.lessonName,
+                                           start: task.start, minutes: amount))
+            }
         }
         return .init(status: status, remainingMinutes: courses.reduce(0) { $0 + state.remainingMinutes(for: $1) },
                      unscheduledMinutes: missing, pausedMinutes: paused, peakMinutes: days.map(\.plannedMinutes).max() ?? 0,
                      heavyDays: heavy, averageMinutes: days.isEmpty ? 0 : Double(days.reduce(0) { $0 + $1.plannedMinutes }) / Double(days.count),
                      reviewedMinutes: reviewed.reduce(0) { $0 + $1.durationMinutes }, creditedMinutes: reviewed.reduce(0) { $0 + $1.completedMinutes },
-                     recovery: recovery.keys.sorted().map { .init(date: $0, availableMinutes: 0, plannedMinutes: recovery[$0]!) }, dayPlans: days)
+                     recovery: recovery.keys.sorted().map { .init(date: $0, availableMinutes: 0, plannedMinutes: recovery[$0]!) }, dayPlans: days,
+                     recoveryUnscheduledMinutes: recoveryBudget.values.reduce(0, +), recoveryItems: recoveryItems)
     }
 }

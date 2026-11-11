@@ -100,6 +100,10 @@ final class ScheduleHealthTests: XCTestCase {
         XCTAssertEqual(health.reviewedMinutes, 120)
         XCTAssertEqual(health.creditedMinutes, 45)
         XCTAssertEqual(health.recovery.reduce(0) { $0 + $1.plannedMinutes }, 75)
+        XCTAssertEqual(health.recoveryUnscheduledMinutes, 0)
+        XCTAssertEqual(health.recoveryItems.map(\.minutes), [75])
+        XCTAssertEqual(health.recoveryItems.first?.courseID, value.courses[0].id)
+        XCTAssertEqual(health.recoveryItems.first?.lessonName, first.lessonName)
         XCTAssertThrowsError(try value.confirm(taskID: first.id, actualMinutes: 45, now: confirmation))
     }
     func testRepeatedMissedAttemptsNeverDoubleRecoveryDebt() throws {
@@ -111,7 +115,62 @@ final class ScheduleHealthTests: XCTestCase {
         let result = value.replan(now: date(), calendar: calendar)
         let health = try XCTUnwrap(ScheduleHealthAnalyzer(calendar: calendar).assess(state: value, result: result, now: date()))
         XCTAssertEqual(health.recovery.reduce(0) { $0 + $1.plannedMinutes }, 60)
+        XCTAssertEqual(health.reviewedMinutes - health.creditedMinutes, 120,
+                       "Raw confirmation history must not be presented as remaining recovery work")
+        XCTAssertEqual(health.recoveryUnscheduledMinutes, 0)
+        XCTAssertEqual(health.recoveryItems.reduce(0) { $0 + $1.minutes }, 60)
         XCTAssertEqual(value.remainingMinutes(for: value.courses[0]), 60)
+    }
+    func testLaterProgressReducesRecoveryToCurrentLessonRemainder() throws {
+        var value = state([120])
+        let first = value.replan(now: date(), calendar: calendar).tasks[0]
+        try value.confirm(taskID: first.id, actualMinutes: 45, now: date(14,9))
+        let second = value.replan(now: date(14,9), calendar: calendar).tasks[0]
+        try value.confirm(taskID: second.id, actualMinutes: 30, now: date(14,10))
+        let result = value.replan(now: date(14,10), calendar: calendar)
+        let health = try XCTUnwrap(ScheduleHealthAnalyzer(calendar: calendar).assess(state: value, result: result, now: date(14,10)))
+        XCTAssertEqual(health.recovery.reduce(0) { $0 + $1.plannedMinutes }, 45)
+        XCTAssertEqual(health.recoveryUnscheduledMinutes, 0)
+        XCTAssertEqual(health.recoveryItems.reduce(0) { $0 + $1.minutes }, 45)
+    }
+    func testRecoveryDistinguishesUnscheduledWorkFromNoWork() throws {
+        var value = state([120])
+        let first = value.replan(now: date(), calendar: calendar).tasks[0]
+        try value.confirm(taskID: first.id, actualMinutes: 20, now: date(14,9))
+        value.settings.availability = []
+        let result = value.replan(now: date(14,9), calendar: calendar)
+        let health = try XCTUnwrap(ScheduleHealthAnalyzer(calendar: calendar).assess(state: value, result: result, now: date(14,9)))
+        XCTAssertEqual(health.recoveryUnscheduledMinutes, 100)
+        XCTAssertTrue(health.recovery.isEmpty)
+        XCTAssertTrue(health.recoveryItems.isEmpty)
+    }
+    func testPartialRecoveryAllocationReconcilesWithPerTaskDetails() throws {
+        var value = state([60,60])
+        let tasks = value.replan(now: date(), calendar: calendar).tasks
+        for task in tasks { try value.confirm(taskID: task.id, actualMinutes: 0, now: date()) }
+        value.settings.availability = [.init(weekday: 2, startMinute: 480, endMinute: 540)]
+        let (result, health) = assess(value)
+        XCTAssertEqual(health.recoveryUnscheduledMinutes, 60)
+        XCTAssertEqual(health.recovery.reduce(0) { $0 + $1.plannedMinutes }, 60)
+        for day in health.recovery {
+            XCTAssertEqual(health.recoveryItems.filter { calendar.isDate($0.start, inSameDayAs: day.date) }
+                .reduce(0) { $0 + $1.minutes }, day.plannedMinutes)
+        }
+        for item in health.recoveryItems {
+            let task = try XCTUnwrap(result.tasks.first { $0.id == item.id })
+            XCTAssertEqual(item.courseID, task.courseID)
+            XCTAssertLessThanOrEqual(item.minutes, task.durationMinutes)
+        }
+    }
+    func testRemovedLessonDoesNotBecomeUnscheduledRecovery() throws {
+        var value = state([60,60])
+        let first = value.replan(now: date(), calendar: calendar).tasks[0]
+        try value.confirm(taskID: first.id, actualMinutes: 0, now: date())
+        value.courses[0].manualLessons?.removeFirst()
+        let (_, health) = assess(value)
+        XCTAssertTrue(health.recovery.isEmpty)
+        XCTAssertEqual(health.recoveryUnscheduledMinutes, 0)
+        XCTAssertTrue(health.recoveryItems.isEmpty)
     }
     func testSearchBudgetExhaustionIsUnknownRatherThanAFalseProof() {
         let queue = ScheduleFeasibilitySearch.Queue(courseID: UUID(), start: 480, end: 780,

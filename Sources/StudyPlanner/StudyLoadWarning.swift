@@ -29,7 +29,7 @@ struct ScheduleHealthWarning: View {
                                   title: "最重一天 · \(studyDate(peak.date))")
             }
             if !health.recovery.isEmpty {
-                Text("今天未完成的部分内容已安排到 \(health.recovery.count) 个日期，可查看具体补回安排。")
+                Text("今天确认后仍需补学的部分内容已排入 \(health.recovery.count) 天的课表，可在“补学安排”查看课程与课节。")
                     .font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             }
             Button("查看课程安排与每日负担", action: showDetails).buttonStyle(.link).font(.callout)
