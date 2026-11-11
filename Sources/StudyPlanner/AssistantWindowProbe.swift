@@ -2,6 +2,11 @@ import AppKit
 
 /// Opt-in packaged-app acceptance: real AppKit windows, temporary history, no network or vault.
 @MainActor enum AssistantWindowProbe {
+    /// Keep mutable probe selection on the same actor as the transport factory.
+    @MainActor private final class TransportSelection {
+        var useFast = false
+    }
+
     static func run() {
         let app = NSApplication.shared
         app.setActivationPolicy(.regular)
@@ -34,9 +39,9 @@ import AppKit
             let snapshot = AssistantSimulation.snapshot()
             let slow = AssistantMockTransport(script: [], delay: .seconds(30))
             let fast = AssistantMockTransport(script: [])
-            var useFast = false
+            let selection = TransportSelection()
             let session = AssistantSession(historyStore: store, simulated: true, snapshot: { snapshot },
-                                           transportFactory: { useFast ? fast : slow })
+                                           transportFactory: { selection.useFast ? fast : slow })
             // Close before the asynchronous read completes, then reopen the same session.
             controller.show(session: session); controller.window?.performClose(nil)
             await session.waitUntilReady()
@@ -71,7 +76,7 @@ import AppKit
             longest = max(longest, closing.duration(to: .now))
             guard !session.busy, session.approval == nil, session.key.isEmpty else { throw AssistantError.protocolError }
             // The reopened window must be usable immediately while old cleanup/save completes.
-            useFast = true; controller.show(session: session); session.newConversation()
+            selection.useFast = true; controller.show(session: session); session.newConversation()
             let latest = session.selectedID
             session.question = "重新打开后查询"; session.send()
             try await waitUntil {

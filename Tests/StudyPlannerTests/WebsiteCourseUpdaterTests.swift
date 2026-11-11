@@ -4,6 +4,10 @@ import StudyPersistence
 @testable import StudyPlanner
 
 final class WebsiteCourseUpdaterTests: XCTestCase {
+    @MainActor private final class LoginRetryState {
+        var calls = 0
+        var succeed = false
+    }
     private final class Repository: PlannerRepository {
         var saved: PlannerState?
         var fails = false
@@ -228,11 +232,11 @@ final class WebsiteCourseUpdaterTests: XCTestCase {
             try state.importWebCourses([secondSnapshot], deadline: first.deadline, now: Date())
         }
         let second = try XCTUnwrap(store.courses.first { $0.id != first.id })
-        var calls = 0, succeed = false
+        let retry = LoginRetryState()
         let fresh = snapshot()
         let updater = WebsiteCourseUpdater { _, _, _, _ in
-            calls += 1
-            if !succeed { throw WebsiteUpdateError.loginRequired }
+            retry.calls += 1
+            if !retry.succeed { throw WebsiteUpdateError.loginRequired }
             return fresh
         }
         updater.start(store: store)
@@ -240,9 +244,9 @@ final class WebsiteCourseUpdaterTests: XCTestCase {
         try updater.configure(course: second, url: secondSnapshot.sourceURL, enabled: true, interval: 60)
         await updater.update(courseID: first.id)
         await updater.tick(now: Date().addingTimeInterval(86400))
-        XCTAssertEqual(calls, 1)
+        XCTAssertEqual(retry.calls, 1)
         XCTAssertEqual(updater.sources[second.id]?.needsAttention, true)
-        succeed = true
+        retry.succeed = true
         await updater.update(courseID: first.id)
         XCTAssertEqual(updater.sources[second.id]?.needsAttention, false)
         XCTAssertNil(updater.sources[second.id]?.lastAttempt)

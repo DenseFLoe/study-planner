@@ -100,7 +100,9 @@ final class AgentPrototypeTests: XCTestCase {
         let directory = try runtime()
         for provider in ["openai", "anthropic"] {
             var approvals: [PrototypeApproval] = []
-            let result = try await PrototypeRunner().run(provider: provider, directory: directory, approve: {
+            let runner = PrototypeRunner()
+            defer { withExtendedLifetime(runner) {} }
+            let result = try await runner.run(provider: provider, directory: directory, approve: {
                 approvals.append($0); return true
             })
             XCTAssertEqual(result.modelSteps, 3)

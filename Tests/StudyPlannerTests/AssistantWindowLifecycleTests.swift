@@ -2,6 +2,9 @@ import XCTest
 @testable import StudyPlanner
 
 final class AssistantWindowLifecycleTests: XCTestCase {
+    @MainActor private final class TransportSelection {
+        var useFast = false
+    }
     private actor LateTransport: AssistantTransport {
         nonisolated let simulated = true
         private(set) var started = false
@@ -23,9 +26,9 @@ final class AssistantWindowLifecycleTests: XCTestCase {
     }
     @MainActor func testClosingInFlightIgnoresLateResponseAfterReopeningAndSendingAgain() async throws {
         let snapshot = AssistantSimulation.snapshot(), late = LateTransport(), fast = AssistantMockTransport(script: [])
-        var useFast = false
+        let selection = TransportSelection()
         let session = AssistantSession(historyStore: nil, simulated: true, snapshot: { snapshot },
-                                       transportFactory: { if useFast { return fast }; return late })
+                                       transportFactory: { if selection.useFast { return fast }; return late })
         session.configuration = AssistantSimulation.configuration()
         session.question = "旧请求"; session.send()
         try await waitUntil { session.approval != nil }
@@ -34,7 +37,7 @@ final class AssistantWindowLifecycleTests: XCTestCase {
         session.close()
         XCTAssertFalse(session.busy); XCTAssertNil(session.approval)
         XCTAssertEqual(session.entries.first?.status, "未完成")
-        useFast = true; session.newConversation()
+        selection.useFast = true; session.newConversation()
         let latest = session.selectedID
         session.question = "重开后新请求"; session.send()
         try await waitUntil {
