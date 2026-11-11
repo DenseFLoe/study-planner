@@ -125,7 +125,8 @@ final class WebsiteCourseUpdater {
             guard saved else { throw WebsiteUpdateError.message("网站数据已读取，但本地未保存成功，请检查课程设置后重试。") }
             sources[courseID]?.lastSuccess = Date()
             sources[courseID]?.needsAttention = false
-            let pending = snapshot.lessons.filter { !$0.published }.count
+            // Count the saved catalog, including unpublished rows retained from earlier reads.
+            let pending = store.course(courseID)?.webCourse?.lessons.filter { !$0.published }.count ?? 0
             sources[courseID]?.status = pending == 0 ? "更新成功" : "更新成功；\(pending) 个课节尚未更新，已保留目录，将按设置继续检查"
             // A successful manual read proves the shared website session works again.
             for peer in store.courses where CourseWebsite.identify(peer.webCourse) == site && peer.id != courseID {
@@ -166,12 +167,19 @@ final class WebsiteCourseUpdater {
         guard snapshot.fetchedAt >= old.fetchedAt else {
             throw WebsiteUpdateError.message("这门课已有更新的网站数据，本次较早的读取结果未写入。")
         }
-        let snapshot = site == .xuecheng ? try retainingXuechengLessonIDs(snapshot, replacing: course) : snapshot
-        let previousIDs = Set(old.lessons.map(\.id)).subtracting(deleted)
-        let missing = previousIDs.subtracting(snapshot.lessons.map(\.id))
+        var snapshot = site == .xuecheng ? try retainingXuechengLessonIDs(snapshot, replacing: course) : snapshot
+        let incomingIDs = Set(snapshot.lessons.map(\.id))
+        let publishedIDs = Set(old.lessons.filter(\.published).map(\.id)).subtracting(deleted)
+        let missing = publishedIDs.subtracting(incomingIDs)
         guard missing.isEmpty else {
             throw WebsiteUpdateError.message("本次读取 \(snapshot.lessons.count) 节，已有 \(missing.count) 节未能对应，可能是目录未读全或编号变化。请核对网站目录后重试，原课程已保留。")
         }
+        // Websites may temporarily omit upcoming lessons. Keep their existing IDs and
+        // unpublished state so later reads can publish them without losing the catalog.
+        // Deleted rows stay deleted, and missing published lessons still reject the read.
+        snapshot.lessons.append(contentsOf: old.lessons.filter {
+            !$0.published && !deleted.contains($0.id) && !incomingIDs.contains($0.id)
+        })
         return snapshot
     }
 

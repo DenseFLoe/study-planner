@@ -151,6 +151,128 @@ final class WebsiteCourseUpdaterTests: XCTestCase {
         XCTAssertEqual(updater.sources[course.id]?.needsAttention, false)
         XCTAssertEqual(updater.sources[course.id]?.status, "更新成功")
     }
+
+    @MainActor func testMissingUnpublishedLessonsPreserveHistoryAndLaterPublishWithoutDuplicates() async throws {
+        for site in [CourseWebsite.yantu, .xuecheng] {
+            var old = site == .xuecheng ? xuechengSnapshot() : snapshot(ids: ["1", "2", "3"])
+            old.lessons[2].published = false
+            old.lessons[2].requiresDuration = false
+            old.lessons[2].durationSeconds = nil
+            let (store, repo, course) = try fixture(old)
+            let ids = old.lessons.map(\.id)
+            let task = ScheduledTask(courseID: course.id, start: Date().addingTimeInterval(-7200),
+                                     durationMinutes: 20, lessonID: ids[1])
+            let saved = await store.change { state in
+                state.courses[0].lessonOrder = [ids[1], ids[2], ids[0]]
+                state.courses[0].lessonOrderCustomized = true
+                state.tasks.append(task)
+                try state.confirm(taskID: task.id, actualMinutes: 20, now: Date())
+            }
+            XCTAssertTrue(saved)
+            let confirmations = store.state.completions
+            var fresh = site == .xuecheng
+                ? xuechengSnapshot(keys: ["0.0:0", "0.0:1", "0.0:2"])
+                : snapshot(ids: ["1", "2", "3"])
+            let published = fresh
+            fresh.lessons.removeLast()
+            fresh.lessons[0].watchedPercent = 50
+            var calls = 0
+            let updater = WebsiteCourseUpdater { _, _, _, _ in calls += 1; return fresh }
+            updater.start(store: store)
+            defer { updater.stop() }
+            try updater.configure(course: course, url: fresh.sourceURL, enabled: true, interval: 60)
+            await updater.tick()
+            // A second incomplete catalog still retains the placeholder exactly once.
+            fresh.fetchedAt = Date()
+            await updater.tick(now: Date().addingTimeInterval(7200))
+            let retained = try XCTUnwrap(store.course(course.id))
+            XCTAssertEqual(calls, 2)
+            XCTAssertEqual(retained.webCourse?.lessons.map(\.id), ids)
+            XCTAssertEqual(retained.webCourse?.lessons.last, old.lessons[2])
+            XCTAssertEqual(retained.totalMinutes, 120)
+            XCTAssertEqual(store.state.lessonWorkItems(for: retained).map(\.id), [ids[1], ids[0]])
+            XCTAssertEqual(store.state.lessonWorkItems(for: retained).map(\.remainingMinutes), [40, 30])
+            XCTAssertEqual(store.state.completions, confirmations)
+            XCTAssertEqual(repo.saved?.courses.first?.webCourse, retained.webCourse)
+            XCTAssertEqual(updater.sources[course.id]?.needsAttention, false)
+            XCTAssertNotNil(updater.sources[course.id]?.lastSuccess)
+            XCTAssertTrue(updater.sources[course.id]?.status.contains("1 个课节尚未更新") == true)
+
+            fresh = published
+            fresh.fetchedAt = Date()
+            await updater.update(courseID: course.id)
+            let updated = try XCTUnwrap(store.course(course.id))
+            XCTAssertEqual(updated.webCourse?.lessons.map(\.id), ids)
+            XCTAssertEqual(updated.totalMinutes, 180)
+            XCTAssertEqual(store.state.lessonWorkItems(for: updated).map(\.id), [ids[1], ids[2], ids[0]])
+            XCTAssertEqual(store.state.completions, confirmations)
+            XCTAssertEqual(updater.sources[course.id]?.status, "更新成功")
+        }
+    }
+
+    @MainActor func testRetainsTwelveUnpublishedLessonsWhenOnlyPublishedCatalogIsReturned() throws {
+        var old = snapshot(ids: (1...115).map(String.init))
+        for index in 103..<115 {
+            old.lessons[index].published = false
+            old.lessons[index].requiresDuration = false
+            old.lessons[index].durationSeconds = nil
+        }
+        let (_, _, course) = try fixture(old)
+        let fresh = snapshot(ids: (1...103).map(String.init), progress: 10)
+        let retained = try WebsiteCourseUpdater.validate(fresh, replacing: course)
+        XCTAssertEqual(retained.lessons.count, 115)
+        XCTAssertEqual(Array(retained.lessons.suffix(12)), Array(old.lessons.suffix(12)))
+        XCTAssertEqual(retained.totalMinutes, fresh.totalMinutes)
+        XCTAssertEqual(retained.watchedSeconds, fresh.watchedSeconds)
+        XCTAssertNil(retained.importProblem)
+    }
+
+    @MainActor func testMissingPendingLessonsDoNotRelaxPublishedOrIncompleteReadProtection() async throws {
+        for partial in [false, true] {
+            var old = xuechengSnapshot()
+            old.lessons[2].published = false
+            old.lessons[2].requiresDuration = false
+            old.lessons[2].durationSeconds = nil
+            let (store, repo, course) = try fixture(old)
+            var fresh = xuechengSnapshot(keys: ["0.0:0", "0.0:1", "0.0:2"])
+            fresh.lessons.removeLast()
+            if partial { fresh.fetchedOutlines = 0 } else { fresh.lessons.removeLast() }
+            let before = store.state
+            let updater = WebsiteCourseUpdater { _, _, _, _ in fresh }
+            updater.start(store: store)
+            defer { updater.stop() }
+            await updater.update(courseID: course.id)
+            XCTAssertEqual(store.state, before)
+            XCTAssertNil(repo.saved)
+            XCTAssertEqual(updater.sources[course.id]?.needsAttention, true)
+            XCTAssertNil(updater.sources[course.id]?.lastSuccess)
+            if !partial {
+                XCTAssertTrue(updater.sources[course.id]?.status.contains("1 节未能对应") == true)
+            }
+        }
+    }
+
+    @MainActor func testDeletedPendingLessonIsNotRestoredFromMissingOrFreshCatalog() throws {
+        var old = xuechengSnapshot()
+        old.lessons[2].published = false
+        old.lessons[2].requiresDuration = false
+        old.lessons[2].durationSeconds = nil
+        let (store, _, course) = try fixture(old)
+        let deletedID = old.lessons[2].id
+        for omitted in [false, true] {
+            // A tombstone can coexist with an older snapshot during sync reconciliation.
+            var state = store.state
+            state.courses[0].deletedLessonIDs = [deletedID]
+            var fresh = xuechengSnapshot(keys: ["0.0:0", "0.0:1", "0.0:2"])
+            if omitted { fresh.lessons.removeLast() }
+            let retained = try WebsiteCourseUpdater.validate(fresh, replacing: state.courses[0])
+            if omitted { XCTAssertFalse(retained.lessons.contains { $0.id == deletedID }) }
+            try state.importWebCourses([retained], deadline: course.deadline, now: Date())
+            XCTAssertEqual(state.courses[0].webCourse?.lessons.map(\.id), Array(old.lessons.prefix(2)).map(\.id))
+            XCTAssertEqual(state.courses[0].deletedLessonIDs, [deletedID])
+        }
+    }
+
     @MainActor func testDeletedCourseDuringFetchIsNotRecreated() async throws {
         let (store, _, course) = try fixture()
         let fresh = snapshot()
