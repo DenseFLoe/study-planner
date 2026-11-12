@@ -1,10 +1,10 @@
 <?xml version="1.0" encoding="utf-8"?>
-<ripple xmlns:android="http://schemas.android.com/apk/res/android" android:color="#C5EFD7">
+<ripple xmlns:android="http://schemas.android.com/apk/res/android" android:color="#24286B57">
     <item>
         <inset android:insetLeft="3dp" android:insetRight="3dp" android:insetTop="3dp" android:insetBottom="3dp">
             <shape android:shape="rectangle">
-                <solid android:color="#E8F5ED" />
-                <corners android:radius="999dp" />
+                <solid android:color="#E5EFE9" />
+                <corners android:radius="16dp" />
             </shape>
         </inset>
     </item>
@@ -12,7 +12,7 @@
         <inset android:insetLeft="3dp" android:insetRight="3dp" android:insetTop="3dp" android:insetBottom="3dp">
             <shape android:shape="rectangle">
                 <solid android:color="#FFFFFF" />
-                <corners android:radius="999dp" />
+                <corners android:radius="16dp" />
             </shape>
         </inset>
     </item>

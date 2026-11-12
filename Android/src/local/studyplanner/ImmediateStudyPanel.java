@@ -8,7 +8,7 @@ import java.util.*;
 
 final class ImmediateStudyPanel {
     static void controls(MainActivity app,PlannerUi.Flow actions){
-        actions.addView(app.button("立即上某节课",()->chooseCourse(app)));
+        actions.addView(app.primaryButton("立即学习",()->chooseCourse(app)));
         LocalDate day=app.selected;JSONObject first=ImmediateStudy.first(app.state,day);
         Button resume=app.button("继续上课",()->{if(first!=null)app.mutate(s->ImmediateStudy.resume(s,day,first.optString("id"),Planner.now()),false,()->today(app));});
         resume.setEnabled(first!=null&&!day.isBefore(LocalDate.now(Planner.ZONE)));actions.addView(resume);

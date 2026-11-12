@@ -43,7 +43,7 @@ public class MainActivity extends Activity {
     static final int EXPORT_BACKUP=101,IMPORT_BACKUP=102,SCAN_PAIRING_QR=103,IMPORT_COURSES=104,IMPORT_SSH_KEY=105;
     JSONObject state; String syncSummary=""; LinearLayout root,body,nav; int page=0; LocalDate selected=LocalDate.now(Planner.ZONE),month=selected.withDayOfMonth(1);
     final DailyRollover dayRollover=new DailyRollover(selected);
-    final int ink=0xff191919,blue=0xff07c160,muted=0xff555555,bg=0xffededed;
+    final int ink=PlannerUi.INK,blue=PlannerUi.PRIMARY,muted=PlannerUi.MUTED,bg=PlannerUi.BACKGROUND;
     boolean weeklyActual=true;
     boolean calendarExpanded=false;DailyConsequenceController consequences;LinearLayout consequencePanel;
     boolean busy=false,ready=false,reviewShown=false; AtomicFile storage; PlannerDatabase database; SyncWindow syncServer; String syncStatus="尚未同步"; TextView syncLabel; ExecutorService worker;Handler handler=new Handler();
@@ -240,12 +240,19 @@ public class MainActivity extends Activity {
     LinearLayout col(){LinearLayout v=new LinearLayout(this);v.setOrientation(1);return v;}
     LinearLayout row(){LinearLayout v=new LinearLayout(this);v.setOrientation(0);v.setGravity(Gravity.CENTER_VERTICAL);return v;}
     GradientDrawable rounded(int color,int radius){GradientDrawable d=new GradientDrawable();d.setColor(color);d.setCornerRadius(dp(radius));return d;}
-    TextView text(String s,int size,int color){TextView t=new TextView(this);t.setText(s);t.setTextSize(size>=12&&size<15?15:size);t.setTypeface(Typeface.create("sans-serif",Typeface.NORMAL));t.setLineSpacing(dp(2),1.08f);t.setTextColor(color);t.setPadding(0,dp(4),0,dp(4));return t;}
-    TextView title(String s){TextView t=text(s,20,ink);t.setTypeface(null,Typeface.BOLD);return t;}
+    TextView text(String s,int size,int color){TextView t=new TextView(this);t.setText(s);t.setTextSize(size);t.setTypeface(Typeface.create("sans-serif",Typeface.NORMAL));t.setLineSpacing(dp(2),1.08f);t.setBreakStrategy(android.text.Layout.BREAK_STRATEGY_SIMPLE);t.setTextColor(color);t.setPadding(0,dp(4),0,dp(4));return t;}
+    TextView title(String s){TextView t=text(s,20,ink);t.setTypeface(Typeface.create("sans-serif-medium",Typeface.NORMAL));if(Build.VERSION.SDK_INT>=28)t.setAccessibilityHeading(true);return t;}
     Button button(String s,Runnable action){return PlannerUi.compactButton(this,s,()->{if(!busy)action.run();});}
+    Button primaryButton(String s,Runnable action){Button button=button(s,action);PlannerUi.buttonTone(button,true);return button;}
     void weighted(LinearLayout r,View v){r.addView(v,new LinearLayout.LayoutParams(0,-2,1));}
-    LinearLayout card(LinearLayout p){LinearLayout c=col();c.setPadding(dp(16),dp(12),dp(16),dp(12));c.setBackground(rounded(Color.WHITE,16));LinearLayout.LayoutParams lp=new LinearLayout.LayoutParams(-1,-2);lp.setMargins(0,dp(7),0,dp(7));p.addView(c,lp);return c;}
-    void cardBorder(LinearLayout box,int tint){GradientDrawable background=rounded(Color.WHITE,16);background.setStroke(dp(2),tint);box.setBackground(background);}
+    LinearLayout card(LinearLayout p){LinearLayout c=col();c.setPadding(dp(18),dp(16),dp(18),dp(16));c.setBackground(rounded(Color.WHITE,20));LinearLayout.LayoutParams lp=new LinearLayout.LayoutParams(-1,-2);lp.setMargins(0,dp(6),0,dp(10));p.addView(c,lp);return c;}
+    void cardBorder(LinearLayout box,int tint){
+        GradientDrawable surface=rounded(Color.WHITE,20);surface.setStroke(dp(1),PlannerUi.OUTLINE);
+        GradientDrawable accent=rounded(tint,2);
+        android.graphics.drawable.LayerDrawable layers=new android.graphics.drawable.LayerDrawable(new android.graphics.drawable.Drawable[]{surface,accent});
+        layers.setLayerWidth(1,dp(3));layers.setLayerInset(1,dp(0),dp(20),0,dp(20));layers.setLayerGravity(1,Gravity.LEFT|Gravity.FILL_VERTICAL);
+        box.setBackground(layers);
+    }
     void render(){
         if(!ready)return;
         try{if(captureSettingsDraft!=null)captureSettingsDraft.run();}catch(Exception error){alert("草稿未刷新",error.getMessage());return;}
@@ -253,35 +260,31 @@ public class MainActivity extends Activity {
         if(closeCatalog!=null){closeCatalog.run();closeCatalog=null;}
         consequences.refresh(state);consequencePanel=null;
         root=col();root.setBackgroundColor(bg);root.setFitsSystemWindows(true);setContentView(root);
-        LinearLayout top=row();top.setPadding(dp(18),dp(8),dp(18),dp(4));weighted(top,title("学习日程"));top.addView(button("智能助手",()->startActivity(new Intent(this,AssistantActivity.class))));root.addView(top);
-        syncProgress=row();syncProgress.setPadding(dp(18),dp(6),dp(18),dp(6));ProgressBar syncSpinner=new ProgressBar(this);syncProgress.addView(syncSpinner,new LinearLayout.LayoutParams(dp(22),dp(22)));syncProgress.addView(text("  正在同步中",15,blue));root.addView(syncProgress);updateSyncProgress();
-        ScrollView scroll=new ScrollView(this);scroll.setFillViewport(true);body=col();body.setPadding(dp(12),dp(8),dp(12),dp(20));scroll.addView(body);root.addView(scroll,new LinearLayout.LayoutParams(-1,0,1));
-        View divider=new View(this);divider.setBackgroundColor(0xffdcdcdc);root.addView(divider,new LinearLayout.LayoutParams(-1,dp(1)));
-        nav=row();nav.setPadding(0,dp(5),0,dp(5));nav.setBackgroundColor(0xfff7f7f7);
+        LinearLayout top=row();top.setPadding(dp(20),dp(10),dp(20),dp(8));
+        String[] pageTitles={"学习日程","课程","固定课表","设置","学习概览"};
+        TextView heading=title(pageTitles[page]);heading.setTextSize(24);weighted(top,heading);
+        Button assistant=button("智能助手",()->startActivity(new Intent(this,AssistantActivity.class)));PlannerUi.quietButton(assistant);top.addView(assistant);root.addView(top);
+        syncProgress=row();syncProgress.setPadding(dp(20),dp(4),dp(20),dp(4));ProgressBar syncSpinner=new ProgressBar(this);syncProgress.addView(syncSpinner,new LinearLayout.LayoutParams(dp(18),dp(18)));syncProgress.addView(text("  正在同步中",13,blue));root.addView(syncProgress);updateSyncProgress();
+        ScrollView scroll=new ScrollView(this);scroll.setFillViewport(true);scroll.setClipToPadding(false);body=col();body.setPadding(dp(16),dp(4),dp(16),dp(24));scroll.addView(body);root.addView(scroll,new LinearLayout.LayoutParams(-1,0,1));
+        View divider=new View(this);divider.setBackgroundColor(PlannerUi.OUTLINE);root.addView(divider,new LinearLayout.LayoutParams(-1,dp(1)));
+        nav=row();nav.setGravity(Gravity.BOTTOM);nav.setBackgroundColor(Color.WHITE);
         String[] labels={"日历","课程","固定课表","设置","学习"};
         int[] pages={0,4,1,2,3};
-        for(int i:pages){
-            final int n=i;boolean active=i==page;LinearLayout tab=col();tab.setGravity(Gravity.CENTER);tab.setPadding(0,dp(3),0,dp(3));
-            tab.addView(new PlannerUi.Icon(this,i==4?5:i,active?blue:ink),new LinearLayout.LayoutParams(dp(25),dp(25)));
-            TextView label=text(labels[i],11,active?blue:ink);label.setGravity(Gravity.CENTER);tab.addView(label);
-            tab.setSelected(active);tab.setContentDescription(labels[i]+(active?"，已选中":""));tab.setFocusable(true);
-            tab.setBackground(new android.graphics.drawable.RippleDrawable(android.content.res.ColorStateList.valueOf(0xffdddddd),null,null));
-            tab.setOnClickListener(v->{if(!busy){page=n;render();}});nav.addView(tab,new LinearLayout.LayoutParams(0,-2,1));
-        }
-        root.addView(nav);try{if(page==0)calendar();else if(page==1)courses();else if(page==2)events();else if(page==4)learning();else settings();}catch(Exception e){alert("显示失败",e.getMessage());}
+        for(int i:pages){final int n=i;nav.addView(PlannerUi.navigationItem(this,i==4?5:i,labels[i],i==page,()->{if(!busy){page=n;render();}}),new LinearLayout.LayoutParams(0,-1,1));}
+        root.addView(nav,new LinearLayout.LayoutParams(-1,-2));try{if(page==0)calendar();else if(page==1)courses();else if(page==2)events();else if(page==4)learning();else settings();}catch(Exception e){alert("显示失败",e.getMessage());}
     }
     void calendarSearch(){
-        LinearLayout search=row();search.setGravity(Gravity.CENTER);search.setPadding(dp(12),dp(8),dp(12),dp(8));search.setBackground(rounded(Color.WHITE,8));
-        search.addView(new PlannerUi.Icon(this,4,muted),new LinearLayout.LayoutParams(dp(18),dp(18)));
-        TextView label=text("  搜索",16,muted);search.addView(label);search.setMinimumHeight(dp(44));search.setFocusable(true);search.setContentDescription("搜索课程或课时，查找安排日期");
-        search.setOnClickListener(v->{if(!busy)new PlannerFeatures(this).search();});body.addView(search,new LinearLayout.LayoutParams(-1,-2));
+        LinearLayout search=row();search.setPadding(dp(16),dp(8),dp(16),dp(8));search.setBackground(PlannerUi.ripple(this,PlannerUi.TONAL,28));
+        search.addView(new PlannerUi.Icon(this,4,muted),new LinearLayout.LayoutParams(dp(22),dp(22)));
+        TextView label=text("搜索课程、课节或日期",15,muted);label.setPadding(dp(12),dp(4),0,dp(4));search.addView(label,new LinearLayout.LayoutParams(0,-2,1));search.setMinimumHeight(dp(52));search.setFocusable(true);search.setContentDescription("搜索课程或课时，查找安排日期");
+        search.setOnClickListener(v->{if(!busy)new PlannerFeatures(this).search();});LinearLayout.LayoutParams params=new LinearLayout.LayoutParams(-1,-2);params.bottomMargin=dp(10);body.addView(search,params);
     }
     void moveCalendar(int direction){
         if(calendarExpanded){month=month.plusMonths(direction);selected=month.withDayOfMonth(Math.min(selected.getDayOfMonth(),month.lengthOfMonth()));}
         else{selected=selected.plusWeeks(direction);month=selected.withDayOfMonth(1);}render();
     }
     Button pill(String label,Runnable action){return button(label,action);}
-    Button taskAction(String label,Runnable action){Button b=pill(label,action);b.setPadding(dp(8),dp(4),dp(8),dp(4));return b;}
+    Button taskAction(String label,Runnable action){return pill(label,action);}
     int color(String c){switch(c){case "green":return 0xff168875;case "purple":return 0xff8b60ba;case "orange":return 0xffc17d30;case "pink":return 0xffc45f92;default:return 0xff2766c3;}}
     String hours(long n){return String.format(Locale.CHINA,"%.1f 小时",n/60.0);}
     void jumpToDate(){
@@ -322,19 +325,46 @@ public class MainActivity extends Activity {
         CalendarDay agenda=new CalendarDay(state,selected);
         Map<String,ConfirmationDraft.Undo> undoByTask=ConfirmationDraft.Undo.captureRecorded(state,agenda.tasks);
         calendarSearch();
-        LinearLayout c=card(body),bar=row();weighted(bar,title(month.getYear()+" 年 "+month.getMonthValue()+" 月"));bar.addView(pill("今天",()->{selected=LocalDate.now(Planner.ZONE);month=selected.withDayOfMonth(1);render();}));bar.addView(pill("‹",()->moveCalendar(-1)));bar.addView(pill("›",()->moveCalendar(1)));c.addView(bar);
+        LinearLayout c=card(body),bar=row();TextView monthTitle=title(month.getYear()+" 年 "+month.getMonthValue()+" 月");monthTitle.setTextSize(19);weighted(bar,monthTitle);
+        bar.addView(PlannerUi.iconButton(this,6,calendarExpanded?"上个月":"上一周",()->{if(!busy)moveCalendar(-1);}),new LinearLayout.LayoutParams(dp(48),dp(48)));
+        bar.addView(PlannerUi.iconButton(this,7,calendarExpanded?"下个月":"下一周",()->{if(!busy)moveCalendar(1);}),new LinearLayout.LayoutParams(dp(48),dp(48)));c.addView(bar);
         Set<LocalDate> marked=agenda.taskDates;LinearLayout week=row();for(String w:new String[]{"一","二","三","四","五","六","日"}){TextView v=text(w,12,muted);v.setGravity(Gravity.CENTER);weighted(week,v);}c.addView(week);
-        int offset=month.getDayOfWeek().getValue()-1;LocalDate first=calendarExpanded?month.minusDays(offset):selected.minusDays(selected.getDayOfWeek().getValue()-1);for(int r=0;r<(calendarExpanded?6:1);r++){LinearLayout rr=row();for(int j=0;j<7;j++){LocalDate d=first.plusDays(r*7+j);boolean mark=marked.contains(d);if(!mark)for(JSONObject e:Planner.list(state.getJSONArray("fixedEvents")))if(Planner.occurs(e,d)){mark=true;break;}TextView v=text(d.getDayOfMonth()+(mark?"\n·":"\n "),14,d.getMonth()==month.getMonth()?ink:0xffb2b2b2);v.setGravity(Gravity.CENTER);v.setMinHeight(dp(43));v.setContentDescription(d.toString()+(mark?" 有安排":""));v.setSelected(d.equals(selected));if(d.equals(selected)){v.setTextColor(Color.WHITE);v.setBackground(rounded(blue,10));}else if(d.equals(LocalDate.now(Planner.ZONE)))v.setTextColor(blue);v.setOnClickListener(x->{selected=d;month=d.withDayOfMonth(1);render();});weighted(rr,v);}c.addView(rr);if(!first.plusDays((r+1)*7).isBefore(month.plusMonths(1)))break;}
-        Button toggle=pill(calendarExpanded?"收起月历 ∧":"展开月历 ∨",()->{calendarExpanded=!calendarExpanded;month=selected.withDayOfMonth(1);render();});
-        LinearLayout.LayoutParams toggleParams=new LinearLayout.LayoutParams(-2,-2);toggleParams.gravity=Gravity.CENTER_HORIZONTAL;c.addView(toggle,toggleParams);
-        LinearLayout head=row();weighted(head,title(selected.getMonthValue()+" 月 "+selected.getDayOfMonth()+" 日 · "+new String[]{"一","二","三","四","五","六","日"}[selected.getDayOfWeek().getValue()-1]));head.addView(button("‹",()->{selected=selected.minusDays(1);month=selected.withDayOfMonth(1);render();}));head.addView(button("›",()->{selected=selected.plusDays(1);month=selected.withDayOfMonth(1);render();}));body.addView(head);
+        int offset=month.getDayOfWeek().getValue()-1;LocalDate first=calendarExpanded?month.minusDays(offset):selected.minusDays(selected.getDayOfWeek().getValue()-1);
+        for(int r=0;r<(calendarExpanded?6:1);r++){
+            LinearLayout rr=row();
+            for(int j=0;j<7;j++){
+                LocalDate d=first.plusDays(r*7+j);boolean mark=marked.contains(d);
+                if(!mark)for(JSONObject e:Planner.list(state.getJSONArray("fixedEvents")))if(Planner.occurs(e,d)){mark=true;break;}
+                TextView v=text(d.getDayOfMonth()+(mark?"\n·":"\n "),14,d.getMonth()==month.getMonth()?ink:muted);v.setGravity(Gravity.CENTER);v.setMinHeight(dp(52));
+                v.setContentDescription(d.toString()+(mark?" 有安排":"")+(d.equals(selected)?"，已选中":""));v.setSelected(d.equals(selected));v.setFocusable(true);
+                if(d.equals(selected)){v.setTextColor(Color.WHITE);v.setBackground(PlannerUi.ripple(this,blue,18));}
+                else v.setBackground(PlannerUi.ripple(this,d.equals(LocalDate.now(Planner.ZONE))?PlannerUi.TONAL:Color.TRANSPARENT,18));
+                v.setOnClickListener(x->{if(!busy){selected=d;month=d.withDayOfMonth(1);render();}});weighted(rr,v);
+            }
+            c.addView(rr);if(!first.plusDays((r+1)*7).isBefore(month.plusMonths(1)))break;
+        }
+        LinearLayout calendarFooter=row();
+        Button toggle=pill(calendarExpanded?"收起月历":"展开月历",()->{calendarExpanded=!calendarExpanded;month=selected.withDayOfMonth(1);render();});PlannerUi.quietButton(toggle);weighted(calendarFooter,toggle);
+        Button today=pill("回到今天",()->{selected=LocalDate.now(Planner.ZONE);month=selected.withDayOfMonth(1);render();});PlannerUi.quietButton(today);weighted(calendarFooter,today);c.addView(calendarFooter);
+        LinearLayout head=row();head.setPadding(dp(2),dp(12),0,dp(4));weighted(head,title(selected.getMonthValue()+" 月 "+selected.getDayOfMonth()+" 日 · 周"+new String[]{"一","二","三","四","五","六","日"}[selected.getDayOfWeek().getValue()-1]));
+        View more=PlannerUi.iconButton(this,8,"当天安排更多操作",()->{});more.setOnClickListener(v->{if(busy)return;PopupMenu menu=new PopupMenu(this,v);
+            menu.getMenu().add("跳到日期").setOnMenuItemClickListener(item->{jumpToDate();return true;});
+            menu.getMenu().add("复制当天安排").setOnMenuItemClickListener(item->{copyDayAgenda();return true;});
+            menu.getMenu().add("前一天").setOnMenuItemClickListener(item->{selected=selected.minusDays(1);month=selected.withDayOfMonth(1);render();return true;});
+            menu.getMenu().add("后一天").setOnMenuItemClickListener(item->{selected=selected.plusDays(1);month=selected.withDayOfMonth(1);render();return true;});menu.show();
+        });head.addView(more,new LinearLayout.LayoutParams(dp(48),dp(48)));body.addView(head);
         List<JSONObject> tasks=agenda.tasks,events=agenda.events;long planned=agenda.plannedMinutes;String confirmedText;
         try{confirmedText=hours(DailyConsequences.confirmed(selected,state));}
         catch(DailyConsequences.CalculationException e){confirmedText="无法计算（分钟数合计超出范围，记录已保留）";}
-        body.addView(text("待学 "+hours(planned)+"   已确认 "+confirmedText+"   固定 "+events.size()+" 项",12,muted));
-        PlannerUi.Flow dayActions=new PlannerUi.Flow(this);body.addView(dayActions);
-        ImmediateStudyPanel.controls(this,dayActions);dayActions.addView(button("跳到日期",this::jumpToDate));dayActions.addView(button("复制当天安排",this::copyDayAgenda));
-        List<JSONObject> timeline=agenda.timeline;for(JSONObject item:timeline){if(item.has("courseID"))taskCard(body,item,agenda.course(item.getString("courseID")),null);else eventCard(body,item,false);}if(timeline.isEmpty())card(body).addView(text("这一天没有待进行的安排",15,muted));boolean label=false;for(JSONObject t:tasks)if(!Planner.pending(t)){if(!label){body.addView(title("完成记录"));label=true;}taskCard(body,t,agenda.course(t.getString("courseID")),undoByTask.get(t.getString("id")));}for(JSONObject e:agenda.skipped){
+        LinearLayout summary=row();summary.setPadding(dp(2),0,dp(2),dp(12));
+        String[] values={hours(planned),confirmedText,events.size()+" 项"},labels={"待学习","已确认","固定事项"};
+        for(int i=0;i<values.length;i++){LinearLayout metric=col();TextView value=text(values[i],18,ink);value.setTypeface(Typeface.create("sans-serif-medium",Typeface.NORMAL));metric.addView(value);metric.addView(text(labels[i],12,muted));weighted(summary,metric);}body.addView(summary);
+        PlannerUi.Flow dayActions=new PlannerUi.Flow(this);dayActions.setPadding(0,0,0,dp(10));body.addView(dayActions);ImmediateStudyPanel.controls(this,dayActions);
+        List<JSONObject> timeline=agenda.timeline;for(JSONObject item:timeline){if(item.has("courseID"))taskCard(body,item,agenda.course(item.getString("courseID")),null);else eventCard(body,item,false);}if(timeline.isEmpty()){
+            LinearLayout empty=card(body);empty.setPadding(dp(24),dp(24),dp(24),dp(24));empty.addView(title("这一天没有待进行的安排"));
+            empty.addView(text(state.getJSONArray("courses").length()==0?"先添加一门课程，让学习计划从这里开始。":"可以切换日期，或到课程页调整学习安排。",14,muted));
+            if(state.getJSONArray("courses").length()==0)empty.addView(primaryButton("添加第一门课程",()->courseEditor(null)));
+        }boolean label=false;for(JSONObject t:tasks)if(!Planner.pending(t)){if(!label){body.addView(title("完成记录"));label=true;}taskCard(body,t,agenda.course(t.getString("courseID")),undoByTask.get(t.getString("id")));}for(JSONObject e:agenda.skipped){
             LinearLayout skipped=card(body);cardBorder(skipped,color(e.optString("color","orange")));skipped.addView(text(e.optString("title")+" · 本日已临时移除",16,muted));
             skipped.addView(text(Planner.time(e.optInt("startMinute"))+" — "+Planner.time(e.optInt("endMinute"))+" · 本日不占用时间，其他日期照常安排",12,muted));
             final LocalDate date=selected;
@@ -342,7 +372,7 @@ public class MainActivity extends Activity {
         }
     }
     void learning()throws Exception{
-        body.addView(title("学习概览"));PlannerUi.Flow quick=new PlannerUi.Flow(this);body.addView(quick);ImmediateStudyPanel.controls(this,quick);
+        PlannerUi.Flow quick=new PlannerUi.Flow(this);body.addView(quick);ImmediateStudyPanel.controls(this,quick);
         List<JSONObject> review=Planner.review(state,Planner.now());if(!review.isEmpty())body.addView(pill("学习完成确认 · "+review.size()+" 项待确认",this::review));
         new PlannerFeatures(this).overview();
         consequencePanel=col();body.addView(consequencePanel);new DailyConsequencesView(this).render(consequencePanel);
@@ -365,7 +395,7 @@ public class MainActivity extends Activity {
         if(!t.optString("lessonName").isEmpty())box.addView(text(t.optString("lessonName"),16,ink));
         if(Planner.pending(t)){
             PlannerUi.Flow actions=new PlannerUi.Flow(this);
-            actions.addView(taskAction(Planner.planningStart(t)>Planner.now()?"提前完成":"全部完成",()->run(()->confirmTasks(new ConfirmationDraft(Collections.singletonList(t)),Collections.singletonMap(t.getString("id"),t.getInt("durationMinutes")),Collections.singletonMap(t.getString("id"),Planner.day(Planner.now())),null))));
+            actions.addView(primaryButton(Planner.planningStart(t)>Planner.now()?"提前完成":"全部完成",()->run(()->confirmTasks(new ConfirmationDraft(Collections.singletonList(t)),Collections.singletonMap(t.getString("id"),t.getInt("durationMinutes")),Collections.singletonMap(t.getString("id"),Planner.day(Planner.now())),null))));
             actions.addView(taskAction("部分/未完成",()->completion(t)));
             box.addView(actions);
             new PlannerFeatures(this).taskDrag(box,actions,t);
@@ -492,11 +522,19 @@ public class MainActivity extends Activity {
         }));});d.show();
     });}
     void showReviewNotice(){if(!reviewShown&&!Planner.review(state,Planner.now()).isEmpty()){reviewShown=true;render();}}
-    void courses()throws Exception{body.addView(title("课程管理"));if(database.lastDeletedBackup!=null){String backup=database.lastDeletedBackup;body.addView(button("撤销删除课程",()->BackupPanel.restoreCourse(this,backup,null)));}CompressedPreviewPanel.render(this,body);body.addView(text("学习量、截止日期与课程进度",13,muted));PlannerUi.Flow courseActions=new PlannerUi.Flow(this);body.addView(courseActions);courseActions.addView(button("＋ 添加课程",()->courseEditor(null)));new PlannerFeatures(this).coursesHeader(courseActions);new PlannerFeatures(this).courseCatalog(body);}
-    void courseCard(LinearLayout parent,JSONObject c,int done)throws Exception{LinearLayout box=card(parent);cardBorder(box,color(c.optString("color")));TextView courseName=text(c.getString("name"),19,ink);courseName.setTypeface(null,Typeface.BOLD);box.addView(courseName);int total=c.getInt("totalMinutes");box.addView(text(hours(done)+" / "+hours(total)+" · 截止 "+Planner.date(c.getDouble("deadline")),13,muted));ProgressBar p=new ProgressBar(this,null,android.R.attr.progressBarStyleHorizontal);p.setMax(Math.max(1,total));p.setProgress(done);box.addView(p);int days=(int)Math.max(1,java.time.temporal.ChronoUnit.DAYS.between(LocalDate.now(Planner.ZONE),Planner.day(c.getDouble("deadline")))+1);box.addView(text("剩余 "+hours(Math.max(0,total-done))+" · 按截止日期日均约 "+(int)Math.ceil(Math.max(0,total-done)/(double)days)+" 分钟（不含每日加量）",13,muted));if(!c.optString("notes").isEmpty())box.addView(text(c.optString("notes"),13,ink));new PlannerFeatures(this).dailyWeightControl(box,c);PlannerUi.Flow actions=new PlannerUi.Flow(this);box.addView(actions);if("不定时录播课程".equals(c.optString("type")))actions.addView(button("调整课节顺序",()->new PlannerFeatures(this).lessonOrder(c)));actions.addView(button("编排预览",()->run(()->new PlannerFeatures(this).preview(next->c.getString("id")))));if(c.optJSONObject("netdisk")!=null)actions.addView(button("网盘课节与文件",()->new PlannerFeatures(this).netdiskFiles(c)));actions.addView(button("编辑课程",()->courseEditor(c)));if(WebsiteSourcePanel.supported(c))actions.addView(button("网站来源与更新",()->WebsiteSourcePanel.show(this,c)));}
-    EditText field(LinearLayout p,String label,String value,boolean number){p.addView(text(label,13,muted));EditText e=new EditText(this);e.setText(value);e.setTextSize(16);e.setSingleLine(true);e.setPadding(dp(6),dp(8),dp(6),dp(8));if(number)e.setInputType(InputType.TYPE_CLASS_NUMBER|InputType.TYPE_NUMBER_FLAG_DECIMAL);p.addView(e,new LinearLayout.LayoutParams(-1,-2));return e;}
+    void courses()throws Exception{
+        body.addView(text("管理学习量、截止日期与课程进度",14,muted));
+        if(database.lastDeletedBackup!=null){String backup=database.lastDeletedBackup;body.addView(button("撤销删除课程",()->BackupPanel.restoreCourse(this,backup,null)));}
+        PlannerUi.Flow courseActions=new PlannerUi.Flow(this);courseActions.setPadding(0,dp(8),0,dp(8));body.addView(courseActions);
+        courseActions.addView(primaryButton("添加课程",()->courseEditor(null)));new PlannerFeatures(this).coursesHeader(courseActions);
+        LinearLayout preview=col();preview.setVisibility(View.GONE);
+        Button compressed=button("极限压缩方案 · Mac 同步",()->{boolean open=preview.getVisibility()!=View.VISIBLE;preview.setVisibility(open?View.VISIBLE:View.GONE);});PlannerUi.quietButton(compressed);body.addView(compressed);body.addView(preview);CompressedPreviewPanel.render(this,preview);
+        new PlannerFeatures(this).courseCatalog(body);
+    }
+    void courseCard(LinearLayout parent,JSONObject c,int done)throws Exception{LinearLayout box=card(parent);cardBorder(box,color(c.optString("color")));TextView courseName=text(c.getString("name"),19,ink);courseName.setTypeface(null,Typeface.BOLD);box.addView(courseName);int total=c.getInt("totalMinutes");box.addView(text(hours(done)+" / "+hours(total)+" · 截止 "+Planner.date(c.getDouble("deadline")),13,muted));ProgressBar p=new ProgressBar(this,null,android.R.attr.progressBarStyleHorizontal);p.setMax(Math.max(1,total));p.setProgress(done);p.setProgressTintList(android.content.res.ColorStateList.valueOf(color(c.optString("color"))));box.addView(p);int days=(int)Math.max(1,java.time.temporal.ChronoUnit.DAYS.between(LocalDate.now(Planner.ZONE),Planner.day(c.getDouble("deadline")))+1);box.addView(text("剩余 "+hours(Math.max(0,total-done))+" · 按截止日期日均约 "+(int)Math.ceil(Math.max(0,total-done)/(double)days)+" 分钟（不含每日加量）",13,muted));if(!c.optString("notes").isEmpty())box.addView(text(c.optString("notes"),13,ink));new PlannerFeatures(this).dailyWeightControl(box,c);PlannerUi.Flow actions=new PlannerUi.Flow(this);actions.setPadding(0,dp(10),0,0);box.addView(actions);if("不定时录播课程".equals(c.optString("type")))actions.addView(button("调整课节顺序",()->new PlannerFeatures(this).lessonOrder(c)));actions.addView(button("编排预览",()->run(()->new PlannerFeatures(this).preview(next->c.getString("id")))));if(c.optJSONObject("netdisk")!=null)actions.addView(button("网盘课节与文件",()->new PlannerFeatures(this).netdiskFiles(c)));actions.addView(button("编辑课程",()->courseEditor(c)));if(WebsiteSourcePanel.supported(c))actions.addView(button("网站来源与更新",()->WebsiteSourcePanel.show(this,c)));}
+    EditText field(LinearLayout p,String label,String value,boolean number){TextView caption=text(label,13,muted);caption.setPadding(0,dp(12),0,dp(6));p.addView(caption);EditText e=new EditText(this);e.setId(View.generateViewId());caption.setLabelFor(e.getId());e.setText(value);e.setTextSize(16);e.setSingleLine(true);PlannerUi.styleField(e);if(number)e.setInputType(InputType.TYPE_CLASS_NUMBER|InputType.TYPE_NUMBER_FLAG_DECIMAL);p.addView(e,new LinearLayout.LayoutParams(-1,-2));return e;}
     EditText dateField(LinearLayout p,String label,String value){EditText e=field(p,label,value,false);e.setFocusable(false);e.setOnClickListener(v->{LocalDate d=LocalDate.parse(e.getText().toString());new DatePickerDialog(this,(picker,y,m,day)->e.setText(LocalDate.of(y,m+1,day).toString()),d.getYear(),d.getMonthValue()-1,d.getDayOfMonth()).show();});return e;}
-    Spinner spinner(LinearLayout p,String label,String[] options,int selected){p.addView(text(label,13,muted));Spinner v=new Spinner(this);ArrayAdapter<String> a=new ArrayAdapter<>(this,android.R.layout.simple_spinner_dropdown_item,options);v.setAdapter(a);v.setSelection(Math.max(0,selected));p.addView(v);return v;}
+    Spinner spinner(LinearLayout p,String label,String[] options,int selected){p.addView(text(label,13,muted));Spinner v=new Spinner(this);ArrayAdapter<String> a=new ArrayAdapter<>(this,android.R.layout.simple_spinner_dropdown_item,options);v.setAdapter(a);v.setSelection(Math.max(0,selected));v.setMinimumHeight(dp(48));p.addView(v,new LinearLayout.LayoutParams(-1,-2));return v;}
     AlertDialog editor(String title,LinearLayout form){ScrollView sv=new ScrollView(this);form.setPadding(dp(22),dp(8),dp(22),dp(24));sv.addView(form);return new AlertDialog.Builder(this).setTitle(title).setView(sv).setNegativeButton("取消",null).setPositiveButton("保存",null).create();}
     String value(EditText e){return e.getText().toString().trim();}int integer(EditText e){return Integer.parseInt(value(e));}double dateValue(EditText e){return Planner.at(LocalDate.parse(value(e)),0);}int minutes(EditText e){double n=Double.parseDouble(value(e));if(!Double.isFinite(n)||n<0||n>100000)throw new IllegalArgumentException("小时数应在 0–100000 之间");return (int)Math.round(n*60);}
     List<String> movedLessons(List<String> order,Set<String> selected,int before){List<String> picked=new ArrayList<>(),rest=new ArrayList<>();int removed=0;for(int i=0;i<order.size();i++){String id=order.get(i);if(selected.contains(id)){picked.add(id);if(i<before)removed++;}else rest.add(id);}rest.addAll(Math.max(0,Math.min(rest.size(),before-removed)),picked);return rest;}
@@ -512,7 +550,7 @@ public class MainActivity extends Activity {
         f.addView(text("自主研习：只填总学习时长，按时间块分配。\n分节研习：录入或导入各节名称和时长，按课节安排。",12,muted));
         EditText total=field(f,"总学习量（小时）",""+c.optInt("totalMinutes")/60.0,true),initial=field(f,"导入前已完成量（小时，不含应用内记录）",""+c.optInt("initialCompletedMinutes")/60.0,true);EditText lessonLines=field(f,"网课课节（每行：名称：分钟，中英文冒号均可）",manualLessonText(c),false);lessonLines.setSingleLine(false);lessonLines.setMinLines(3);lessonLines.setVisibility(Planner.isManualLessonCourse(c,c.optString("type"))?View.VISIBLE:View.GONE);type.setOnItemSelectedListener(new android.widget.AdapterView.OnItemSelectedListener(){public void onItemSelected(android.widget.AdapterView<?> parent,View view,int position,long id){lessonLines.setVisibility(Planner.isManualLessonCourse(c,types[position])?View.VISIBLE:View.GONE);}public void onNothingSelected(android.widget.AdapterView<?> parent){}});boolean mergedCourse=c.optJSONArray("mergedSources")!=null;type.setEnabled(!mergedCourse);total.setEnabled(!mergedCourse);initial.setEnabled(!mergedCourse);if(mergedCourse)f.addView(text("合并课程的课节、总量与基础进度由来源课程保留，可修改名称、日期和排程规则。",12,muted));EditText start=dateField(f,"开始日期",Planner.date(c.getDouble("startDate"))),deadline=dateField(f,"截止日期（包含当天）",Planner.date(c.getDouble("deadline")));CheckBox published=new CheckBox(this);published.setText("设置发布时间");published.setChecked(c.has("publishedDate"));f.addView(published);EditText publish=dateField(f,"发布时间",Planner.date(c.optDouble("publishedDate",c.getDouble("startDate"))));Spinner priority=spinner(f,"优先级",new String[]{"低","中","高"},c.optInt("priority",2)-1);EditText block=field(f,"最小时间块（分钟，0 跟随全局）",""+c.optInt("minimumBlockMinutes"),true);String[] keys={"blue","green","purple","orange","pink"};Spinner color=spinner(f,"颜色",new String[]{"蓝色","绿色","紫色","橙色","粉色"},Arrays.asList(keys).indexOf(c.optString("color")));CheckBox auto=new CheckBox(this);auto.setText("自动排程");auto.setChecked(c.optBoolean("autoScheduleEnabled",true));f.addView(auto);EditText notes=field(f,"备注",c.optString("notes"),false);notes.setSingleLine(false);f.addView(button("编排预览",()->run(()->{JSONObject draft=CourseTools.copy(c);if(value(name).isEmpty())throw new Exception("请填写课程名称");draft.put("name",value(name)).put("type",types[type.getSelectedItemPosition()]).put("startDate",dateValue(start)).put("deadline",dateValue(deadline)).put("minimumBlockMinutes",integer(block)).put("priority",priority.getSelectedItemPosition()+1).put("autoScheduleEnabled",auto.isChecked());if(!mergedCourse){draft.put("totalMinutes",minutes(total)).put("initialCompletedMinutes",minutes(initial));if(Planner.isManualLessonCourse(draft,draft.getString("type")))Planner.updateManualLessons(draft,parseManualLessons(value(lessonLines),draft));}if(published.isChecked())draft.put("publishedDate",dateValue(publish));else draft.remove("publishedDate");new PlannerFeatures(this).preview(next->{editSession.save(next,draft,Planner.now());return draft.getString("id");});})));DraftEditorDialog d=DraftEditorDialog.obtain(this,original==null?"添加课程":"编辑课程",f,reuse);if(original!=null)editorReload(f,d,original.optString("id"),true);if(original!=null)f.addView(button("删除课程",()->new AlertDialog.Builder(this).setTitle("删除此课程？").setMessage("所有安排和完成记录都会删除。").setNegativeButton("取消",null).setPositiveButton("删除",(a,b)->mutate(s->editSession.remove(s),true,d::dismiss)).show()));d.setOnShowListener(v->d.getButton(-1).setOnClickListener(x->run(()->{if(value(name).isEmpty())throw new Exception("请填写课程名称");int t=mergedCourse?c.getInt("totalMinutes"):minutes(total),i=mergedCourse?c.getInt("initialCompletedMinutes"):minutes(initial),u=integer(block);if(Planner.isManualLessonCourse(c,types[type.getSelectedItemPosition()])){JSONArray lessons=parseManualLessons(value(lessonLines),c);Planner.updateManualLessons(c,lessons);t=c.getInt("totalMinutes");}final int finalTotal=t;if(t<=0||u<0||u>1440)throw new Exception("学习量或最小时间块无效");double a=dateValue(start),b=dateValue(deadline);if(b<a)throw new Exception("截止日期早于开始日期");c.put("name",value(name)).put("type",types[type.getSelectedItemPosition()]).put("totalMinutes",finalTotal).put("initialCompletedMinutes",i).put("startDate",a).put("deadline",b).put("minimumBlockMinutes",u).put("priority",priority.getSelectedItemPosition()+1).put("color",keys[color.getSelectedItemPosition()]).put("autoScheduleEnabled",auto.isChecked()).put("notes",value(notes));if(published.isChecked())c.put("publishedDate",dateValue(publish));else c.remove("publishedDate");final JSONObject edited=CourseTools.copy(c);mutate(s->editSession.save(s,edited,Planner.now()),true,d::dismiss);})));d.show();});}
     String repeat(JSONObject e){JSONArray w=e.optJSONArray("weekdays");if(w==null||w.length()==0)return "单次";String[] names={"","日","一","二","三","四","五","六"};List<Integer> a=new ArrayList<>();for(int i=0;i<w.length();i++)a.add(w.optInt(i));Collections.sort(a);String r="每周 ";for(int i:a)r+=names[i]+" ";return r;}
-    void floatingStyle(LinearLayout box,int tint){android.graphics.drawable.GradientDrawable bg=new android.graphics.drawable.GradientDrawable();bg.setColor(Color.WHITE);bg.setCornerRadius(dp(16));bg.setStroke(dp(2),tint,dp(5),dp(4));box.setBackground(bg);box.setContentDescription("时段内浮动，具体时间未定");}
+    void floatingStyle(LinearLayout box,int tint){android.graphics.drawable.GradientDrawable bg=new android.graphics.drawable.GradientDrawable();bg.setColor(Color.WHITE);bg.setCornerRadius(dp(20));bg.setStroke(dp(1),tint,dp(5),dp(4));box.setBackground(bg);box.setContentDescription("时段内浮动，具体时间未定");}
     void showEventCalendar(JSONObject event){
         if(busy)return;
         run(()->{
@@ -528,7 +566,13 @@ public class MainActivity extends Activity {
             box.addView(text("仅移除本日这一次安排，并重排今天及未来未确认任务。",12,muted));
         }
     }
-    void events()throws Exception{body.addView(title("固定课表"));FixedEventRecognitionPanel.render(this,body);body.addView(text("固定时间或时段内的固定时长优先保留",13,muted));body.addView(button("＋ 添加固定事项",()->eventEditor(null)));FixedEventCatalogPanel.render(this,body);}
+    void events()throws Exception{
+        body.addView(text("为固定事项留出时间，学习安排自动避让",14,muted));PlannerUi.Flow actions=new PlannerUi.Flow(this);actions.setPadding(0,dp(8),0,dp(8));body.addView(actions);
+        actions.addView(primaryButton("添加固定事项",()->eventEditor(null)));
+        LinearLayout recognition=col();recognition.setVisibility(eventRecognitionText.isEmpty()?View.GONE:View.VISIBLE);
+        Button recognize=button("从文字识别",()->recognition.setVisibility(recognition.getVisibility()==View.VISIBLE?View.GONE:View.VISIBLE));actions.addView(recognize);body.addView(recognition);FixedEventRecognitionPanel.render(this,recognition);
+        FixedEventCatalogPanel.render(this,body);
+    }
     void saveEventResolvingConflicts(JSONObject event,JSONObject baseline,AlertDialog editor,AlertDialog review,
                                      Set<LocalDate> skipped,Set<LocalDate> skippedLocal,List<Planner.EventConflict> reviewed){
         run(()->{
@@ -599,8 +643,8 @@ public class MainActivity extends Activity {
     }
     void settings()throws Exception{
         SettingsMenu menu=new SettingsMenu(this,body);settingsMenu=menu;
-        LinearLayout assistant=menu.page("assistant","智能助手",4,false);assistant.addView(text("查询课程、日程、进度与冲突，预览并确认日程修改。聊天、记忆与 API 密钥仅保存在此手机。",14,muted));assistant.addView(button("打开智能助手",()->startActivity(new Intent(this,AssistantActivity.class))));
-        LinearLayout display=menu.page("display","显示设置",1,false);CalendarZone.controls(this,display);display.addView(title("主页时间字号"));SeekBar font=new SeekBar(this);font.setMax(10);font.setProgress(homeTimeSize()-14);TextView size=text(homeTimeSize()+" 号",16,ink);display.addView(size);display.addView(font);font.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener(){public void onStartTrackingTouch(SeekBar v){}public void onStopTrackingTouch(SeekBar v){}public void onProgressChanged(SeekBar v,int value,boolean user){getPreferences(0).edit().putInt("homeTimeSize",value+14).apply();size.setText((value+14)+" 号");}});display.addView(button("恢复默认字号",()->font.setProgress(3)));
+        LinearLayout assistant=menu.page("assistant","智能助手",9,false);assistant.addView(text("查询课程、日程、进度与冲突，预览并确认日程修改。聊天、记忆与 API 密钥仅保存在此手机。",14,muted));assistant.addView(button("打开智能助手",()->startActivity(new Intent(this,AssistantActivity.class))));
+        LinearLayout display=menu.page("display","显示设置",10,false);CalendarZone.controls(this,display);display.addView(title("主页时间字号"));SeekBar font=new SeekBar(this);font.setMax(10);font.setProgress(homeTimeSize()-14);TextView size=text(homeTimeSize()+" 号",16,ink);display.addView(size);display.addView(font);font.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener(){public void onStartTrackingTouch(SeekBar v){}public void onStopTrackingTouch(SeekBar v){}public void onProgressChanged(SeekBar v,int value,boolean user){getPreferences(0).edit().putInt("homeTimeSize",value+14).apply();size.setText((value+14)+" 号");}});display.addView(button("恢复默认字号",()->font.setProgress(3)));
         if(restoredSettingsDraft!=null){
             try{settingsDraft=SettingsDraft.restore(new JSONObject(restoredSettingsDraft));}
             catch(Exception error){alert("设置草稿无法恢复","已保存设置未被修改，请重新输入未保存的设置。");}
@@ -615,7 +659,7 @@ public class MainActivity extends Activity {
         explanation.addView(title("当前为什么这样排课"));
         for(String reason:ScheduleExplanation.lines(state))explanation.addView(text(reason,14,ink));
         explanation.addView(text("依据已保存的设置与最近一次排程结果。修改权重后，保存设置并重排才会更新原因。",13,muted));
-        LinearLayout f=card(menu.page("defaults","默认规则",3,true));
+        LinearLayout f=card(menu.page("defaults","默认规则",13,true));
         f.addView(title("默认规则"));
         EditText unit=field(f,"全局最小学习时间块（分钟）",draft.unit,true);
         EditText notification=field(f,"应用内每日确认时间（HH:mm）",draft.notification,false);
@@ -627,9 +671,9 @@ public class MainActivity extends Activity {
             availability[i]=field(availabilityBox,"星期"+new String[]{"一","二","三","四","五","六","日"}[i],draft.availability[i],false);
             availability[i].setHint("08:00-12:00, 14:00-22:00");
         }
-        syncSettings(menu.page("localSync","热点局域网同步",0,false));
-        CloudSettingsPanel.render(this,menu.page("cloudSync","云端同步",3,false));
-        LinearLayout backup=card(menu.page("data","数据与备份",1,false));backup.addView(title("数据与备份"));BackupPanel.controls(this,backup);backup.addView(text("安装包不含个人日程；首次安装以空白日程开始。覆盖安装不会替换手机进度。卸载会删除手机数据，请先导出备份。",13,muted));PlannerUi.Flow backupActions=new PlannerUi.Flow(this);backup.addView(backupActions);backupActions.addView(button("导出手机日程备份",()->{Intent intent=new Intent(Intent.ACTION_CREATE_DOCUMENT);intent.setType("application/json");intent.addCategory(Intent.CATEGORY_OPENABLE);intent.putExtra(Intent.EXTRA_TITLE,"学习日程-"+LocalDate.now(Planner.ZONE)+".json");startActivityForResult(intent,EXPORT_BACKUP);}));backupActions.addView(button("从备份恢复",()->{Intent intent=new Intent(Intent.ACTION_OPEN_DOCUMENT);intent.setType("application/json");intent.addCategory(Intent.CATEGORY_OPENABLE);startActivityForResult(intent,IMPORT_BACKUP);}));backupActions.addView(button("恢复前的日程",()->transferBackup(null,false)));backup.addView(text("每次从备份恢复前保留一份本机日程，可通过「恢复前的日程」找回。仅保留最近一次，卸载或清除数据也会删除；需要长期保存请导出文件。",13,muted));JSONObject meta=new JSONObject(read(getAssets().open("snapshot-info.json")));backup.addView(text("初始数据："+meta.getJSONObject("counts").getInt("courses")+" 门课程 · "+meta.getJSONObject("counts").getInt("fixedEvents")+" 条固定规则 · "+meta.getJSONObject("counts").getInt("tasks")+" 条任务 · "+meta.getJSONObject("counts").getInt("completions")+" 条完成记录\n"+buildDetails(),12,muted));backupActions.addView(button("复制版本信息",()->run(()->{android.content.ClipboardManager clipboard=(android.content.ClipboardManager)getSystemService(CLIPBOARD_SERVICE);clipboard.setPrimaryClip(ClipData.newPlainText("学习日程版本",buildDetails()));Toast.makeText(this,"版本信息已复制",Toast.LENGTH_SHORT).show();})));
+        syncSettings(menu.page("localSync","热点局域网同步",14,false));
+        CloudSettingsPanel.render(this,menu.page("cloudSync","云端同步",11,false));
+        LinearLayout backup=card(menu.page("data","数据与备份",12,false));backup.addView(title("数据与备份"));BackupPanel.controls(this,backup);backup.addView(text("安装包不含个人日程；首次安装以空白日程开始。覆盖安装不会替换手机进度。卸载会删除手机数据，请先导出备份。",13,muted));PlannerUi.Flow backupActions=new PlannerUi.Flow(this);backup.addView(backupActions);backupActions.addView(button("导出手机日程备份",()->{Intent intent=new Intent(Intent.ACTION_CREATE_DOCUMENT);intent.setType("application/json");intent.addCategory(Intent.CATEGORY_OPENABLE);intent.putExtra(Intent.EXTRA_TITLE,"学习日程-"+LocalDate.now(Planner.ZONE)+".json");startActivityForResult(intent,EXPORT_BACKUP);}));backupActions.addView(button("从备份恢复",()->{Intent intent=new Intent(Intent.ACTION_OPEN_DOCUMENT);intent.setType("application/json");intent.addCategory(Intent.CATEGORY_OPENABLE);startActivityForResult(intent,IMPORT_BACKUP);}));backupActions.addView(button("恢复前的日程",()->transferBackup(null,false)));backup.addView(text("每次从备份恢复前保留一份本机日程，可通过「恢复前的日程」找回。仅保留最近一次，卸载或清除数据也会删除；需要长期保存请导出文件。",13,muted));JSONObject meta=new JSONObject(read(getAssets().open("snapshot-info.json")));backup.addView(text("初始数据："+meta.getJSONObject("counts").getInt("courses")+" 门课程 · "+meta.getJSONObject("counts").getInt("fixedEvents")+" 条固定规则 · "+meta.getJSONObject("counts").getInt("tasks")+" 条任务 · "+meta.getJSONObject("counts").getInt("completions")+" 条完成记录\n"+buildDetails(),12,muted));backupActions.addView(button("复制版本信息",()->run(()->{android.content.ClipboardManager clipboard=(android.content.ClipboardManager)getSystemService(CLIPBOARD_SERVICE);clipboard.setPrimaryClip(ClipData.newPlainText("学习日程版本",buildDetails()));Toast.makeText(this,"版本信息已复制",Toast.LENGTH_SHORT).show();})));
         captureSettingsDraft=()->{
             draft.unit=unit.getText().toString();draft.notification=notification.getText().toString();
             for(int i=0;i<7;i++)draft.availability[i]=availability[i].getText().toString();

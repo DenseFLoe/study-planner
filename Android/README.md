@@ -2,6 +2,18 @@
 
 安装包：`../dist/学习日程-安卓版.apk`，适用于 Android 8.0（API 26）及以上，原生 Java 界面；使用局域网 INTERNET、扫码 CAMERA 和限时前台同步服务权限，无云服务器或存储权限要求。摄像头帧仅在内存中用于识别 Mac 配对二维码，不保存、不上传。
 
+## 安卓界面整理（2026-11-12）
+
+参考 [Material 3 组件结构](https://developer.android.com/design/ui/mobile/guides/components/material-overview)、[Android 布局指南](https://developer.android.com/design/ui/mobile/guides/layout-and-content/layout-basics)与[无障碍指南](https://developer.android.com/design/ui/mobile/guides/foundations/accessibility)，在现有原生 Java 界面上统一颜色、字号、间距、表单、按钮与导航。主要操作使用深绿色实心按钮，次要操作使用浅色或文字按钮；共享按钮至少 48dp 高，长标签可换行。
+
+- 日历保留周/月切换、当天学习量与时间轴；日期右侧的更多菜单包含跳到日期、复制安排及前后一天。
+- 课程页保留添加、导入与合并，网站/网盘/未完成导入集中在「导入课程」菜单；筛选、排序与 Mac 极限压缩预览按需展开。
+- 固定课表优先展示事项；文字识别和筛选可展开，已有识别原文会保留。
+- 设置改为带用途说明的列表，保留分类页面、返回操作与未保存草稿。助手共用新的按钮和输入框，发送区可换行。
+- 排课、同步、确认、备份及 Android 平台边界不变。
+
+原生界面回归入口：在**新建的隔离模拟器**安装正式 APK 和 `./Android/test-device-build.sh` 生成的测试包后，运行 `adb -s <模拟器序列号> shell am instrument -w -e isolated true local.studyplanner.synctests/local.studyplanner.PlannerUiInstrumentation`。检查 320/360/600dp 与 1/1.5/2 倍字号下的共享组件，并遍历五个主页面、月历、筛选及设置返回；合成课程与任务只注入内存，不保存到正式日程，截图写入测试模拟器的应用外部文件目录。该入口拒绝真机与已有数据库的环境；不要为运行测试清除日常使用设备的数据。
+
 ## 1.6.6 智能助手（2026-11-07）
 
 顶部「智能助手」或「设置 → 智能助手」打开原生对话页。支持与 Mac 相同的 OpenAI 兼容/DeepSeek/Anthropic 接口、17项本机查询及修改预览工具、每轮一次发送确认、完整差异核对后应用、备份与受保护撤销，以及本机记忆和对话搜索/批量删除。API 密钥由用户在手机填写或主动载入，使用 Android Keystore 加密，不进入聊天、课表、日程备份或同步。学习监督仍仅支持 Mac，极限压缩仍只读云同步结果。

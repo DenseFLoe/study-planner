@@ -16,7 +16,7 @@ import static local.studyplanner.AssistantProtocol.*;
 public final class AssistantActivity extends Activity {
     private static AssistantSession shared;
     AssistantSession session;AssistantSession.State state;AssistantSession.View observer;
-    LinearLayout root,chat,actions;ScrollView scroll;EditText question;TextView status,heading;Button send,stop,retry,historyButton,apiButton,memoryButton,newButton,undo;
+    LinearLayout root,chat;PlannerUi.Flow actions;ScrollView scroll;EditText question;TextView status,heading;Button send,stop,retry,historyButton,apiButton,memoryButton,newButton,undo;
     boolean foreground,applying,rendering;int shown=40;String selected="",lastEntry="";final List<EditText> secretFields=new ArrayList<>();
     static synchronized AssistantSession get(Context context)throws Exception{
         if(shared==null){Context app=context.getApplicationContext();Contract contract=new Contract(new JSONObject(read(app.getAssets().open("assistant-contract.json"),100000)));
@@ -36,17 +36,17 @@ public final class AssistantActivity extends Activity {
     LinearLayout column(){LinearLayout v=new LinearLayout(this);v.setOrientation(LinearLayout.VERTICAL);return v;}
     LinearLayout row(){LinearLayout v=new LinearLayout(this);v.setOrientation(LinearLayout.HORIZONTAL);v.setGravity(Gravity.CENTER_VERTICAL);return v;}
     TextView text(String value,int size){return AssistantMarkdown.text(this,value,size);}
-    Button button(String value,Runnable action){Button b=new Button(this);b.setText(value);b.setOnClickListener(v->{try{action.run();}catch(Exception error){notice("操作未完成，请核对输入后重试。");}});return b;}
-    EditText field(LinearLayout parent,String label,String value){parent.addView(text(label,13));EditText edit=new EditText(this);edit.setSingleLine(true);edit.setText(value);edit.setSaveEnabled(false);edit.setImportantForAutofill(View.IMPORTANT_FOR_AUTOFILL_NO_EXCLUDE_DESCENDANTS);parent.addView(edit);return edit;}
+    Button button(String value,Runnable action){Button b=new Button(this);b.setText(value);PlannerUi.styleButton(b);b.setOnClickListener(v->{try{action.run();}catch(Exception error){notice("操作未完成，请核对输入后重试。");}});return b;}
+    EditText field(LinearLayout parent,String label,String value){parent.addView(text(label,13));EditText edit=new EditText(this);edit.setSingleLine(true);edit.setText(value);PlannerUi.styleField(edit);edit.setSaveEnabled(false);edit.setImportantForAutofill(View.IMPORTANT_FOR_AUTOFILL_NO_EXCLUDE_DESCENDANTS);parent.addView(edit);return edit;}
     ScrollView scrolling(LinearLayout content){ScrollView v=new ScrollView(this);v.addView(content);return v;}
     void build(){
-        root=column();root.setBackgroundColor(0xfff5f6f7);root.setFitsSystemWindows(true);root.setPadding(dp(12),dp(8),dp(12),dp(8));setContentView(root);
-        LinearLayout top=row();top.addView(button("‹ 返回",this::onBackPressed));heading=text("智能助手",20);heading.setTypeface(null,Typeface.BOLD);top.addView(heading,new LinearLayout.LayoutParams(0,-2,1));newButton=button("新对话",()->session.newConversation());top.addView(newButton);root.addView(top);
+        root=column();root.setBackgroundColor(PlannerUi.BACKGROUND);root.setFitsSystemWindows(true);root.setPadding(dp(12),dp(8),dp(12),dp(8));setContentView(root);
+        LinearLayout top=row();top.addView(PlannerUi.iconButton(this,6,"返回日程",this::onBackPressed),new LinearLayout.LayoutParams(dp(48),dp(48)));heading=text("智能助手",20);heading.setTypeface(null,Typeface.BOLD);top.addView(heading,new LinearLayout.LayoutParams(0,-2,1));newButton=button("新对话",()->session.newConversation());top.addView(newButton);root.addView(top);
         PlannerUi.Flow menu=new PlannerUi.Flow(this);historyButton=button("聊天记录",this::history);apiButton=button("API 设置",this::settings);memoryButton=button("本机记忆",this::memories);undo=button("撤销上次修改",()->session.undo());for(Button b:new Button[]{historyButton,apiButton,memoryButton,undo})menu.addView(b);root.addView(menu);
         status=text("正在读取本机聊天…",13);root.addView(status);scroll=new ScrollView(this);scroll.setFillViewport(true);chat=column();scroll.addView(chat);root.addView(scroll,new LinearLayout.LayoutParams(-1,0,1));
-        question=new EditText(this);question.setHint("询问日程，或说明你想怎样调整");question.setMinLines(2);question.setMaxLines(5);question.setGravity(Gravity.TOP);question.setSaveEnabled(false);question.setImportantForAutofill(View.IMPORTANT_FOR_AUTOFILL_NO_EXCLUDE_DESCENDANTS);question.setInputType(android.text.InputType.TYPE_CLASS_TEXT|android.text.InputType.TYPE_TEXT_FLAG_MULTI_LINE|android.text.InputType.TYPE_TEXT_FLAG_CAP_SENTENCES);root.addView(question);
+        question=new EditText(this);question.setHint("询问日程，或说明你想怎样调整");question.setMinLines(2);question.setMaxLines(5);question.setGravity(Gravity.TOP);question.setSaveEnabled(false);question.setImportantForAutofill(View.IMPORTANT_FOR_AUTOFILL_NO_EXCLUDE_DESCENDANTS);question.setInputType(android.text.InputType.TYPE_CLASS_TEXT|android.text.InputType.TYPE_TEXT_FLAG_MULTI_LINE|android.text.InputType.TYPE_TEXT_FLAG_CAP_SENTENCES);PlannerUi.styleField(question);root.addView(question);
         question.addTextChangedListener(new TextWatcher(){public void beforeTextChanged(CharSequence s,int start,int count,int after){}public void onTextChanged(CharSequence s,int start,int before,int count){if(!rendering&&state!=null&&state.busy&&session!=null)session.stop();}public void afterTextChanged(Editable e){}});
-        actions=row();send=button("发送",()->{String text=question.getText().toString();if(!text.trim().isEmpty()&&session!=null){session.send(text);}});stop=button("停止",()->session.stop());retry=button("重新读取聊天",this::retry);actions.addView(send);actions.addView(stop);actions.addView(retry);root.addView(actions);
+        actions=new PlannerUi.Flow(this);actions.setPadding(0,dp(8),0,0);send=button("发送",()->{String text=question.getText().toString();if(!text.trim().isEmpty()&&session!=null){session.send(text);}});stop=button("停止",()->session.stop());retry=button("重新读取聊天",this::retry);PlannerUi.buttonTone(send,true);actions.addView(send);actions.addView(stop);actions.addView(retry);root.addView(actions);
         for(Button b:new Button[]{send,stop,retry,newButton,historyButton,apiButton,memoryButton,undo})b.setEnabled(false);question.setEnabled(false);undo.setVisibility(View.GONE);
     }
     void retry(){
