@@ -4,6 +4,29 @@ import StudyPersistence
 @testable import StudyPlanner
 
 final class AssistantActionTests: XCTestCase {
+    func testSingleTaskMoveUsesQueriedIdentityAndStrictDateTimeFields() throws {
+        let original = AssistantSimulation.snapshot()
+        var state = original.state
+        state.courses[0].deadline = try original.date("2026-09-18")
+        state.settings.availability = (1...7).map { .init(weekday: $0, startMinute: 480, endMinute: 1080) }
+        let s = AssistantSnapshot(state: state, now: original.now, calendar: original.calendar)
+        let first = try XCTUnwrap(s.state.tasks.first)
+        let change = try proposal("preview_move_task", ["task": first.id.uuidString, "target_date": "2026-09-15", "start_time": ""], s)
+        XCTAssertEqual(change.after.tasks.filter { $0.id != first.id }, s.state.tasks.filter { $0.id != first.id })
+        XCTAssertEqual(change.after.courses, s.state.courses)
+        XCTAssertEqual(change.after.settings, s.state.settings)
+        XCTAssertEqual(change.after.completions, s.state.completions)
+        XCTAssertEqual(change.after.tasks.first { $0.id == first.id }?.lessonID, first.lessonID)
+        XCTAssertTrue(change.summary.contains("学习任务：新增 0，修改 1，删除 0"))
+        for (date, time) in [("2026-02-30", ""), ("", ""), ("2026-09-15", "24:00"), ("2026-09-15", "9:00")] {
+            XCTAssertNil(try AssistantActions.execute(name: "preview_move_task", input: ["task": first.id.uuidString, "target_date": date, "start_time": time], snapshot: s, id: "E1").1)
+        }
+    }
+
+    @MainActor func testMoveConfirmationBackupReopenAndUndo() async throws {
+        try await AssistantSimulation.actionProbe(move: true)
+    }
+
     private func proposal(_ name: String, _ input: [String: String], _ snapshot: AssistantSnapshot = AssistantSimulation.snapshot()) throws -> AssistantChange {
         let (evidence, change) = try AssistantActions.execute(name: name, input: input, snapshot: snapshot, id: "E1")
         XCTAssertTrue(evidence.json.contains("awaiting_local_confirmation"), name)

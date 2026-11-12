@@ -353,7 +353,20 @@ public final class Planner {
         }
     }
     public static void prepareForOpen(JSONObject state,double now)throws Exception {
-        validate(state);removeArchivedCourses(state);replan(state,now);validate(state);
+        validate(state);removeArchivedCourses(state);
+        Map<String,Integer> booked=new HashMap<>();Set<String> overdue=new HashSet<>();boolean pending=false,missingOverdue=false;
+        for(JSONObject task:list(state.getJSONArray("tasks")))if(pending(task)){
+            if(planningEnd(task)>now){pending=true;booked.merge(task.getString("courseID"),task.getInt("durationMinutes"),Integer::sum);}
+            else overdue.add(task.getString("courseID"));
+        }
+        for(JSONObject course:list(state.getJSONArray("courses")))if(!course.optBoolean("isArchived")&&course.optBoolean("autoScheduleEnabled",true)&&overdue.contains(course.getString("id"))
+            &&booked.getOrDefault(course.getString("id"),0)<remaining(state,course))missingOverdue=true;
+        if(!pending||missingOverdue||SyncExchange.invalidPending(state,now))replan(state,now);
+        else {
+            for(JSONObject task:list(state.getJSONArray("tasks")))if(pending(task)&&planningEnd(task)>now)task.put("status",day(task.getDouble("start")).equals(day(now))?"planned":"future");
+            refreshDiagnostics(state,now);
+        }
+        validate(state);
     }
     public static boolean isManualLessonCourse(JSONObject course,String type){
         return "不定时录播课程".equals(type)&&course.optJSONObject("webCourse")==null&&course.optJSONArray("mergedSources")==null;

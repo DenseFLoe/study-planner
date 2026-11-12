@@ -32,6 +32,7 @@ def main():
                                     env=environment, timeout=60, check=True)
             assert "ASSISTANT_PACKAGE_PROBE_PASS protocols=3 queries=18 externalRequests=0 credentialsUsed=0" in result.stdout
             assert "actions=preview-confirm-undo" in result.stdout
+            assert "move=preview-confirm-reopen-undo" in result.stdout
             print(result.stdout.strip())
             if args.windows:
                 windows = subprocess.run([str(executable), "--assistant-window-check"], text=True, capture_output=True,

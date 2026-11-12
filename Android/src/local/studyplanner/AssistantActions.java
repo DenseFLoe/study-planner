@@ -55,7 +55,7 @@ final class AssistantActions {
         Proposal proposal=null;JSONObject data;
         if(proposed)data=object("status","not_applied","message","本轮已有待确认方案，未生成第二个修改；请完成或取消当前方案后再发指令。");
         else try{proposal=prepare(name,input,snapshot);data=object("status","awaiting_local_confirmation","untrusted_title",proposal.title,"summary",proposal.summary,"message","尚未保存。完整差异仅在本机确认卡片展示；只有用户点击确认应用才会写入。");}
-        catch(Exception error){data=object("status","not_applied","message",error instanceof Planner.EventConflictException||error instanceof FixedEventEditing.ReviewRequired?"事项与现有安排冲突，未修改或自动跳过。请调整后重新提出方案。":"参数无效、对象已变化或该操作不适用；没有保存。请核对ID、日期、字段和可用时段；信息不足时询问用户。");}
+        catch(Exception error){data=object("status","not_applied","message",error instanceof DailyTaskOrdering.MoveFailure?error.getMessage():error instanceof Planner.EventConflictException||error instanceof FixedEventEditing.ReviewRequired?"事项与现有安排冲突，未修改或自动跳过。请调整后重新提出方案。":"参数无效、对象已变化或该操作不适用；没有保存。请核对ID、日期、字段和可用时段；信息不足时询问用户。");}
         return new Result(AssistantTools.evidence(id,"日程修改预览、事项名称、日期时间与影响范围",data,snapshot),proposal);
     }
     static LocalDate actionDate(String text,Snapshot shot)throws Exception{LocalDate day=date(text,null);if(day.isBefore(shot.today.minusYears(10))||day.isAfter(shot.today.plusYears(5)))throw invalid();return day;}
@@ -98,9 +98,14 @@ final class AssistantActions {
         }
         case "preview_delete_event":{JSONObject e=index(next,"fixedEvents").get(in.getString("event"));if(e==null)throw invalid();title="删除整个事项规则："+e.getString("title");FixedEventEditing.removeAll(next,e);break;}
         case "preview_replan":title="按当前规则重新排课";break;
+        case "preview_move_task":{
+            LocalDate target=actionDate(in.getString("target_date"),shot);String time=in.getString("start_time");
+            DailyTaskOrdering.move(next,in.getString("task"),target,time.isEmpty()?null:minute(time),shot.now);
+            title="单独移动学习任务至 "+target;replan=false;break;
+        }
         case "preview_swap_tasks":next=new DailyTaskSwapDraft(next,in.getString("source"),in.getString("target"),shot.now).preview;title="交换当天两项学习任务";replan=false;break;
         default:throw invalid();}
-        Planner.removeArchivedCourses(next);if(replan)Planner.replan(next,shot.now);Planner.validate(next);PlannerBackupFile.businessState(next);return new Proposal(title,next,shot);
+        if(!name.equals("preview_move_task"))Planner.removeArchivedCourses(next);if(replan)Planner.replan(next,shot.now);else if(name.equals("preview_move_task"))Planner.refreshDiagnostics(next,shot.now);Planner.validate(next);PlannerBackupFile.businessState(next);return new Proposal(title,next,shot);
     }
     /** The same monitor as cloud/local commits; PlannerDatabase.save backs up before its transaction. */
     static JSONObject apply(StateMutation.Store<JSONObject> store,Proposal proposal,double now)throws Exception{

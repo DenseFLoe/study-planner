@@ -77,6 +77,25 @@ extension PlannerState {
         settings.dailyTaskOrders = orders
     }
 
+    /// Fits one whole task around the saved timetable, including floating events.
+    func placeSingleTask(_ task: ScheduledTask, earliest: Date, calendar: Calendar) -> ScheduledTask? {
+        let day = calendar.startOfDay(for: earliest)
+        let events = fixedEvents.filter { $0.occurs(on: day, calendar: calendar) }
+        guard events.contains(where: \.isFloating) else {
+            return placeDailyTasks([task], earliest: earliest, calendar: calendar)?.first
+        }
+        let study = Set(settings.availability.filter {
+            $0.weekday == calendar.component(.weekday, from: day) && $0.startMinute >= 0 && $0.endMinute <= 1440 && $0.startMinute < $0.endMinute
+        }.flatMap { Array($0.startMinute..<$0.endMinute) })
+        let obstacles = tasks.filter { $0.id != task.id && ($0.isUnconfirmed || $0.completedMinutes > 0) }.map(\.retainedHistoryInterval)
+        // Require a joint witness with the unchanged tasks, even when the nominal
+        // floating-event placement would leave a gap for this one lesson.
+        guard let placements = jointDailyFloatingPlacements([task], earliest: earliest, day: day,
+            study: study, events: events, obstacles: obstacles, calendar: calendar) else { return nil }
+        return placeDailyTasks([task], earliest: earliest, calendar: calendar,
+            floatingPlacements: nil, actualFloatingPlacements: placements, hardReservations: [])?.first
+    }
+
     /// Packs whole lessons into available windows; never changes duration or another day.
     func placeDailyTasks(_ ordered: [ScheduledTask], earliest: Date, calendar: Calendar,
                          floatingPlacements: [UUID: Int]? = nil) -> [ScheduledTask]? {

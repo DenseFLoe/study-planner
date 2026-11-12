@@ -88,12 +88,20 @@ enum AssistantSimulation {
         session.question = "我的课程和课表是什么情况？请核对进度、规则及冲突。"
         return session
     }
-    @MainActor static func actionSession() throws -> (AssistantSession, PlannerStore) {
+    @MainActor static func actionSession(move: Bool = false) throws -> (AssistantSession, PlannerStore) {
         let now = Date(), calendar = Calendar.current
         var state = PlannerState()
         var course = Course(name: "合成课程 · 可安全撤销", totalMinutes: 120, startDate: calendar.startOfDay(for: now),
                             deadline: calendar.date(byAdding: .day, value: 7, to: now)!)
         course.id = courseID; state.courses = [course]; state.settings.availability = []
+        let sourceDate = calendar.date(byAdding: .day, value: 1, to: calendar.startOfDay(for: now))!
+        let targetDate = calendar.date(byAdding: .day, value: 2, to: calendar.startOfDay(for: now))!
+        let sourceTask = ScheduledTask(courseID: courseID, start: calendar.date(bySettingHour: 8, minute: 0, second: 0, of: sourceDate)!, durationMinutes: 60, status: .future)
+        if move {
+            state.settings.availability = (1...7).map { .init(weekday: $0, startMinute: 480, endMinute: 1080) }
+            state.tasks = [sourceTask, ScheduledTask(courseID: courseID, start: calendar.date(bySettingHour: 8, minute: 0, second: 0, of: targetDate)!, durationMinutes: 60, status: .future)]
+        }
+        let fixtureSnapshot = AssistantSnapshot(state: state, now: now)
         let repository = try LocalRepository(inMemory: true)
         try repository.save(state)
         state = try repository.load()
@@ -102,14 +110,23 @@ enum AssistantSimulation {
             guard !store.orderSaveBusy else { return nil }
             return .init(state: store.state, now: Date(), id: store.assistantSnapshotID)
         }, transportFactory: {
-            AssistantMockTransport(script: [("list_courses", ["offset": "0"]), ("preview_delete_course", ["course": courseID.uuidString])])
+            AssistantMockTransport(script: move
+                ? [("inspect_schedule", ["date": fixtureSnapshot.stamp(sourceDate), "offset": "0"]), ("preview_move_task", ["task": sourceTask.id.uuidString, "target_date": fixtureSnapshot.stamp(targetDate), "start_time": ""])]
+                : [("list_courses", ["offset": "0"]), ("preview_delete_course", ["course": courseID.uuidString])])
         }, applyChange: { replacement, baseline, validUntil in await store.applyAssistantChange(replacement, from: baseline, validUntil: validUntil) })
         session.configuration = configuration()
-        session.question = "删除这门合成课程；先让我核对影响，再确认。"
+        session.question = move ? "把明天那项合成学习任务单独移到后天。" : "删除这门合成课程；先让我核对影响，再确认。"
         return (session, store)
     }
-    @MainActor static func actionProbe() async throws {
-        let (session, store) = try actionSession()
+    @MainActor static func actionProbe(move: Bool = false) async throws {
+        func normalized(_ state: PlannerState) -> PlannerState {
+            var value = state
+            value.courses.sort { $0.id < $1.id }; value.tasks.sort { $0.id < $1.id }
+            value.fixedEvents.sort { $0.id < $1.id }; value.completions.sort { $0.id < $1.id }
+            value.settings.availability.sort { $0.id < $1.id }
+            return value
+        }
+        let (session, store) = try actionSession(move: move)
         let before = store.state
         session.send()
         var approvals = 0
@@ -121,10 +138,15 @@ enum AssistantSimulation {
         }
         guard approvals == 1, let pending = session.pendingChange, store.state == before else { throw AssistantError.protocolError }
         await session.confirmChange(pending.id)
-        guard store.state.courses.isEmpty, session.undoChange != nil, !store.backupEntries.isEmpty else { throw AssistantError.protocolError }
+        guard normalized(store.state) == normalized(pending.after), session.undoChange != nil, !store.backupEntries.isEmpty else { throw AssistantError.protocolError }
+        if move {
+            let saved = store.state
+            await store.restoreSavedSchedule()
+            guard store.state == saved else { throw AssistantError.protocolError }
+        }
         await session.confirmChange(pending.id) // A stale/double click cannot apply twice.
         await session.undoLastChange()
-        guard store.state == before, session.undoChange == nil else { throw AssistantError.protocolError }
+        guard normalized(store.state) == normalized(before), session.undoChange == nil else { throw AssistantError.protocolError }
     }
     @MainActor static func preview(actions: Bool = false) {
         let app = NSApplication.shared
@@ -182,7 +204,8 @@ enum AssistantSimulation {
                       lessons.first?["lesson_id"] as? String == reference, lessons.first?["position"] as? Int == 1 else { return false }
             }
             try await actionProbe()
-            print("ASSISTANT_PACKAGE_PROBE_PASS protocols=3 queries=18 externalRequests=0 credentialsUsed=0 privacy=verified lessonLinks=verified timeCheck=verified readableDetails=verified actions=preview-confirm-undo")
+            try await actionProbe(move: true)
+            print("ASSISTANT_PACKAGE_PROBE_PASS protocols=3 queries=18 externalRequests=0 credentialsUsed=0 privacy=verified lessonLinks=verified timeCheck=verified readableDetails=verified actions=preview-confirm-undo move=preview-confirm-reopen-undo")
             return true
         } catch { print("ASSISTANT_PACKAGE_PROBE_FAIL: \(AssistantError.safe(error).rawValue)"); return false }
     }

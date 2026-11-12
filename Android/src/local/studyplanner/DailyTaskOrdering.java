@@ -6,6 +6,47 @@ import java.util.*;
 
 /** Same persisted keys, whole-task placement and retained-history boundaries as StudyCore. */
 public final class DailyTaskOrdering {
+    static final class MoveFailure extends Exception {
+        MoveFailure(String message){super(message);}
+    }
+    static final String MOVE_UNAVAILABLE="只能移动今天或之后尚未确认、没有学习记录的任务；正在立即学习的课节及其续课不能移动。";
+    static final String MOVE_DATE="目标日期须在今天或之后且位于课程起止日期内，指定时间不能早于现在。";
+    static final String MOVE_SPACE="未找到能保留其他任务、完整课节时长和课间休息的目标时段；未修改。请换一个日期或时间。";
+    static final String MOVE_STALE="该任务的学习量已被其他安排或学习记录覆盖，或课表不符合当前约束；请刷新课表后重试。";
+
+    /** A single persisted occurrence, with no other tasks or settings changed. */
+    static void move(JSONObject state,String taskID,LocalDate day,Integer startMinute,double now)throws Exception {
+        JSONArray tasks=state.getJSONArray("tasks");int index=-1;
+        for(int i=0;i<tasks.length();i++)if(tasks.getJSONObject(i).getString("id").equals(taskID))index=i;
+        if(index<0)throw new MoveFailure(MOVE_UNAVAILABLE);
+        JSONObject source=tasks.getJSONObject(index),course=Planner.course(state,source.getString("courseID"));
+        if(!Planner.pending(source)||source.optInt("completedMinutes")!=0||Planner.day(source.getDouble("start")).isBefore(Planner.day(now))
+            ||course==null||course.optBoolean("isArchived")||!course.optBoolean("autoScheduleEnabled",true))throw new MoveFailure(MOVE_UNAVAILABLE);
+        for(JSONObject record:Planner.list(state.getJSONArray("completions")))if(record.optString("taskID").equals(taskID))throw new MoveFailure(MOVE_UNAVAILABLE);
+        JSONObject request=ImmediateStudy.request(state),pin=request==null?null:request.optJSONObject("task"),continuation=ImmediateStudy.continuation(state,now);
+        if(pin!=null&&pin.optString("id").equals(taskID)||continuation!=null&&continuation.optString("courseID").equals(source.optString("courseID"))&&continuation.optString("lessonID").equals(source.optString("lessonID")))throw new MoveFailure(MOVE_UNAVAILABLE);
+        if(day.isBefore(Planner.day(now))||!Planner.eligible(course,day)||startMinute!=null&&(startMinute<0||startMinute>=1440))throw new MoveFailure(MOVE_DATE);
+        // Planner.at uses elapsed minutes; explicit wall-clock input uses the zone.
+        double earliest=startMinute==null?Math.max(Planner.at(day,0),(Math.floor(now/60)+1)*60)
+            :day.atTime(startMinute/60,startMinute%60).atZone(Planner.ZONE).toEpochSecond()-Planner.EPOCH;
+        if(earliest<=now||!Planner.day(earliest).equals(day)||startMinute!=null&&!java.time.Instant.ofEpochSecond((long)(earliest+Planner.EPOCH)).atZone(Planner.ZONE).toLocalTime().equals(java.time.LocalTime.of(startMinute/60,startMinute%60)))throw new MoveFailure(MOVE_DATE);
+        List<JSONObject> ordered=Collections.singletonList(source),events=new ArrayList<>();boolean[] study=new boolean[1440];boolean floating=false;
+        for(JSONObject e:Planner.list(state.getJSONArray("fixedEvents")))if(Planner.occurs(e,day)){events.add(e);floating|=Planner.floating(e);}
+        Map<String,Integer> placements=null;
+        if(floating){
+            for(JSONObject w:Planner.list(state.getJSONObject("settings").getJSONArray("availability")))if(w.optInt("weekday")==Planner.weekday(day)&&w.optInt("startMinute")>=0&&w.optInt("endMinute")<=1440&&w.optInt("startMinute")<w.optInt("endMinute"))for(int m=w.getInt("startMinute");m<w.getInt("endMinute");m++)study[m]=true;
+            List<JSONObject> obstacles=new ArrayList<>();for(JSONObject t:Planner.list(tasks))if(!t.optString("id").equals(taskID)&&(Planner.pending(t)||t.optInt("completedMinutes")>0))obstacles.add(t);
+            placements=jointFloatingPlacements(ordered,earliest,day,study,events,obstacles);
+            if(placements==null)throw new MoveFailure(MOVE_SPACE);
+        }
+        List<JSONObject> placed=place(state,ordered,earliest,placements);
+        if(placed==null||placed.isEmpty()||startMinute!=null&&placed.get(0).getDouble("start")!=earliest)throw new MoveFailure(MOVE_SPACE);
+        JSONObject moved=placed.get(0);moved.remove("floatingWindowStart");moved.remove("floatingWindowEnd");moved.put("status",day.equals(Planner.day(now))?"planned":"future");
+        JSONObject next=CourseTools.copy(state);next.getJSONArray("tasks").put(index,moved);
+        if(SyncExchange.invalidPending(next,now))throw new MoveFailure(MOVE_STALE);
+        tasks.put(index,moved);
+    }
+
     public static final String NO_SPACE="交换后无法在当天可学习时段内保留课程时长和课间休息，请调整可学习时间或选择其他板块。";
     static List<String> keys(List<JSONObject> tasks){
         Map<String,Integer> counts=new HashMap<>();List<String> keys=new ArrayList<>();

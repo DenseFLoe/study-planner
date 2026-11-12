@@ -70,7 +70,7 @@ final class AssistantProtocol {
         Contract(JSONObject data)throws Exception {
             if(data.getInt("version")!=1)throw invalid();tools=data.getJSONArray("tools");instructions=data.getString("instructions");privacyRules=data.getJSONArray("privacyRules");
             JSONArray rules=data.getJSONArray("secretPatterns");for(int i=0;i<rules.length();i++)secrets.add(Pattern.compile(rules.getString(i)));
-            if(tools.length()!=17||secrets.size()<7)throw invalid();
+            if(tools.length()!=18||secrets.size()<7)throw invalid();
         }
         JSONObject definition(String name)throws Exception{for(JSONObject value:Planner.list(tools))if(name.equals(value.getString("name")))return value;throw invalid();}
         void arguments(String name,JSONObject input)throws Exception {

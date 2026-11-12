@@ -38,7 +38,7 @@ def main():
     manifest = subprocess.check_output([str(aapt), "dump", "xmltree", str(args.apk), "--file", "AndroidManifest.xml"], text=True)
     activity = manifest.split('"local.studyplanner.AssistantActivity"', 1)[1].split("E: ", 1)[0]
     assert re.search(r"android:exported.*(?:false|0x0)", activity), activity
-    print("Android assistant APK verified: 17 shared tools, native implementation, private Activity, source/version, ZIP integrity and empty initial state; no real API used")
+    print("Android assistant APK verified: 18 shared tools, native implementation, private Activity, source/version, ZIP integrity and empty initial state; no real API used")
 
 
 if __name__ == "__main__":

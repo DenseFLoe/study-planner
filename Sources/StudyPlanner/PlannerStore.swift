@@ -64,7 +64,7 @@ final class PlannerStore {
             syncLedger = try repo.loadLedger()
             isReady = true
             Task {
-                if demo { await loadExample() } else { await replan() }
+                if demo { await loadExample() } else { await restoreSavedSchedule() }
                 checkDay()
                 await refreshBackups()
             }
@@ -267,6 +267,13 @@ final class PlannerStore {
         return true
     }
     func replan() async { await change { _ in } }
+
+    /// Opening the app must not discard a confirmed single-task move.
+    @discardableResult func restoreSavedSchedule(now: Date = Date()) async -> Bool {
+        await commit(state, replan: false, now: now) { value in
+            value.prepareSavedScheduleForOpen(now: now)
+        }
+    }
     @discardableResult
     func saveStudySettings(_ edited: AppSettings, from baseline: AppSettings, now: Date = Date()) async -> Bool {
         await change(now: now) { state in
@@ -451,7 +458,7 @@ final class PlannerStore {
         if dayRollover.isDue(day: today, uptime: uptime()) {
             dayRefreshTask = Task { @MainActor in
                 defer { dayRefreshTask = nil }
-                let saved = await change(now: now, { _ in })
+                let saved = await restoreSavedSchedule(now: now)
                 if saved {
                     dayRollover.succeeded(day: today); reviewPrompted = false
                     promptDailyReview(at: now)

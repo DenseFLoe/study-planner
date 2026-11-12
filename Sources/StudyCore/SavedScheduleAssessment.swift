@@ -1,5 +1,25 @@
 import Foundation
 
+extension PlannerState {
+    /// Keep saved manual placements on reopen. Redistribute genuinely overdue work.
+    public mutating func prepareSavedScheduleForOpen(now: Date, calendar: Calendar = .current) -> ScheduleResult {
+        let engine = ScheduleEngine(calendar: calendar)
+        let pending = tasks.filter { $0.isUnconfirmed && $0.planningEnd > now }
+        let overdue = Set(tasks.filter { $0.isUnconfirmed && $0.planningEnd <= now }.map(\.courseID))
+        let missingOverdue = courses.contains { course in
+            !course.isArchived && course.autoScheduleEnabled && overdue.contains(course.id) &&
+            pending.filter { $0.courseID == course.id }.reduce(0, { $0 + $1.durationMinutes }) < remainingMinutes(for: course)
+        }
+        if pending.isEmpty || missingOverdue || engine.hasInvalidSavedTasks(state: self, now: now) {
+            return replan(now: now, calendar: calendar)
+        }
+        for index in tasks.indices where tasks[index].isUnconfirmed && tasks[index].planningEnd > now {
+            tasks[index].status = calendar.isDate(tasks[index].start, inSameDayAs: now) ? .planned : .future
+        }
+        return engine.assessSavedPlan(state: self, now: now)
+    }
+}
+
 extension ScheduleEngine {
     /// Evaluate the persisted timetable without substituting a newly generated draft.
     /// Full early confirmations preserve other slots, as do sync-only refreshes.

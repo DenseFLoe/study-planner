@@ -37,7 +37,7 @@ public final class AssistantTests {
         public void saveChecked(JSONObject value,AssistantActions.Check guard)throws Exception{guard.run();checks++;if(advance)time+=300;guard.run();checks++;store.save(value);}
     }
     static void tools()throws Exception{
-        check(contract.tools.length()==17,"Tool contract drift");Set<String> names=new HashSet<>();for(JSONObject d:Planner.list(contract.tools))check(names.add(d.getString("name")),"Duplicate tool");
+        check(contract.tools.length()==18,"Tool contract drift");Set<String> names=new HashSet<>();for(JSONObject d:Planner.list(contract.tools))check(names.add(d.getString("name")),"Duplicate tool");
         JSONObject s=fixture();Snapshot shot=shot(s);String cid=s.getJSONArray("courses").getJSONObject(0).getString("id"),before=s.toString();
         JSONObject result=query("list_courses",input("offset","0"),shot);check(result.getInt("total")==1,"Course list wrong");check(!result.toString().contains("本机备注"),"Notes left whitelist");
         result=query("inspect_course",input("course",cid,"offset","0"),shot);check(result.getInt("total_minutes")==120&&result.getInt("remaining_minutes")==120,"Progress wrong");
@@ -87,6 +87,47 @@ public final class AssistantTests {
         JSONObject swap=DesktopParityTests.fixture();List<JSONObject> pending=DesktopParityTests.pending(swap);check(action("preview_swap_tasks",input("source",pending.get(0).getString("id"),"target",pending.get(1).getString("id")),new Snapshot(swap,Planner.at(DesktopParityTests.DAY,1080))).proposal!=null,"Task swap missing");
     }
     static JSONObject call(String id,String name,JSONObject input)throws Exception{return object("id",id,"type","function","function",object("name",name,"arguments",input.toString()));}
+    static JSONObject moveFixture()throws Exception{
+        JSONObject state=fixture(),course=state.getJSONArray("courses").getJSONObject(0);course.put("totalMinutes",180).put("type","不定时录播课程");
+        JSONArray lessons=new JSONArray(),tasks=new JSONArray();
+        for(int i=0;i<3;i++){
+            lessons.put(object("id","lesson-"+i,"name","第"+i+"节","durationMinutes",60));
+            tasks.put(Planner.task(course.getString("id"),Planner.at(i==2?DAY.plusDays(1):DAY,i==1?555:480),60).put("lessonID","lesson-"+i).put("lessonName","第"+i+"节").put("status",i==2?"future":"planned"));
+        }
+        course.put("manualLessons",lessons);state.put("tasks",tasks);return state;
+    }
+    static void moves()throws Exception{
+        JSONObject state=moveFixture();String before=signature(state),id=state.getJSONArray("tasks").getJSONObject(0).getString("id");Snapshot shot=shot(state);
+        JSONObject args=input("task",id,"target_date",DAY.plusDays(1).toString(),"start_time","");
+        AssistantActions.Proposal p=action("preview_move_task",args,shot).proposal;check(p!=null,"Move preview missing");
+        check(signature(state).equals(before),"Move preview changed source");
+        JSONObject moved=p.after.getJSONArray("tasks").getJSONObject(0),original=state.getJSONArray("tasks").getJSONObject(0);
+        check(moved.getDouble("start")==Planner.at(DAY.plusDays(1),555)&&moved.getString("id").equals(id)&&moved.getString("lessonID").equals(original.getString("lessonID"))&&moved.getInt("durationMinutes")==60,"Move identity/time changed");
+        for(String key:new String[]{"courses","settings","fixedEvents","completions"})check(SyncLedger.canonical(p.after.get(key)).equals(SyncLedger.canonical(state.get(key))),"Move changed "+key);
+        for(int i=1;i<3;i++)check(SyncLedger.canonical(p.after.getJSONArray("tasks").get(i)).equals(SyncLedger.canonical(state.getJSONArray("tasks").get(i))),"Move changed another task");
+        Store store=new Store(state);JSONObject saved=AssistantActions.apply(store,p,shot.now+1),reopened=CourseTools.copy(saved);Planner.prepareForOpen(reopened,shot.now+2);
+        check(signature(reopened).equals(signature(saved)),"Reopen discarded moved task");AssistantActions.undo(store,p.before,signature(saved));check(signature(store.load()).equals(before),"Move undo wrong");
+        args.put("start_time","11:00");check(action("preview_move_task",args,shot).proposal.after.getJSONArray("tasks").getJSONObject(0).getDouble("start")==Planner.at(DAY.plusDays(1),660),"Explicit move time ignored");
+        for(String time:new String[]{"08:00","09:00","24:00","9:00","invalid"}){args.put("start_time",time);check(action("preview_move_task",args,shot).proposal==null,"Invalid/occupied time accepted: "+time);}
+        args.put("start_time","");
+        for(String day:new String[]{"",DAY.minusDays(1).toString(),DAY.plusDays(3).toString(),"2026-02-30"}){args.put("target_date",day);check(action("preview_move_task",args,shot).proposal==null,"Invalid date accepted");}
+        args.put("target_date",DAY.plusDays(1).toString());
+        for(int variant=0;variant<5;variant++){
+            JSONObject bad=CourseTools.copy(state),task=bad.getJSONArray("tasks").getJSONObject(0);
+            if(variant==0)task.put("confirmedAt",shot.now).put("status","completed");
+            if(variant==1)task.put("completedMinutes",1);
+            if(variant==2)bad.getJSONArray("completions").put(input("id",Planner.id(),"taskID",id,"courseID",task.getString("courseID"),"minutes",0,"recordedAt",shot.now));
+            if(variant==3)bad.getJSONObject("settings").put("immediateStudy",input("task",task));
+            if(variant==4)bad.getJSONObject("settings").put("immediateStudy",input("task",CourseTools.copy(task).put("id",Planner.id()),"continuesLesson",true));
+            check(action("preview_move_task",args,shot(bad)).proposal==null,"Protected task moved");
+        }
+        check(action("preview_move_task",args,new Snapshot(state,Planner.at(DAY,720))).proposal!=null,"Elapsed unconfirmed task could not move");
+        JSONObject duplicate=CourseTools.copy(state);duplicate.getJSONArray("tasks").put(CourseTools.copy(original).put("id",Planner.id()).put("start",Planner.at(DAY.plusDays(2),480)));
+        check(action("preview_move_task",args,new Snapshot(duplicate,Planner.at(DAY,720))).proposal==null,"Redistributed lesson duplicated");
+        JSONObject floating=CourseTools.copy(state);floating.getJSONArray("fixedEvents").put(event("浮动",480,660).put("startDate",Planner.at(DAY.plusDays(1),0)).put("endDate",Planner.at(DAY.plusDays(1),0)).put("floatingDurationMinutes",60));
+        p=action("preview_move_task",args,shot(floating)).proposal;check(p!=null&&p.after.getJSONArray("tasks").getJSONObject(0).getDouble("start")==Planner.at(DAY.plusDays(1),615),"Floating joint placement wrong");
+        floating.getJSONObject("settings").put("availability",StudySettingsTests.windows(480,600));check(action("preview_move_task",args,shot(floating)).proposal==null,"No-space move accepted");
+    }
     static String response(JSONArray calls,String text)throws Exception{return object("choices",new JSONArray().put(object("finish_reason",calls.length()>0?"tool_calls":"stop","message",object("role","assistant","content",text,"tool_calls",calls)))).toString();}
     static Configuration configuration(String provider)throws Exception{return new Configuration(object("provider",provider,"baseURL","https://fixture.invalid/v1","model","synthetic-tool-model"));}
     static final class Source implements AssistantRunner.Source {
@@ -178,6 +219,6 @@ public final class AssistantTests {
         }finally{s.queue.shutdownNow();s.network.shutdownNow();try(java.util.stream.Stream<Path> paths=Files.walk(dir)){paths.sorted(Comparator.reverseOrder()).forEach(p->{try{Files.deleteIfExists(p);}catch(Exception ignored){}});}}
     }
     public static void main(String[] args)throws Exception{
-        contract=new Contract(new JSONObject(read(new FileInputStream("Android/build/assets/assistant-contract.json"),100000)));startupPaths();startupRecovery();tools();timeChecks();actions();runners();privacyHistory();session();System.out.println("AssistantTests: "+checks+" synthetic checks passed; no real API, credentials or personal data used");
+        contract=new Contract(new JSONObject(read(new FileInputStream("Android/build/assets/assistant-contract.json"),100000)));startupPaths();startupRecovery();tools();timeChecks();actions();moves();runners();privacyHistory();session();System.out.println("AssistantTests: "+checks+" synthetic checks passed; no real API, credentials or personal data used");
     }
 }
