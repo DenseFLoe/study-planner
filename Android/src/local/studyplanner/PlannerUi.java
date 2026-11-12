@@ -6,6 +6,7 @@ import android.graphics.Canvas;
 import android.graphics.Paint;
 import android.graphics.Typeface;
 import android.graphics.drawable.GradientDrawable;
+import android.graphics.drawable.InsetDrawable;
 import android.graphics.drawable.RippleDrawable;
 import android.graphics.drawable.StateListDrawable;
 import android.view.Gravity;
@@ -21,13 +22,27 @@ import android.widget.TextView;
 final class PlannerUi {
     static final int BACKGROUND=0xfff5f7f8, SURFACE=0xffffffff, INK=0xff20312e,
         MUTED=0xff60716b, PRIMARY=0xff286b57, TONAL=0xffe5efe9,
-        OUTLINE=0xffdce4df, RIPPLE=0x24286b57;
+        OUTLINE=0xffdce4df, BUTTON_OUTLINE=0xff354641, RIPPLE=0x24286b57;
     static int dp(Context context,int value){return Math.round(value*context.getResources().getDisplayMetrics().density);}
     static GradientDrawable shape(Context context,int color,int radius){
         GradientDrawable shape=new GradientDrawable();shape.setColor(color);shape.setCornerRadius(dp(context,radius));return shape;
     }
     static RippleDrawable ripple(Context context,int color,int radius){
         return new RippleDrawable(ColorStateList.valueOf(RIPPLE),shape(context,color,radius),shape(context,SURFACE,radius));
+    }
+    /** Insets keep adjacent button surfaces at least 8dp apart without shrinking touch targets. */
+    static void buttonBackground(View target,int color,int disabledColor,int outline,int radius,int rippleColor){
+        Context context=target.getContext();
+        int stroke=Math.max(1,Math.round(1.5f*context.getResources().getDisplayMetrics().density));
+        GradientDrawable enabled=shape(context,color,radius);enabled.setStroke(stroke,outline);
+        GradientDrawable disabled=shape(context,disabledColor,radius);disabled.setStroke(stroke,0xff87928d);
+        StateListDrawable surfaces=new StateListDrawable();
+        surfaces.addState(new int[]{-android.R.attr.state_enabled},disabled);
+        surfaces.addState(new int[]{},enabled);
+        // InsetDrawable reports padding; retain the caller's text/icon padding when replacing it.
+        int left=target.getPaddingLeft(),top=target.getPaddingTop(),right=target.getPaddingRight(),bottom=target.getPaddingBottom();
+        target.setBackground(new InsetDrawable(new RippleDrawable(ColorStateList.valueOf(rippleColor),surfaces,shape(context,SURFACE,radius)),dp(context,4)));
+        target.setPadding(left,top,right,bottom);
     }
     static final class Icon extends View {
         private final Paint paint=new Paint(Paint.ANTI_ALIAS_FLAG);
@@ -118,15 +133,12 @@ final class PlannerUi {
         buttonTone(button,false);
     }
     static void buttonTone(Button button,boolean primary){
-        Context context=button.getContext();StateListDrawable surfaces=new StateListDrawable();
-        surfaces.addState(new int[]{-android.R.attr.state_enabled},shape(context,0xffebefed,16));
-        surfaces.addState(new int[]{},shape(context,primary?PRIMARY:TONAL,16));
-        button.setBackground(new RippleDrawable(ColorStateList.valueOf(primary?0x33ffffff:RIPPLE),surfaces,shape(context,SURFACE,16)));
+        buttonBackground(button,primary?PRIMARY:TONAL,0xffebefed,BUTTON_OUTLINE,16,primary?0x33ffffff:RIPPLE);
         button.setTextColor(new ColorStateList(new int[][]{new int[]{-android.R.attr.state_enabled},new int[]{}},new int[]{0xff7b8781,primary?SURFACE:PRIMARY}));
     }
     static void quietButton(Button button){
-        button.setBackground(ripple(button.getContext(),android.graphics.Color.TRANSPARENT,16));
-        button.setTextColor(PRIMARY);
+        buttonBackground(button,android.graphics.Color.TRANSPARENT,0xffebefed,BUTTON_OUTLINE,16,RIPPLE);
+        button.setTextColor(new ColorStateList(new int[][]{new int[]{-android.R.attr.state_enabled},new int[]{}},new int[]{0xff7b8781,PRIMARY}));
     }
     static void styleField(EditText field){
         Context context=field.getContext();field.setTextSize(16);field.setTextColor(INK);field.setHintTextColor(MUTED);
@@ -140,7 +152,7 @@ final class PlannerUi {
     static View iconButton(Context context,int kind,String description,Runnable action){
         FrameLayout target=new FrameLayout(context);target.setMinimumWidth(dp(context,48));target.setMinimumHeight(dp(context,48));
         target.addView(new Icon(context,kind,PRIMARY),new FrameLayout.LayoutParams(dp(context,22),dp(context,22),Gravity.CENTER));
-        target.setBackground(ripple(context,android.graphics.Color.TRANSPARENT,24));target.setFocusable(true);
+        buttonBackground(target,android.graphics.Color.TRANSPARENT,0xffebefed,BUTTON_OUTLINE,24,RIPPLE);target.setFocusable(true);
         target.setContentDescription(description);target.setOnClickListener(v->action.run());
         target.setAccessibilityDelegate(new View.AccessibilityDelegate(){
             @Override public void onInitializeAccessibilityNodeInfo(View host,android.view.accessibility.AccessibilityNodeInfo info){

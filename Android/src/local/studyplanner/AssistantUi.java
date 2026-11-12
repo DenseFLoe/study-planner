@@ -10,20 +10,17 @@ import android.widget.Button;
 /** Assistant-only phone chrome; the planner keeps its own visual theme. */
 final class AssistantUi {
     static final int WHITE=0xffffffff, INK=0xff202124, MUTED=0xff727783,
-        BLUE=0xff4d6bfe, PALE=0xffedf2ff, SURFACE=0xfff5f6f8, LINE=0xffe7e9ee;
+        BLUE=0xff4d6bfe, PALE=0xffedf2ff, SURFACE=0xfff5f6f8, LINE=0xffe7e9ee, BUTTON_OUTLINE=0xff3e4656;
     static final int MENU=0, NEW=1, SEND=2, STOP=3, CLOSE=4, CHAT=5;
     static int dp(Context c,int n){return PlannerUi.dp(c,n);}
     static GradientDrawable shape(Context c,int color,int radius){return PlannerUi.shape(c,color,radius);}
     static void tone(Button button,boolean primary){
-        Context c=button.getContext();StateListDrawable bg=new StateListDrawable();
-        bg.addState(new int[]{-android.R.attr.state_enabled},shape(c,primary?0xffc8d2ff:SURFACE,24));
-        bg.addState(new int[]{},shape(c,primary?BLUE:SURFACE,24));
-        button.setBackground(new RippleDrawable(ColorStateList.valueOf(0x224d6bfe),bg,shape(c,WHITE,24)));
+        PlannerUi.buttonBackground(button,primary?BLUE:SURFACE,primary?0xffc8d2ff:SURFACE,BUTTON_OUTLINE,24,0x224d6bfe);
         button.setTextColor(new ColorStateList(new int[][]{new int[]{-android.R.attr.state_enabled},new int[]{}},new int[]{MUTED,primary?WHITE:INK}));
     }
     static void quiet(Button button){
-        button.setBackground(new RippleDrawable(ColorStateList.valueOf(0x224d6bfe),shape(button.getContext(),0,16),shape(button.getContext(),WHITE,16)));
-        button.setTextColor(BLUE);
+        PlannerUi.buttonBackground(button,0,SURFACE,BUTTON_OUTLINE,16,0x224d6bfe);
+        button.setTextColor(new ColorStateList(new int[][]{new int[]{-android.R.attr.state_enabled},new int[]{}},new int[]{MUTED,BLUE}));
     }
     static Button icon(Context c,int kind,String label,boolean primary,Runnable action){
         Button b=new Button(c);PlannerUi.styleButton(b);b.setText("");b.setContentDescription(label);
