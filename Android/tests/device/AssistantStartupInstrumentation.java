@@ -47,7 +47,8 @@ public final class AssistantStartupInstrumentation extends Instrumentation {
             shared=AssistantActivity.class.getDeclaredField("shared");shared.setAccessible(true);
             synchronized(AssistantActivity.class){previous=shared.get(null);shared.set(null,session);injected=true;}
             open();
-            check(onMain(()->activity.send.isEnabled()&&activity.newButton.isEnabled()&&activity.historyButton.isEnabled()&&activity.memoryButton.isEnabled()),"First-launch buttons stayed disabled without a key");
+            check(onMain(()->activity.question.isEnabled()&&!activity.send.isEnabled()&&activity.newButton.isEnabled()&&activity.historyButton.isEnabled()&&activity.memoryButton.isEnabled()),"First-launch controls unavailable or empty message can send");
+            runOnMainSync(()->activity.question.setText("合成问题"));check(onMain(()->activity.send.isEnabled()),"Nonempty question cannot send");
             runOnMainSync(()->activity.newButton.performClick());await(()->activity.state.workspace.optJSONArray("conversations").length()==2);
             check(history.load().getJSONArray("conversations").length()==2,"Native new-conversation button did not save");
             close();open();check(onMain(()->activity.apiButton.isEnabled()&&activity.state.workspace.optJSONArray("conversations").length()==2),"Reopened assistant stayed disabled or lost history");

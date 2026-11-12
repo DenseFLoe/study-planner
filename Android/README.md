@@ -9,10 +9,20 @@
 - 日历保留周/月切换、当天学习量与时间轴；日期右侧的更多菜单包含跳到日期、复制安排及前后一天。
 - 课程页保留添加、导入与合并，网站/网盘/未完成导入集中在「导入课程」菜单；筛选、排序与 Mac 极限压缩预览按需展开。
 - 固定课表优先展示事项；文字识别和筛选可展开，已有识别原文会保留。
-- 设置改为带用途说明的列表，保留分类页面、返回操作与未保存草稿。助手共用新的按钮和输入框，发送区可换行。
+- 设置改为带用途说明的列表，保留分类页面、返回操作与未保存草稿。助手采用下述独立的手机对话布局。
 - 排课、同步、确认、备份及 Android 平台边界不变。
 
 原生界面回归入口：在**新建的隔离模拟器**安装正式 APK 和 `./Android/test-device-build.sh` 生成的测试包后，运行 `adb -s <模拟器序列号> shell am instrument -w -e isolated true local.studyplanner.synctests/local.studyplanner.PlannerUiInstrumentation`。检查 320/360/600dp 与 1/1.5/2 倍字号下的共享组件，并遍历五个主页面、月历、筛选及设置返回；合成课程与任务只注入内存，不保存到正式日程，截图写入测试模拟器的应用外部文件目录。该入口拒绝真机与已有数据库的环境；不要为运行测试清除日常使用设备的数据。
+
+## 智能助手手机布局（2026-11-12）
+
+参考 [DeepSeek 官方 App 展示](https://www.deepseek.com/news/deepseek-app/)的手机布局：白底对话页、顶部聊天记录 / 新对话图标、居中欢迎与问题建议、右侧提问气泡、左侧回答、底部圆角多行输入框和蓝色发送按钮。查询时原位置显示停止按钮，空白问题不能发送。
+
+- 左上角打开历史抽屉，支持搜索、切换对话、「管理聊天记录」中的多选 / 删除 / 清空，以及返回学习日程。返回键或点击遮罩关闭抽屉并保留当前输入。
+- API 设置与本机记忆可从输入框下方或抽屉进入；撤销上次修改在抽屉中按需出现。问题建议只填入输入框，由用户决定发送。
+- 保留查询过程、发送内容确认、完整修改差异核对、失败重试与本机凭证保护。布局调整不切换服务商或模型，也不新增联网搜索、语音、附件功能。
+
+布局回归入口：隔离 Android 35 模拟器安装正式 APK 和设备测试包后运行 `adb -s <模拟器序列号> shell am instrument -w -e isolated true -e prefix phone local.studyplanner.synctests/local.studyplanner.AssistantLayoutInstrumentation`。检查欢迎区、输入 / 停止状态、抽屉、搜索和多选、发送确认及键盘避让；只使用合成聊天和内存日程，截图位于模拟器应用外部目录 `assistant-layout`。本轮已在 Android 35 隔离模拟器通过 360dp / 标准字号、320dp / 1.5 倍和 2 倍字号三组布局回归，以及助手首次启动检查；真实 API 与真机键盘行为需另行验收。
 
 ## 1.6.6 智能助手（2026-11-07）
 
@@ -20,7 +30,7 @@
 
 范围、验证边界和手机操作步骤见 [功能对照](FEATURE_PARITY.md#2026-11-07-智能助手)。开发使用模拟服务，不调用真实 API；真实接口、手机界面与 Keystore 仍需设备验收。隔离 SQLite 检查入口为 `adb shell am instrument -w local.studyplanner.synctests/local.studyplanner.AssistantInstrumentation`，只在测试设备安装设备测试 APK 后运行，不打开正式日程或聊天目录。
 
-修复助手首次打开时按钮全灰：聊天路径检查以系统提供的应用私有目录为边界，兼容 Android 的系统目录别名，仍拒绝聊天文件及其私有子目录的异常符号链接。聊天读取失败时可点「重新读取聊天」，不会覆盖原文件；正常载入后，无需先填写 API 密钥即可打开「API 设置」「新对话」「聊天记录」「本机记忆」。桌面回归覆盖系统别名、内部链接拒绝和失败后重试。设备原生按钮检查入口为 `adb shell am instrument -w local.studyplanner.synctests/local.studyplanner.AssistantStartupInstrumentation`，使用隔离聊天目录与内存日程，不连接 API；设备检查尚待实际运行。
+修复助手首次打开时按钮全灰：聊天路径检查以系统提供的应用私有目录为边界，兼容 Android 的系统目录别名，仍拒绝聊天文件及其私有子目录的异常符号链接。聊天读取失败时可点「重新读取聊天」，不会覆盖原文件；正常载入后，无需先填写 API 密钥即可打开「API 设置」「新对话」「聊天记录」「本机记忆」。桌面回归覆盖系统别名、内部链接拒绝和失败后重试。设备原生按钮检查入口为 `adb shell am instrument -w local.studyplanner.synctests/local.studyplanner.AssistantStartupInstrumentation`，使用隔离聊天目录与内存日程，不连接 API；该启动检查已在本轮 Android 35 隔离模拟器运行通过。
 
 ## 1.6.3 更新（2026-10-30）
 
