@@ -11,7 +11,7 @@ struct AssistantView: View {
     @State private var selectingHistory = false
     @State private var selectedConversations = Set<UUID>()
     @State private var panel: Panel?
-    private enum Panel: Identifiable {
+    private enum Panel {
         case settings, memories, details
         case deletion([AssistantConversation])
         var id: String {
@@ -22,7 +22,6 @@ struct AssistantView: View {
             case .deletion(let conversations): "deletion-" + conversations.map(\.id.uuidString).joined(separator: "-")
             }
         }
-        var isDeletion: Bool { if case .deletion = self { true } else { false } }
     }
     var body: some View {
         Group {
@@ -46,9 +45,14 @@ struct AssistantView: View {
                     composer
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .accessibilityHidden(sidebarVisible)
-                .disabled(sidebarVisible)
-                if sidebarVisible {
+                // Keep the transcript mounted so returning preserves its scroll position and draft.
+                .opacity(panel == nil ? 1 : 0)
+                .accessibilityHidden(sidebarVisible || panel != nil)
+                .disabled(sidebarVisible || panel != nil)
+                if let selected = panel {
+                    panelPage(selected)
+                }
+                if sidebarVisible && panel == nil {
                     Button { toggleSidebar() } label: { Color.black.opacity(0.15) }
                         .buttonStyle(.plain).accessibilityLabel("关闭聊天记录")
                     sidebar.frame(width: min(300, geometry.size.width - 64))
@@ -58,32 +62,48 @@ struct AssistantView: View {
                 }
             }
             .background(canvas).tint(blue)
-            .sheet(item: $panel) { selected in
-                VStack(alignment: .leading, spacing: 14) {
-                    if !selected.isDeletion {
-                        HStack {
-                            Spacer()
-                            Button("完成") { panel = nil }.keyboardShortcut(.cancelAction)
-                        }
-                    }
-                    switch selected {
-                    case .deletion(let conversations): deletionConfirmation(conversations)
-                    case .settings:
-                        Text("API 设置").font(.title2.bold())
-                        ScrollView { settings }
-                    case .memories: AssistantMemoryView(session: session)
-                    case .details:
-                        if let approval = session.approval { AssistantRequestDetailsView(request: approval.request) }
-                        else { Text("此确认已结束。") }
-                    }
-                }.padding(18)
-                    .frame(width: max(320, min(680, geometry.size.width - 36)), height: selected.isDeletion ? 300 : max(380, min(650, geometry.size.height - 40)))
-                    .interactiveDismissDisabled(session.isDeletingConversation)
-            }
         }
         .frame(minWidth: 390, minHeight: 520)
         .onChange(of: session.approval?.id) { _, _ in if panel?.id == "details" { panel = nil } }
-        .onExitCommand { if sidebarVisible { toggleSidebar() } }
+        .onExitCommand {
+            if panel != nil && !session.isDeletingConversation { panel = nil }
+            else if sidebarVisible { toggleSidebar() }
+        }
+    }
+    private func showPanel(_ selected: Panel) {
+        questionFocused = false
+        sidebarVisible = false
+        panel = selected
+    }
+    private func panelPage(_ selected: Panel) -> some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack {
+                Button { panel = nil } label: {
+                    Label(selected.id == "details" ? "返回确认" : "返回对话", systemImage: "chevron.left")
+                }
+                .buttonStyle(.plain)
+                .disabled(session.isDeletingConversation)
+                Spacer()
+            }.padding(20)
+            Divider()
+            VStack(alignment: .leading, spacing: 14) {
+                switch selected {
+                case .deletion(let conversations): deletionConfirmation(conversations)
+                case .settings:
+                    Text("API 设置").font(.title2.bold())
+                    ScrollView { settings.padding(4) }
+                case .memories: AssistantMemoryView(session: session)
+                case .details:
+                    if let approval = session.approval { AssistantRequestDetailsView(request: approval.request) }
+                    else { Text("此确认已结束。") }
+                }
+            }
+            .padding(20)
+            .frame(maxWidth: 760, maxHeight: .infinity, alignment: .topLeading)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(canvas)
     }
     private func toggleSidebar() {
         questionFocused = false
@@ -99,8 +119,8 @@ struct AssistantView: View {
             }.help("聊天记录").accessibilityLabel("聊天记录")
             Spacer(minLength: 0)
             Menu {
-                Button("本机记忆", systemImage: "brain") { panel = .memories }
-                Button("API 设置", systemImage: "slider.horizontal.3") { panel = .settings }
+                Button("本机记忆", systemImage: "brain") { showPanel(.memories) }
+                Button("API 设置", systemImage: "slider.horizontal.3") { showPanel(.settings) }
                 Button("重试上个问题", systemImage: "arrow.clockwise") { session.retry() }.disabled(!session.canRetry)
                 Divider()
                 Button("删除当前对话…", systemImage: "trash", role: .destructive) {
@@ -112,7 +132,7 @@ struct AssistantView: View {
                     selectingHistory = true; selectedConversations = []; sidebarVisible = true
                 }.disabled(!session.canManageConversations)
                 Button("清空全部对话…", systemImage: "trash.slash", role: .destructive) {
-                    panel = .deletion(session.conversations)
+                    showPanel(.deletion(session.conversations))
                 }.disabled(!session.canManageConversations)
             } label: {
                 Image(systemName: "ellipsis").font(.system(size: 18)).frame(width: 34, height: 38)
@@ -145,9 +165,9 @@ struct AssistantView: View {
                 Image(systemName: "book.closed.fill").foregroundStyle(blue).font(.system(size: 20))
                 Text("学习助手").font(.system(size: 14, weight: .medium))
                 Spacer()
-                Button { panel = .memories } label: { Image(systemName: "brain") }
+                Button { showPanel(.memories) } label: { Image(systemName: "brain") }
                     .help("本机记忆").accessibilityLabel("本机记忆")
-                Button { panel = .settings } label: { Image(systemName: "slider.horizontal.3") }
+                Button { showPanel(.settings) } label: { Image(systemName: "slider.horizontal.3") }
                     .help("API 设置").accessibilityLabel("API 设置")
             }.buttonStyle(.plain).padding(.vertical, 4)
         }.padding(20)
@@ -190,7 +210,7 @@ struct AssistantView: View {
                     Button("全选结果") { selectedConversations.formUnion(filteredConversations.map(\.id)) }
                     Spacer()
                     Button("删除已选（\(selectedConversations.count)）", role: .destructive) {
-                        panel = .deletion(session.conversations.filter { selectedConversations.contains($0.id) })
+                        showPanel(.deletion(session.conversations.filter { selectedConversations.contains($0.id) }))
                     }.disabled(selectedConversations.isEmpty)
                 }.font(.caption).disabled(!session.canManageConversations)
             }
@@ -207,7 +227,7 @@ struct AssistantView: View {
             HStack {
                 Text("聊天记录仅保存在这台 Mac").font(.caption2).foregroundStyle(.secondary)
                 Spacer()
-                Button("清空…", role: .destructive) { panel = .deletion(session.conversations) }
+                Button("清空…", role: .destructive) { showPanel(.deletion(session.conversations)) }
                     .buttonStyle(.borderless).font(.caption).disabled(!session.canManageConversations)
             }
         }
@@ -246,7 +266,7 @@ struct AssistantView: View {
             .disabled(!session.canManageConversations)
     }
     private func requestDeletion(_ conversation: AssistantConversation) {
-        panel = .deletion([conversation])
+        showPanel(.deletion([conversation]))
     }
     private func deletionConfirmation(_ conversations: [AssistantConversation]) -> some View {
         VStack(alignment: .leading, spacing: 16) {
@@ -422,7 +442,7 @@ struct AssistantView: View {
                     }
                 }
             }
-            Button("查看本次发送详情") { panel = .details }
+            Button("查看本次发送详情") { showPanel(.details) }
             Text(approval.scopeNote).font(.caption).foregroundStyle(.secondary)
             Text("两分钟内有效；已发送的内容无法撤回。").font(.caption).foregroundStyle(.secondary)
             HStack {
@@ -449,11 +469,11 @@ struct AssistantView: View {
                     .accessibilityLabel("助手问题")
                     .padding(.horizontal, 4).padding(.top, 4)
                 HStack(spacing: 8) {
-                    Button { panel = .memories } label: {
+                    Button { showPanel(.memories) } label: {
                         Label("本机记忆", systemImage: "brain")
                     }.buttonStyle(AssistantChipStyle(selected: session.enabledMemoryCount > 0, blue: blue))
                         .help("管理随问题发送的本机记忆（已启用 \(session.enabledMemoryCount) 条）")
-                    Button { panel = .settings } label: {
+                    Button { showPanel(.settings) } label: {
                         Label("模型设置", systemImage: "slider.horizontal.3")
                     }.buttonStyle(AssistantChipStyle(selected: false, blue: blue)).accessibilityLabel("API 设置")
                     Spacer(minLength: 0)

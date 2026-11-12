@@ -120,7 +120,6 @@ struct AssistantDetailTree: View {
 
 struct AssistantRequestDetailsView: View {
     let request: AssistantRequest
-    @Environment(\.dismiss) private var dismiss
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
             Text("本次将发送的内容").font(.title2.bold())
@@ -136,7 +135,6 @@ struct AssistantRequestDetailsView: View {
                     }
                 }.frame(maxWidth: .infinity, alignment: .leading).padding(4)
             }
-            HStack { Spacer(); Button("返回确认") { dismiss() }.keyboardShortcut(.cancelAction) }
         }.frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 }
