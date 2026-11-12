@@ -205,10 +205,7 @@ import StudyCore
                 guard let self else { return }
                 do {
                     let messages = try await Task.detached(priority: .userInitiated) {
-                        let memory = try AssistantMemories.message(memories)
-                        let messages = (memory.map { [$0] } ?? []) + history.filter { $0.status == "完成" && ["你", "助手", "本机操作"].contains($0.role) }
-                            .map { AssistantWireMessage(role: $0.role == "你" ? "user" : "assistant", content: $0.role == "本机操作" ? "本机操作记录：" + $0.text : $0.text) }
-                            + [.init(role: "user", content: text)]
+                        let messages = try AssistantConversationContext.messages(history: history, memories: memories, current: text)
                         let data = try assistantJSON(messages)
                         guard data.count <= 200_000 else { throw AssistantError.limit }
                         let text = String(decoding: data, as: UTF8.self)
@@ -230,7 +227,10 @@ import StudyCore
                         do {
                             answer = try await runner.run(configuration: config, messages: messages, snapshot: snapshot,
                                 key: secret, transport: transport,
-                                currentSnapshotID: { [weak self] in self?.snapshotProvider()?.id ?? "unavailable" },
+                                currentSnapshotID: { [weak self] in
+                                    guard let self, self.runID == id else { throw AssistantError.stopped }
+                                    return try await self.freshSnapshot().id
+                                },
                                 scopeAlreadyConfirmed: scopeConfirmed,
                                 approve: { [weak self] approval in
                                     guard let self, self.runID == id else { throw AssistantError.stopped }
@@ -241,7 +241,7 @@ import StudyCore
                                 evidence: { [weak self] value in if self?.runID == id { self?.evidence.append(value) } },
                                 proposal: { [weak self] value in if self?.runID == id { self?.pendingChange = value } })
                             guard self.runID == id else { return }
-                            guard self.snapshotProvider()?.id == snapshot.id else { throw AssistantError.snapshotChanged }
+                            guard try await self.freshSnapshot().id == snapshot.id else { throw AssistantError.snapshotChanged }
                             break
                         } catch AssistantError.snapshotChanged {
                             guard self.runID == id else { return }
@@ -261,7 +261,7 @@ import StudyCore
                 } catch {
                     guard self.runID == id else { return }
                     self.pendingChange = nil
-                    self.markPending("未完成")
+                    self.markPending("未完成", failure: AssistantError.safe(error))
                     self.message = AssistantError.safe(error).rawValue; self.activity = "本轮已结束 · 可重试"
                 }
                 guard self.runID == id else { return }
@@ -364,7 +364,7 @@ import StudyCore
         work?.cancel()
         let pending = decision; decision = nil; approval = nil; expiry?.cancel(); expiry = nil
         pending?.resume(throwing: reason)
-        markPending("未完成"); busy = false; runner = nil; work = nil
+        markPending("未完成", failure: reason); busy = false; runner = nil; work = nil
         message = reason.rawValue; activity = "本轮已停止 · 可重试"; schedulePersistence()
     }
     func close() {
@@ -390,10 +390,11 @@ import StudyCore
         guard let index = conversations.firstIndex(where: { $0.id == selectedID }) else { return }
         conversations[index].entries.append(entry); conversations[index].updatedAt = Date()
     }
-    private func markPending(_ status: String) {
+    private func markPending(_ status: String, failure: AssistantError? = nil) {
         guard let index = conversations.firstIndex(where: { $0.id == selectedID }) else { return }
         for j in conversations[index].entries.indices where conversations[index].entries[j].status == "处理中" {
             conversations[index].entries[j].status = status
+            conversations[index].entries[j].failureReason = failure
         }
     }
     @discardableResult private func persist() -> Bool {

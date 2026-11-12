@@ -3,7 +3,7 @@ import CryptoKit
 import Security
 import StudyCredentials
 
-enum AssistantError: String, Error, LocalizedError {
+enum AssistantError: String, Error, LocalizedError, Codable {
     case configuration = "请填写 HTTPS 服务地址和模型名称；地址不能含账号、查询参数或片段。"
     case key = "请打开 API 设置填写密钥，或主动从本机钥匙串载入。"
     case keychain = "钥匙串操作未完成，原有凭证未删除。"
@@ -125,6 +125,7 @@ struct AssistantChatEntry: Codable, Identifiable, Sendable {
     var text: String
     var status: String?
     var steps: [String]?
+    var failureReason: AssistantError?
 }
 struct AssistantConversation: Codable, Identifiable, Sendable {
     var id = UUID()

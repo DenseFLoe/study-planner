@@ -338,6 +338,9 @@ struct AssistantView: View {
                                 if let steps = entry.steps, !steps.isEmpty {
                                     AssistantProgressView(steps: steps, status: entry.status)
                                 }
+                                if let failure = entry.failureReason {
+                                    Text(failure.rawValue).font(.caption).foregroundStyle(.secondary)
+                                }
                             }.id(entry.id)
                         }
                         if let message = session.message {

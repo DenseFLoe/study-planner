@@ -60,7 +60,7 @@ actor AssistantRunner {
     }
     func run(configuration: AssistantConfiguration, messages: [AssistantWireMessage], snapshot: AssistantSnapshot,
              key: String, transport: any AssistantTransport,
-             currentSnapshotID: @escaping @MainActor () -> String,
+             currentSnapshotID: @escaping @MainActor () async throws -> String,
              scopeAlreadyConfirmed: Bool = false,
              approve: @escaping @MainActor (AssistantApproval) async throws -> Bool,
              activity: @escaping @MainActor (String) -> Void,
@@ -73,14 +73,14 @@ actor AssistantRunner {
         try AssistantSecrets.check(String(decoding: assistantJSON(messages), as: UTF8.self), key: key)
         try AssistantSecrets.check(configuration.baseURL, key: key)
         try AssistantSecrets.check(configuration.model, key: key)
-        let instructions = AssistantTools.instructions + "\n" + AssistantActions.instructions + "\n本机日期：\(snapshot.stamp(snapshot.now))；时区：\(snapshot.calendar.timeZone.identifier)。"
+        let instructions = AssistantTools.instructions + "\n" + AssistantActions.instructions + "\n" + AssistantActions.macInstructions + "\n本机日期：\(snapshot.stamp(snapshot.now))；当前时间：\(snapshot.stamp(snapshot.now, time: true))；时区：\(snapshot.calendar.timeZone.identifier)。"
         var conversation = AssistantWire.messages(messages, configuration: configuration, instructions: instructions)
         var gate = AssistantApprovalGate(), callIDs = Set<String>()
         var queriedEvidence: [AssistantToolEvidence] = []
         var scopeConfirmed = scopeAlreadyConfirmed, proposed = false
         while true {
             try check()
-            guard await currentSnapshotID() == snapshot.id else { throw AssistantError.snapshotChanged }
+            guard try await currentSnapshotID() == snapshot.id else { throw AssistantError.snapshotChanged }
             guard sentRequests < 8 else { throw AssistantError.limit }
             let request = try AssistantWire.request(configuration: configuration, messages: conversation, instructions: instructions)
             try request.validate(key: key)
@@ -99,12 +99,12 @@ actor AssistantRunner {
                 scopeConfirmed = true
             }
             try check()
-            guard await currentSnapshotID() == snapshot.id else { throw AssistantError.snapshotChanged }
+            guard try await currentSnapshotID() == snapshot.id else { throw AssistantError.snapshotChanged }
             await activity(sentRequests == 0 ? "正在分析问题…" : "正在整理查询结果…")
             sentRequests += 1
             let response = try await transport.send(request, key: key)
             try check()
-            guard await currentSnapshotID() == snapshot.id else { throw AssistantError.snapshotChanged }
+            guard try await currentSnapshotID() == snapshot.id else { throw AssistantError.snapshotChanged }
             guard response.utf8.count <= 1_048_576 else { throw AssistantError.limit }
             try AssistantSecrets.check(response, key: key)
             let reply = try AssistantWire.reply(response, configuration: configuration)
@@ -118,27 +118,35 @@ actor AssistantRunner {
             var results: [[String: Any]] = []
             for call in reply.calls {
                 try check()
-                guard await currentSnapshotID() == snapshot.id else { throw AssistantError.snapshotChanged }
+                guard try await currentSnapshotID() == snapshot.id else { throw AssistantError.snapshotChanged }
                 let name = call.name, arguments = call.input
                 await activity(AssistantTools.activity(for: name))
                 toolCount += 1
                 let evidenceID = "E\(toolCount)"
                 let previous = queriedEvidence
                 let alreadyProposed = proposed
+                let toolSnapshot = transport.simulated ? snapshot : AssistantSnapshot(
+                    state: snapshot.state, now: Date(), calendar: snapshot.calendar, id: snapshot.id)
                 let (result, change) = try await Task.detached(priority: .userInitiated) {
-                    if AssistantActions.definitions.contains(where: { $0.name == name }) {
-                        return try AssistantActions.execute(name: name, input: arguments, snapshot: snapshot, id: evidenceID, alreadyProposed: alreadyProposed)
+                    if AssistantActions.allDefinitions.contains(where: { $0.name == name }) {
+                        return try AssistantActions.execute(name: name, input: arguments, snapshot: toolSnapshot, id: evidenceID, alreadyProposed: alreadyProposed)
                     }
-                    return (try AssistantTools.query(name: name, input: arguments, snapshot: snapshot, id: evidenceID, previous: previous), nil as AssistantChange?)
+                    return (try AssistantTools.query(name: name, input: arguments, snapshot: toolSnapshot, id: evidenceID, previous: previous), nil as AssistantChange?)
                 }.value
                 try check()
-                guard await currentSnapshotID() == snapshot.id else { throw AssistantError.snapshotChanged }
+                guard try await currentSnapshotID() == snapshot.id else { throw AssistantError.snapshotChanged }
                 try AssistantSecrets.check(result.json, key: key)
                 if let change {
                     try AssistantSecrets.check(change.title + change.summary + change.details.joined(separator: "\n"), key: key)
                     proposed = true; await proposal(change)
                 }
                 queriedEvidence.append(result); await evidence(result)
+                if name == "preview_focus_today", let change {
+                    // The complete result is already computed locally. Deliver it
+                    // immediately, without spending the review window on another API round.
+                    return "已生成完整安排，尚未保存。\n\n" + change.summary
+                        + "\n\n请在「核对日程修改」卡片查看整套差异，点击「确认应用」后才会保存。"
+                }
                 if configuration.provider == .anthropic {
                     results.append(["type": "tool_result", "tool_use_id": call.id, "content": result.json])
                 } else {

@@ -148,6 +148,22 @@ enum AssistantSimulation {
         await session.undoLastChange()
         guard normalized(store.state) == normalized(before), session.undoChange == nil else { throw AssistantError.protocolError }
     }
+    @MainActor static func focusProbe() async throws {
+        let snapshot = snapshot()
+        for provider in [AssistantProvider.openai, .anthropic, .deepseek] {
+            let transport = AssistantMockTransport(script: [("list_courses", ["offset": "0"]),
+                ("preview_focus_today", ["course": courseID.uuidString])])
+            var change: AssistantChange?
+            let answer = try await AssistantRunner().run(configuration: configuration(provider: provider),
+                messages: [.init(role: "user", content: "今天尽可能安排合成课程，其他课自动另找时间")],
+                snapshot: snapshot, key: "", transport: transport, currentSnapshotID: { snapshot.id },
+                approve: { _ in true }, activity: { _ in }, evidence: { _ in }, proposal: { change = $0 })
+            guard let change, change.after.courses == snapshot.state.courses,
+                  change.after.completions == snapshot.state.completions,
+                  change.after.tasks.allSatisfy({ $0.start >= snapshot.now }),
+                  answer.contains("尚未保存"), await transport.requests.count == 2 else { throw AssistantError.protocolError }
+        }
+    }
     @MainActor static func preview(actions: Bool = false) {
         let app = NSApplication.shared
         app.setActivationPolicy(.regular)
@@ -205,7 +221,8 @@ enum AssistantSimulation {
             }
             try await actionProbe()
             try await actionProbe(move: true)
-            print("ASSISTANT_PACKAGE_PROBE_PASS protocols=3 queries=18 externalRequests=0 credentialsUsed=0 privacy=verified lessonLinks=verified timeCheck=verified readableDetails=verified actions=preview-confirm-undo move=preview-confirm-reopen-undo")
+            try await focusProbe()
+            print("ASSISTANT_PACKAGE_PROBE_PASS protocols=3 queries=18 externalRequests=0 credentialsUsed=0 privacy=verified lessonLinks=verified timeCheck=verified readableDetails=verified actions=preview-confirm-undo move=preview-confirm-reopen-undo focus=compound-preview")
             return true
         } catch { print("ASSISTANT_PACKAGE_PROBE_FAIL: \(AssistantError.safe(error).rawValue)"); return false }
     }

@@ -27,7 +27,7 @@ enum AssistantWire {
     }
     static func request(configuration: AssistantConfiguration, messages: [[String: Any]], instructions: String) throws -> AssistantRequest {
         let anthropic = configuration.provider == .anthropic
-        let tools: [[String: Any]] = (AssistantTools.definitions + AssistantActions.definitions).map { definition in
+        let tools: [[String: Any]] = (AssistantTools.definitions + AssistantActions.allDefinitions).map { definition in
             let properties = definition.fields.mapValues { ["type": "string", "maxLength": 128, "description": $0] as [String: Any] }
             let schema: [String: Any] = ["type": "object", "properties": properties,
                                         "required": definition.fields.keys.sorted(), "additionalProperties": false]
@@ -53,7 +53,7 @@ enum AssistantWire {
     }
     private static func call(id: String?, name: String?, arguments: [String: Any]?) throws -> Call {
         guard let id, !id.isEmpty, id.utf8.count <= 128, !id.contains(where: { $0.isWhitespace }),
-              let name, let definition = (AssistantTools.definitions + AssistantActions.definitions).first(where: { $0.name == name }),
+              let name, let definition = (AssistantTools.definitions + AssistantActions.allDefinitions).first(where: { $0.name == name }),
               let arguments, Set(arguments.keys) == Set(definition.fields.keys) else { throw AssistantError.protocolError }
         var input: [String: String] = [:]
         for (field, value) in arguments {

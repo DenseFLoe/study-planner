@@ -80,7 +80,15 @@ public struct ScheduleEngine: Sendable {
         generatePlan(state: state, now: now, immediate: state.validImmediateStudyTask(now: now, calendar: calendar))
     }
 
-    private func generatePlan(state original: PlannerState, now: Date, immediate: ScheduledTask?) -> ScheduleResult {
+    /// Used by a compound draft: reserve today's work and allocate the rest from
+    /// tomorrow without creating completion records or changing course settings.
+    func generateAfterToday(state: PlannerState, now: Date, reserved: [ScheduledTask]) -> ScheduleResult {
+        generatePlan(state: state, now: now, immediate: nil, reserved: reserved,
+                     notBefore: calendar.date(byAdding: .day, value: 1, to: calendar.startOfDay(for: now))!)
+    }
+
+    private func generatePlan(state original: PlannerState, now: Date, immediate: ScheduledTask?,
+                              reserved: [ScheduledTask] = [], notBefore: Date = .distantPast) -> ScheduleResult {
         var state = original
         if let continuation = state.immediateStudyContinuation(now: now, calendar: calendar),
            let index = state.courses.firstIndex(where: { $0.id == state.settings.immediateStudy?.task.courseID }) {
@@ -97,7 +105,7 @@ public struct ScheduleEngine: Sendable {
         let requestFloor = immediate == nil && state.settings.immediateStudy != nil ? now : Date.distantPast
         let scheduleStart = max(actualStart ?? now, lastConfirmation ?? today,
                                 immediate?.end.addingTimeInterval(breakSeconds) ?? .distantPast,
-                                requestFloor)
+                                requestFloor, notBefore)
         let nextMinute = Date(timeIntervalSince1970: ceil(scheduleStart.timeIntervalSince1970 / 60) * 60)
         let courses = state.courses.filter { !$0.isArchived && $0.autoScheduleEnabled && state.remainingMinutes(for: $0) > 0 }
         let priorities = state.settings.schedulePriorities
@@ -209,6 +217,7 @@ public struct ScheduleEngine: Sendable {
                 .map { buffered(start: $0.retainedHistoryInterval.start,
                                 end: $0.retainedHistoryInterval.end) }
             if let immediate { history.append(buffered(start: immediate.start, end: immediate.end)) }
+            history += reserved.map { buffered(start: $0.start, end: $0.end) }
             blocks += history
             hardDays.append(.init(date: day, free: subtract(exact + history, from: windows)))
             eventWindows += subtract(exact + history, from: [.init(start: day, end: instant(day: day, minute: 1440))])
@@ -256,18 +265,19 @@ public struct ScheduleEngine: Sendable {
             }
             // A partial first segment reserves only its own minutes. The rest
             // keeps the same lesson identity and stays ahead of the other lessons.
-            if let immediate, immediate.courseID == course.id {
+            for reservation in reserved + (immediate.map { [$0] } ?? []) where reservation.courseID == course.id {
                 // A resumed time block can span several newly configured units.
-                var reserved = immediate.durationMinutes
-                for index in work.indices where work[index].lessonID == immediate.lessonID && reserved > 0 {
-                    let used = min(work[index].minutes, reserved)
+                var reservedMinutes = reservation.durationMinutes
+                for index in work.indices where work[index].lessonID == reservation.lessonID && reservedMinutes > 0 {
+                    let used = min(work[index].minutes, reservedMinutes)
                     work[index].minutes -= used
-                    reserved -= used
+                    reservedMinutes -= used
                 }
                 work.removeAll { $0.minutes == 0 }
             }
             pending[course.id] = work
-            let reservedMinutes = immediate.map { $0.courseID == course.id ? $0.durationMinutes : 0 } ?? 0
+            let reservedMinutes = (immediate.map { $0.courseID == course.id ? $0.durationMinutes : 0 } ?? 0)
+                + reserved.filter { $0.courseID == course.id }.reduce(0) { $0 + $1.durationMinutes }
             required[course.id] = remaining - reservedMinutes
             let shortest = work.map(\.minutes).min() ?? 0
             var count = days.filter { eligible(course, $0.date) && $0.free.contains(where: { shortest > 0 && $0.minutes >= shortest }) }.count
@@ -817,6 +827,8 @@ public struct ScheduleEngine: Sendable {
             tasks.sort { $0.start < $1.start }
             adjustments.append("已将所选课程从当前时间开始安排，其余课程在满足日期、固定事项、课间休息与课节顺序后重排。")
         }
+        tasks.append(contentsOf: reserved)
+        tasks.sort { $0.start < $1.start }
         var risks: [ScheduleRisk] = []
         for cutoff in Set(courses.map { calendar.startOfDay(for: $0.deadline) }).sorted() {
             let group = courses.filter { calendar.startOfDay(for: $0.deadline) <= cutoff }
@@ -831,7 +843,8 @@ public struct ScheduleEngine: Sendable {
         result.adjustments = adjustments
         result.dayPlans = originalDays.map { day in
             .init(date: day.date, availableMinutes: day.free.reduce(0) { $0 + $1.minutes } +
-                  (immediate.map { calendar.isDate($0.start, inSameDayAs: day.date) ? $0.durationMinutes : 0 } ?? 0),
+                  (immediate.map { calendar.isDate($0.start, inSameDayAs: day.date) ? $0.durationMinutes : 0 } ?? 0)
+                  + reserved.filter { calendar.isDate($0.start, inSameDayAs: day.date) }.reduce(0) { $0 + $1.durationMinutes },
                   plannedMinutes: tasks.filter { calendar.isDate($0.start, inSameDayAs: day.date) }.reduce(0) { $0 + $1.durationMinutes })
         }
         // Ignore floating occupancy for an optimistic bound. Count only breaks
