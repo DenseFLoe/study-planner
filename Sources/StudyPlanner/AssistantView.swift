@@ -116,6 +116,8 @@ struct AssistantView: View {
                     Capsule().frame(width: 17, height: 1.5)
                     Capsule().frame(width: 11, height: 1.5)
                 }.frame(width: 38, height: 38)
+                    // Plain buttons otherwise hit-test only the two thin strokes, including a gap at the center.
+                    .contentShape(Rectangle())
             }.help("聊天记录").accessibilityLabel("聊天记录")
             Spacer(minLength: 0)
             Menu {
@@ -142,6 +144,7 @@ struct AssistantView: View {
                 session.newConversation(); questionFocused = true
             } label: {
                 Image(systemName: "square.and.pencil").font(.system(size: 19, weight: .regular)).frame(width: 38, height: 38)
+                    .contentShape(Rectangle())
             }.disabled(!session.canManageConversations).help("新建对话").accessibilityLabel("新建对话")
         }
         .overlay {
@@ -156,7 +159,9 @@ struct AssistantView: View {
             HStack {
                 Text("历史对话").font(.system(size: 17, weight: .semibold))
                 Spacer()
-                Button { toggleSidebar() } label: { Image(systemName: "xmark").frame(width: 28, height: 28) }
+                Button { toggleSidebar() } label: {
+                    Image(systemName: "xmark").frame(width: 28, height: 28).contentShape(Rectangle())
+                }
                     .buttonStyle(.plain).foregroundStyle(.secondary).accessibilityLabel("关闭聊天记录")
             }
             history
