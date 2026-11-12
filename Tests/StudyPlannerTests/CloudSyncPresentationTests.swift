@@ -90,7 +90,7 @@ final class CloudSyncPresentationTests: XCTestCase {
         await store.syncTask?.value
         await fulfillment(of: [nextTransfer], timeout: 1)
         XCTAssertFalse(store.syncBusy)
-        XCTAssertTrue(store.cloudStatus.hasPrefix("已同步"))
+        XCTAssertTrue(store.cloudStatus.hasPrefix("已检查，无需更新"))
     }
 
     @MainActor func testBusyIndicatorCoversTransferAndRefreshWhileMainActorResponds() async throws {
@@ -112,6 +112,7 @@ final class CloudSyncPresentationTests: XCTestCase {
         })
         let task = store.syncTask
         XCTAssertTrue(store.syncBusy, "Show progress before starting any work")
+        XCTAssertEqual(store.cloudStatus, "正在检查云端更新…")
         await transfer.waitUntilStarted()
         XCTAssertTrue(store.syncBusy)
         XCTAssertTrue(store.state.courses.isEmpty)

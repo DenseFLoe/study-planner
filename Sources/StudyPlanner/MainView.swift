@@ -164,11 +164,7 @@ struct MainView: View {
                 try? await Task.sleep(for: .seconds(30))
                 guard !Task.isCancelled else { break }
                 store.checkDay()
-                store.pollCloudIfDue()
             }
-        }
-        .onReceive(NotificationCenter.default.publisher(for: .plannerDidCommit).receive(on: RunLoop.main)) { _ in
-            store.requestCloudSync()
         }
     }
 

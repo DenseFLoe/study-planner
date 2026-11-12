@@ -35,8 +35,9 @@ final class PlannerStore {
     var cloudEnabled = false
     @ObservationIgnored private var cloudMonitor: NWPathMonitor?
     @ObservationIgnored private var cloudDeferredTask: Task<Void, Never>?
-    private var cloudRequested = false
-    private var cloudLastAttempt = Date.distantPast
+    @ObservationIgnored private var cloudPollTask: Task<Void, Never>?
+    @ObservationIgnored private var cloudCommitObserver: NSObjectProtocol?
+    private var cloudSchedule = CloudSyncSchedule()
     private var pendingManualSyncs = 0
     private var localEditRevision = 0
     @ObservationIgnored private var pendingCompressedPreview: CompressedSchedulePreview?
@@ -62,6 +63,11 @@ final class PlannerStore {
             repository = repo
             state = try repo.load()
             syncLedger = try repo.loadLedger()
+            if !demo {
+                let savedAttempt = UserDefaults.standard.double(forKey: CloudSyncSchedule.lastAttemptKey)
+                let lastCheck = max(savedAttempt, syncLedger.cloudProgress?.lastSuccess ?? 0)
+                cloudSchedule = CloudSyncSchedule(lastAttempt: lastCheck > 0 ? min(Date(), Date(timeIntervalSince1970: lastCheck)) : nil)
+            }
             isReady = true
             Task {
                 if demo { await loadExample() } else { await restoreSavedSchedule() }
@@ -99,7 +105,7 @@ final class PlannerStore {
                   state.settings.compressedSchedulePreview != preview else { return }
             var next = state
             next.settings.compressedSchedulePreview = preview
-            if await commit(next, replan: false, backupReason: nil, clearError: false) { requestCloudSync() }
+            _ = await commit(next, replan: false, backupReason: nil, clearError: false)
         }
     }
     func course(_ id: UUID) -> Course? { state.courses.first { $0.id == id } }
@@ -204,6 +210,7 @@ final class PlannerStore {
     private func finishLocalSave() {
         orderSaveBusy = false; orderSaveTask = nil; saveStatus = ""
         if let preview = pendingCompressedPreview { publishCompressedPreview(preview) }
+        drainCloudRequests()
     }
 
     func swapDailyTasks(_ source: UUID, _ target: UUID) {
@@ -480,12 +487,37 @@ final class PlannerStore {
         guard !demo, cloudMonitor == nil else { return }
         let monitor = NWPathMonitor(); cloudMonitor = monitor
         monitor.pathUpdateHandler = { [weak self] path in
-            if path.status == .satisfied { Task { @MainActor [weak self] in self?.requestCloudSync() } }
+            let available = path.status == .satisfied
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                cloudSchedule.networkChanged(available: available, now: Date())
+                drainCloudRequests()
+            }
+        }
+        // Store-owned observation also works while the main window is closed.
+        cloudCommitObserver = NotificationCenter.default.addObserver(forName: .plannerDidCommit, object: nil, queue: nil) { [weak self] notification in
+            let sequence = notification.userInfo?["sequence"] as? Int64
+            Task { @MainActor [weak self] in self?.localCloudCommit(sequence: sequence) }
         }
         monitor.start(queue: DispatchQueue(label: "studyplanner-cloud-network"))
+        // Restarting the app preserves the 12-hour check interval; unsent edits
+        // from an earlier session still get an early opportunity to upload.
+        if syncLedger.cloudProgress?.uploadedSequence != syncLedger.sequence { requestCloudSync() }
+        pollCloudIfDue()
+        cloudPollTask = Task { [weak self] in
+            while !Task.isCancelled {
+                do { try await Task.sleep(for: .seconds(30)) } catch { return }
+                guard let self else { return }
+                pollCloudIfDue()
+            }
+        }
     }
     func pollCloudIfDue() {
-        guard Date().timeIntervalSince(cloudLastAttempt) >= 3600 else { return }
+        requestCloudSync(trigger: .periodic)
+    }
+    private func localCloudCommit(sequence: Int64?) {
+        // A delayed notification may refer to a save included in the last upload.
+        if let sequence, let uploaded = syncLedger.cloudProgress?.uploadedSequence, uploaded >= sequence { return }
         requestCloudSync()
     }
     @discardableResult
@@ -498,6 +530,8 @@ final class PlannerStore {
             }
             CloudVault.selectedMethod = method
             UserDefaults.standard.set(enabled, forKey: CloudOutbox.enabledKey); cloudEnabled = enabled
+            cloudDeferredTask?.cancel(); cloudDeferredTask = nil
+            cloudSchedule.cancelPending()
             cloudStatus = enabled ? "配置已保存，准备同步" : "云同步已暂停，本地数据和待传文件已保留"
             if enabled {
                 Task {
@@ -511,42 +545,68 @@ final class PlannerStore {
         } catch { errorMessage = error.localizedDescription; return false }
     }
     func requestCloudSync(manual: Bool = false) {
+        requestCloudSync(trigger: manual ? .manual : .localChange)
+    }
+    private func requestCloudSync(trigger: CloudSyncSchedule.Trigger) {
         guard !demo, isReady, cloudEnabled else { return }
-        if orderSaveBusy { Task { if await waitForOrderSave() { requestCloudSync(manual: manual) } }; return }
-        if syncBusy { cloudRequested = true; return }
-        if !manual && Date().timeIntervalSince(cloudLastAttempt) < 2 {
-            if cloudDeferredTask == nil {
-                cloudDeferredTask = Task {
-                    try? await Task.sleep(for: .seconds(2)); cloudDeferredTask = nil
-                    if !Task.isCancelled { requestCloudSync(manual: true) }
-                }
-            }
-            return
-        }
+        cloudSchedule.request(trigger, now: Date())
+        drainCloudRequests()
+    }
+    private func drainCloudRequests() {
         cloudDeferredTask?.cancel(); cloudDeferredTask = nil
-        cloudRequested = false; cloudLastAttempt = Date()
-        beginCloudSync()
+        guard !demo, isReady, cloudEnabled, !orderSaveBusy, !syncBusy,
+              let due = cloudSchedule.nextAttempt(at: Date()) else { return }
+        let delay = due.timeIntervalSinceNow
+        if delay > 0 {
+            cloudDeferredTask = Task { [weak self] in
+                do { try await Task.sleep(for: .seconds(delay)) } catch { return }
+                guard !Task.isCancelled, let self else { return }
+                cloudDeferredTask = nil
+                drainCloudRequests()
+            }
+        } else { beginCloudSync() }
     }
     func beginCloudSync(
-        operation: @escaping @Sendable () async throws -> SyncOutcome = {
-            guard let credentials = try CloudVault.load(method: CloudVault.selectedMethod) else { throw ClientError.message("请先配置云同步服务器。") }
-            return try await CloudSyncClient.run(credentials: credentials)
-        },
+        operation: (@Sendable () async throws -> SyncOutcome)? = nil,
         snapshot: @escaping @Sendable () async throws -> (PlannerState, SyncLedger) = { try await SyncDatabase.snapshot() }
     ) {
         guard !syncBusy else { return }
-        syncBusy = true; cloudStatus = "正在上传完整课表并获取合并结果…"
+        cloudDeferredTask?.cancel(); cloudDeferredTask = nil
+        cloudSchedule.began(at: Date())
+        if !demo { UserDefaults.standard.set(cloudSchedule.lastAttempt?.timeIntervalSince1970, forKey: CloudSyncSchedule.lastAttemptKey) }
+        syncBusy = true; cloudStatus = "正在检查云端更新…"
+        let operation = operation ?? { [weak self] in
+            let store = self
+            guard let credentials = try CloudVault.load(method: CloudVault.selectedMethod) else { throw ClientError.message("请先配置云同步服务器。") }
+            return try await CloudSyncClient.run(credentials: credentials) { phase in
+                await store?.showCloudPhase(phase)
+            }
+        }
         syncTask = Task {
-            defer { finishSync() }
+            var succeeded = false
+            defer {
+                cloudSchedule.finished(success: succeeded, hasLocalChanges: syncLedger.cloudProgress?.uploadedSequence != syncLedger.sequence, now: Date())
+                finishSync()
+            }
             do {
                 // Keychain access, archive work and SSH teardown must not inherit
                 // the main actor from the UI task.
                 let outcome = try await Task.detached(priority: .userInitiated, operation: operation).value
-                cloudStatus = "已同步 · 云端版本 \(outcome.ledger.cloudProgress?.revision ?? 0) · \(Date().formatted(date: .omitted, time: .shortened))"
+                succeeded = true
+                let summary = outcome.sent == 0 && outcome.received == 0 ? "已检查，无需更新" : "已同步"
+                cloudStatus = "\(summary) · 云端版本 \(outcome.ledger.cloudProgress?.revision ?? 0) · \(Date().formatted(date: .omitted, time: .shortened))"
             } catch { cloudStatus = "云同步未完成，待传数据已保留：" + error.localizedDescription }
             do {
                 try await refreshAfterSync(snapshot: snapshot)
             } catch { errorMessage = "无法读取本地日程：" + error.localizedDescription; isReady = false }
+        }
+    }
+    private func showCloudPhase(_ phase: CloudSyncPhase) {
+        switch phase {
+        case .checking: cloudStatus = "正在检查云端更新…"
+        case .downloading: cloudStatus = "正在下载云端课表…"
+        case .uploading: cloudStatus = "正在上传已核对的完整课表…"
+        case .saving: cloudStatus = "正在保存同步结果…"
         }
     }
     func startSync(automatic: Bool = false, host: String? = nil, pairingText: String? = nil) {
@@ -603,13 +663,12 @@ final class PlannerStore {
     }
     private func didSaveLocalEdit() {
         localEditRevision += 1
-        if syncBusy { cloudRequested = true }
     }
     private func finishSync() {
         syncTask = nil; syncBusy = false
         if let preview = pendingCompressedPreview ?? compressedPlan.sharedPreview { publishCompressedPreview(preview) }
         if pendingManualSyncs > 0 { pendingManualSyncs -= 1; startSync() }
-        else if cloudRequested { requestCloudSync(manual: true) }
+        else { drainCloudRequests() }
     }
     private func recordSyncLog(_ message: String) async {
         syncStatus = message

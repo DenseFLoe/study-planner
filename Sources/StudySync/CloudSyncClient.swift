@@ -115,21 +115,25 @@ private final class CloudHTTP: NSObject, CloudSyncTransport, URLSessionTaskDeleg
     }
 }
 
+public enum CloudSyncPhase: Sendable, Equatable { case checking, downloading, uploading, saving }
+
 public enum CloudSyncClient {
     public static func resetProgress() async throws {
         try await SyncDatabase.update(enqueueCloud: false) { _, ledger in ledger.cloudProgress = nil }
     }
-    public static func run(credentials: CloudCredentials) async throws -> SyncOutcome {
+    public static func run(credentials: CloudCredentials, progress: @escaping @Sendable (CloudSyncPhase) async -> Void = { _ in }) async throws -> SyncOutcome {
         let validated = try credentials.validated()
         let tunnel: CloudSSHTunnel?
         if let ssh = validated.ssh { tunnel = try await CloudSSHTunnel.open(ssh) } else { tunnel = nil }
         defer { tunnel?.close() }
         let transport = CloudHTTP(validated, tunnel: tunnel); defer { transport.close() }
-        return try await run(endpoint: validated.endpoint, outbox: CloudOutbox.directory(), transport: transport)
+        return try await run(endpoint: validated.endpoint, outbox: CloudOutbox.directory(), transport: transport, progress: progress)
     }
-    static func run(endpoint: String, databaseURL: URL? = nil, outbox: URL, transport: any CloudSyncTransport) async throws -> SyncOutcome {
+    static func run(endpoint: String, databaseURL: URL? = nil, outbox: URL, transport: any CloudSyncTransport,
+                    progress onProgress: @escaping @Sendable (CloudSyncPhase) async -> Void = { _ in }) async throws -> SyncOutcome {
         let (_, initial) = try await SyncDatabase.snapshot(url: databaseURL)
         let progress = initial.cloudProgress.flatMap { $0.endpoint == endpoint ? $0 : nil }
+        await onProgress(.checking)
         var remote = try await transport.status(); try remote.validate()
         if let progress, progress.serverID != remote.serverID || remote.revision < progress.revision {
             throw ClientError.message("服务器身份或版本发生回退。请核对服务器后重新保存云同步配置，现有日程未被覆盖。")
@@ -140,6 +144,7 @@ public enum CloudSyncClient {
         let obsolete = try CloudOutbox.files(in: outbox)
         var archive: CloudArchive?
         func download() async throws -> CloudArchive {
+            await onProgress(.downloading)
             let value = try JSONDecoder().decode(CloudArchive.self, from: CloudCompression.gunzip(try await transport.latest())).validated()
             guard value.serverID == remote.serverID, let revision = value.revision, revision >= remote.revision else { throw SyncFailure.invalidData }
             return value
@@ -164,6 +169,7 @@ public enum CloudSyncClient {
             try CloudCompression.gzip(JSONEncoder().encode(prepared)).write(to: file, options: .atomic)
             try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: file.path)
             try CloudOutbox.sanitizeSourceURLsBeforeUpload(file)
+            await onProgress(.uploading)
             let reply = try await transport.upload(file); try reply.validate()
             guard reply.serverID == remote.serverID, reply.revision >= remote.revision else { throw SyncFailure.invalidData }
             uploaded = file; remote = reply
@@ -179,6 +185,7 @@ public enum CloudSyncClient {
             _ = try await backups.save(PlannerBackup(state: latest, reason: "云同步合并前自动备份"))
         }
         let didUpload = uploaded != nil
+        await onProgress(.saving)
         let outcome = try await SyncDatabase.update(url: databaseURL, enqueueCloud: false) { state, ledger in
             let locallyChangedDuringUpload = ledger.sequence != initialSequence
             var server = SyncLedger()

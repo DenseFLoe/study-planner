@@ -3,6 +3,12 @@ import StudyCore
 import StudyPersistence
 @testable import StudySync
 
+private actor CloudPhaseRecorder {
+    var phases: [CloudSyncPhase] = []
+    func record(_ phase: CloudSyncPhase) { phases.append(phase) }
+    func values() -> [CloudSyncPhase] { phases }
+}
+
 private actor ArchiveServer: CloudSyncTransport {
     var archive: CloudArchive
     var uploads = 0
@@ -57,11 +63,19 @@ final class CloudSyncClientTests: XCTestCase, @unchecked Sendable {
         let unchanged = try await SyncDatabase.snapshot(url: database)
         XCTAssertEqual(unchanged.0.courses.count, 1)
         await server.fail(false)
-        let outcome = try await CloudSyncClient.run(endpoint: "https://fixture.test", databaseURL: database, outbox: outbox, transport: server)
+        let transferPhases = CloudPhaseRecorder()
+        let outcome = try await CloudSyncClient.run(endpoint: "https://fixture.test", databaseURL: database, outbox: outbox, transport: server) { await transferPhases.record($0) }
+        let transferred = await transferPhases.values()
+        XCTAssertEqual(transferred, [.checking, .downloading, .uploading, .downloading, .saving])
         XCTAssertEqual(Set(outcome.state.courses.map(\.name)), ["Mac", "Phone"])
         XCTAssertEqual(outcome.ledger.peerCursor, 123); XCTAssertEqual(outcome.ledger.sentCursor, 456)
         XCTAssertTrue(try CloudOutbox.files(in: outbox).isEmpty)
-        _ = try await CloudSyncClient.run(endpoint: "https://fixture.test", databaseURL: database, outbox: outbox, transport: server)
+        let checkPhases = CloudPhaseRecorder()
+        let unchangedResult = try await CloudSyncClient.run(endpoint: "https://fixture.test", databaseURL: database, outbox: outbox, transport: server) { await checkPhases.record($0) }
+        let checked = await checkPhases.values()
+        XCTAssertEqual(checked, [.checking, .saving], "An unchanged check must not display an upload or download")
+        XCTAssertEqual(unchangedResult.sent, 0)
+        XCTAssertEqual(unchangedResult.received, 0)
         let count = await server.uploadCount(); XCTAssertEqual(count, 1, "download must not create an upload loop")
         await server.rollback()
         do { _ = try await CloudSyncClient.run(endpoint: "https://fixture.test", databaseURL: database, outbox: outbox, transport: server); XCTFail("rollback should stop synchronization") } catch {}

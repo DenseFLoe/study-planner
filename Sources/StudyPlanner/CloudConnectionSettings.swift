@@ -63,7 +63,7 @@ struct CloudConnectionSettings: View {
                 .font(.caption).foregroundStyle(.secondary)
         }
         Text(store.cloudStatus).textSelection(.enabled)
-        Text("两种方式分别保存配置，点击保存后生效。完整课表按记录修改时间合并，保留最近十版；修改及恢复联网时同步，运行期间每小时检查。")
+        Text("两种方式分别保存配置，点击保存后生效。完整课表按记录修改时间合并，保留最近十版；修改保存后合并同步，恢复联网时检查；自动请求至少间隔 30 秒，运行期间每 12 小时检查一次。")
             .font(.caption).foregroundStyle(.secondary)
         HStack {
             Button("保存云同步配置") { save() }

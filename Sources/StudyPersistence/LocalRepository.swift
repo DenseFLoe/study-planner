@@ -434,8 +434,8 @@ public final class LocalRepository: PlannerRepository {
             // A packaging failure must not undo a successful local save. Sync also rebuilds
             // a full pending snapshot from the durable ledger on the next attempt.
             do { try CloudOutbox.enqueue(ledger, directory: cloudOutboxURL) }
-            catch { NotificationCenter.default.post(name: .plannerDidCommit, object: nil); return }
-            NotificationCenter.default.post(name: .plannerDidCommit, object: nil)
+            catch { NotificationCenter.default.post(name: .plannerDidCommit, object: nil, userInfo: ["sequence": ledger.sequence]); return }
+            NotificationCenter.default.post(name: .plannerDidCommit, object: nil, userInfo: ["sequence": ledger.sequence])
         }
     }
 }
