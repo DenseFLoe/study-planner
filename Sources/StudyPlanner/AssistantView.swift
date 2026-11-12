@@ -3,17 +3,19 @@ import AppKit
 
 struct AssistantView: View {
     @Bindable var session: AssistantSession
-    @State private var sidebarVisible = true
+    @State private var sidebarVisible = false
+    @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @FocusState private var questionFocused: Bool
     @State private var historySearch = ""
     @State private var selectingHistory = false
     @State private var selectedConversations = Set<UUID>()
     @State private var panel: Panel?
     private enum Panel: Identifiable {
-        case history, settings, memories, details
+        case settings, memories, details
         case deletion([AssistantConversation])
         var id: String {
             switch self {
-            case .history: "history"
             case .settings: "settings"
             case .memories: "memories"
             case .details: "details"
@@ -32,22 +34,30 @@ struct AssistantView: View {
             }
         }.frame(minWidth: 390, minHeight: 520)
     }
+    private var canvas: Color { colorScheme == .dark ? Color(red: 0.08, green: 0.085, blue: 0.10) : .white }
+    private var surface: Color { colorScheme == .dark ? Color(white: 0.14) : Color(red: 0.965, green: 0.969, blue: 0.977) }
+    private let blue = Color(red: 0.25, green: 0.42, blue: 1)
     private var content: some View {
         GeometryReader { geometry in
-            let wide = geometry.size.width >= 900
-            HStack(spacing: 0) {
-                if wide && sidebarVisible {
-                    sidebar.frame(width: 270)
-                    Divider()
-                }
+            ZStack(alignment: .leading) {
                 VStack(spacing: 0) {
-                    header(wide: wide)
-                    Divider()
+                    header
                     transcript
-                    Divider()
                     composer
-                }.frame(maxWidth: .infinity, maxHeight: .infinity)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .accessibilityHidden(sidebarVisible)
+                .disabled(sidebarVisible)
+                if sidebarVisible {
+                    Button { toggleSidebar() } label: { Color.black.opacity(0.15) }
+                        .buttonStyle(.plain).accessibilityLabel("关闭聊天记录")
+                    sidebar.frame(width: min(300, geometry.size.width - 64))
+                        .background(canvas)
+                        .shadow(color: .black.opacity(0.06), radius: 18, x: 6)
+                        .transition(.move(edge: .leading))
+                }
             }
+            .background(canvas).tint(blue)
             .sheet(item: $panel) { selected in
                 VStack(alignment: .leading, spacing: 14) {
                     if !selected.isDeletion {
@@ -57,7 +67,6 @@ struct AssistantView: View {
                         }
                     }
                     switch selected {
-                    case .history: history
                     case .deletion(let conversations): deletionConfirmation(conversations)
                     case .settings:
                         Text("API 设置").font(.title2.bold())
@@ -74,21 +83,25 @@ struct AssistantView: View {
         }
         .frame(minWidth: 390, minHeight: 520)
         .onChange(of: session.approval?.id) { _, _ in if panel?.id == "details" { panel = nil } }
+        .onExitCommand { if sidebarVisible { toggleSidebar() } }
     }
-    private func header(wide: Bool) -> some View {
-        HStack(spacing: 14) {
-            Button {
-                if wide { sidebarVisible.toggle() } else { panel = .history }
-            } label: { Image(systemName: "sidebar.left") }
-                .help("展开或收起聊天记录").accessibilityLabel("聊天记录")
-            VStack(alignment: .leading, spacing: 3) {
-                Text(session.conversations.first { $0.id == session.selectedID }?.title ?? "学习助手").font(.headline).lineLimit(1)
-                Text(session.simulated ? "合成验收 · 不会联网" : "学习助手 · 日程修改确认后保存").font(.caption).foregroundStyle(.secondary)
-            }
-            Spacer(minLength: 4)
-            Button { session.newConversation() } label: { Image(systemName: "square.and.pencil") }.disabled(!session.canManageConversations).help("新建对话").accessibilityLabel("新建对话")
+    private func toggleSidebar() {
+        questionFocused = false
+        withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.2)) { sidebarVisible.toggle() }
+    }
+    private var header: some View {
+        HStack(spacing: 8) {
+            Button { toggleSidebar() } label: {
+                VStack(alignment: .leading, spacing: 5) {
+                    Capsule().frame(width: 17, height: 1.5)
+                    Capsule().frame(width: 11, height: 1.5)
+                }.frame(width: 38, height: 38)
+            }.help("聊天记录").accessibilityLabel("聊天记录")
+            Spacer(minLength: 0)
             Menu {
                 Button("本机记忆", systemImage: "brain") { panel = .memories }
+                Button("API 设置", systemImage: "slider.horizontal.3") { panel = .settings }
+                Button("重试上个问题", systemImage: "arrow.clockwise") { session.retry() }.disabled(!session.canRetry)
                 Divider()
                 Button("删除当前对话…", systemImage: "trash", role: .destructive) {
                     if let conversation = session.conversations.first(where: { $0.id == session.selectedID }) {
@@ -96,26 +109,48 @@ struct AssistantView: View {
                     }
                 }.disabled(!session.canManageConversations)
                 Button("多选删除对话…", systemImage: "checklist") {
-                    selectingHistory = true; selectedConversations = []
-                    if wide { sidebarVisible = true } else { panel = .history }
+                    selectingHistory = true; selectedConversations = []; sidebarVisible = true
                 }.disabled(!session.canManageConversations)
                 Button("清空全部对话…", systemImage: "trash.slash", role: .destructive) {
                     panel = .deletion(session.conversations)
                 }.disabled(!session.canManageConversations)
-            } label: { Image(systemName: "ellipsis.circle") }
-                .menuStyle(.borderlessButton).fixedSize().help("对话操作").accessibilityLabel("对话操作")
-            Button { panel = .settings } label: { Image(systemName: "slider.horizontal.3") }.help("API 设置").accessibilityLabel("API 设置")
-        }.buttonStyle(.borderless).padding(16)
+            } label: {
+                Image(systemName: "ellipsis").font(.system(size: 18)).frame(width: 34, height: 38)
+            }.menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
+                .help("对话操作").accessibilityLabel("对话操作")
+            Button {
+                session.newConversation(); questionFocused = true
+            } label: {
+                Image(systemName: "square.and.pencil").font(.system(size: 19, weight: .regular)).frame(width: 38, height: 38)
+            }.disabled(!session.canManageConversations).help("新建对话").accessibilityLabel("新建对话")
+        }
+        .overlay {
+            Text(session.visibleEntries.isEmpty ? "学习助手" : (session.conversations.first { $0.id == session.selectedID }?.title ?? "学习助手"))
+                .font(.system(size: 15, weight: .semibold)).lineLimit(1)
+                .frame(maxWidth: .infinity).padding(.horizontal, 92).allowsHitTesting(false)
+        }
+        .buttonStyle(.plain).foregroundStyle(.primary).padding(.horizontal, 16).padding(.vertical, 10)
     }
     private var sidebar: some View {
-        VStack(alignment: .leading, spacing: 14) {
+        VStack(alignment: .leading, spacing: 18) {
+            HStack {
+                Text("历史对话").font(.system(size: 17, weight: .semibold))
+                Spacer()
+                Button { toggleSidebar() } label: { Image(systemName: "xmark").frame(width: 28, height: 28) }
+                    .buttonStyle(.plain).foregroundStyle(.secondary).accessibilityLabel("关闭聊天记录")
+            }
             history
             Divider()
-            Button { panel = .memories } label: { Label("本机记忆 · 已启用 \(session.enabledMemoryCount) 条", systemImage: "brain") }
-                .buttonStyle(.plain)
-            Button { panel = .settings } label: { Label("API 设置", systemImage: "slider.horizontal.3") }
-                .buttonStyle(.plain)
-        }.padding(14).background(Color(nsColor: .windowBackgroundColor))
+            HStack(spacing: 10) {
+                Image(systemName: "book.closed.fill").foregroundStyle(blue).font(.system(size: 20))
+                Text("学习助手").font(.system(size: 14, weight: .medium))
+                Spacer()
+                Button { panel = .memories } label: { Image(systemName: "brain") }
+                    .help("本机记忆").accessibilityLabel("本机记忆")
+                Button { panel = .settings } label: { Image(systemName: "slider.horizontal.3") }
+                    .help("API 设置").accessibilityLabel("API 设置")
+            }.buttonStyle(.plain).padding(.vertical, 4)
+        }.padding(20)
     }
     private var filteredConversations: [AssistantConversation] {
         let query = historySearch.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -127,7 +162,7 @@ struct AssistantView: View {
     private var history: some View {
         VStack(alignment: .leading, spacing: 14) {
             HStack {
-                Text("对话").font(.title3.bold())
+                Text("全部对话").font(.system(size: 12)).foregroundStyle(.secondary)
                 Spacer()
                 Text("\(session.conversations.count)").font(.caption.monospacedDigit()).foregroundStyle(.secondary)
                 Button(selectingHistory ? "完成" : "多选") {
@@ -136,10 +171,12 @@ struct AssistantView: View {
             }
             Button {
                 session.newConversation(); historySearch = ""
-                if panel?.id == "history" { panel = nil }
+                sidebarVisible = false
             } label: {
-                Label("新建对话", systemImage: "square.and.pencil").frame(maxWidth: .infinity).padding(.vertical, 5)
-            }.buttonStyle(.borderedProminent).disabled(!session.canManageConversations)
+                Label("开启新对话", systemImage: "plus.bubble").font(.system(size: 14, weight: .medium))
+                    .frame(maxWidth: .infinity, alignment: .leading).padding(12)
+                    .foregroundStyle(blue).background(blue.opacity(0.08), in: RoundedRectangle(cornerRadius: 12))
+            }.buttonStyle(.plain).disabled(!session.canManageConversations)
             HStack(spacing: 6) {
                 Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
                 TextField("搜索对话", text: $historySearch).textFieldStyle(.plain).accessibilityLabel("搜索对话")
@@ -182,7 +219,7 @@ struct AssistantView: View {
                     if !selectedConversations.insert(conversation.id).inserted { selectedConversations.remove(conversation.id) }
                 } else {
                     session.select(conversation.id)
-                    if panel?.id == "history" { panel = nil }
+                    sidebarVisible = false
                 }
             } label: {
                 HStack(alignment: .top, spacing: 8) {
@@ -192,10 +229,6 @@ struct AssistantView: View {
                     }
                     VStack(alignment: .leading, spacing: 6) {
                         Text(conversation.title).font(.callout.weight(.medium)).lineLimit(2)
-                        Text(conversation.entries.last(where: { ["你", "助手"].contains($0.role) })?.text ?? "开始一个新问题")
-                            .font(.caption).foregroundStyle(.secondary).lineLimit(1)
-                        Text(conversation.updatedAt, format: .dateTime.month().day().hour().minute())
-                            .font(.caption2).foregroundStyle(.tertiary)
                     }
                 }.frame(maxWidth: .infinity, alignment: .leading).contentShape(Rectangle())
             }.buttonStyle(.plain)
@@ -205,7 +238,7 @@ struct AssistantView: View {
             } label: { Image(systemName: "ellipsis") }
                 .menuStyle(.borderlessButton).fixedSize().accessibilityLabel("对话菜单：" + conversation.title)
         }.padding(11)
-            .background(session.selectedID == conversation.id ? Color.accentColor.opacity(0.12) : .clear,
+            .background(session.selectedID == conversation.id ? surface : .clear,
                         in: RoundedRectangle(cornerRadius: 11))
             .contextMenu {
                 Button("删除对话…", systemImage: "trash", role: .destructive) { requestDeletion(conversation) }
@@ -267,82 +300,91 @@ struct AssistantView: View {
         Button("保存到钥匙串") { session.saveKey() }.disabled(session.key.isEmpty)
     }
     private var transcript: some View {
-        ScrollViewReader { proxy in
-            ScrollView {
-                LazyVStack(alignment: .leading, spacing: 20) {
-                    if session.visibleEntries.isEmpty { welcome }
-                    ForEach(session.visibleEntries) { entry in
-                        messageRow(entry).id(entry.id)
-                        if let steps = entry.steps, !steps.isEmpty {
-                            AssistantProgressView(steps: steps, status: entry.status)
+        GeometryReader { geometry in
+            ScrollViewReader { proxy in
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: 26) {
+                        if session.visibleEntries.isEmpty {
+                            welcome.frame(minHeight: max(180, geometry.size.height - 48))
                         }
-                    }
-                    if let message = session.message { Text(message).font(.callout).foregroundStyle(.orange).textSelection(.enabled) }
-                    if let message = session.historyMessage { Text(message).font(.callout).foregroundStyle(.red) }
-                    if let approval = session.approval { approvalCard(approval) }
-                    if let change = session.pendingChange, !session.busy { changeCard(change) }
-                    if let undo = session.undoChange {
-                        VStack(alignment: .leading, spacing: 8) {
-                            Text("可撤销：" + undo.title).font(.callout)
-                            Button("撤销上次助手修改") { Task { await session.undoLastChange() } }
-                                .disabled(session.busy || session.applyingChange)
-                            Text("仅在日程未再次变化时恢复；修改前的自动备份也可在「数据与备份」中查看。").font(.caption).foregroundStyle(.secondary)
+                        ForEach(session.visibleEntries) { entry in
+                            VStack(alignment: .leading, spacing: 14) {
+                                messageRow(entry)
+                                if let steps = entry.steps, !steps.isEmpty {
+                                    AssistantProgressView(steps: steps, status: entry.status)
+                                }
+                            }.id(entry.id)
                         }
-                    }
-                    Color.clear.frame(height: 1).id("bottom")
-                }.frame(maxWidth: 780).frame(maxWidth: .infinity).padding(18)
+                        if let message = session.message {
+                            Text(message).font(.callout).foregroundStyle(.orange).textSelection(.enabled)
+                        }
+                        if let message = session.historyMessage { Text(message).font(.callout).foregroundStyle(.red) }
+                        if let approval = session.approval { approvalCard(approval) }
+                        if let change = session.pendingChange, !session.busy { changeCard(change) }
+                        if let undo = session.undoChange {
+                            VStack(alignment: .leading, spacing: 8) {
+                                Text("可撤销：" + undo.title).font(.callout)
+                                Button("撤销上次助手修改") { Task { await session.undoLastChange() } }
+                                    .disabled(session.busy || session.applyingChange)
+                                Text("仅在日程未再次变化时恢复；修改前的自动备份也可在「数据与备份」中查看。")
+                                    .font(.caption).foregroundStyle(.secondary)
+                            }
+                        }
+                        Color.clear.frame(height: 1).id("bottom")
+                    }.frame(maxWidth: 720).frame(maxWidth: .infinity).padding(.horizontal, 24).padding(.vertical, 18)
+                }
+                .onChange(of: session.entries.last?.id) { _, _ in proxy.scrollTo("bottom", anchor: .bottom) }
+                .onChange(of: session.selectedID) { _, _ in proxy.scrollTo("bottom", anchor: .bottom) }
+                .onChange(of: session.approval?.id) { _, _ in proxy.scrollTo("bottom", anchor: .bottom) }
+                .onChange(of: session.pendingChange?.id) { _, _ in proxy.scrollTo("bottom", anchor: .bottom) }
+                .onChange(of: session.message) { _, _ in proxy.scrollTo("bottom", anchor: .bottom) }
+                .onChange(of: session.activity) { _, _ in if session.busy { proxy.scrollTo("bottom", anchor: .bottom) } }
             }
-            .onChange(of: session.entries.last?.id) { _, _ in proxy.scrollTo("bottom", anchor: .bottom) }
-            .onChange(of: session.approval?.id) { _, _ in proxy.scrollTo("bottom", anchor: .bottom) }
-            .onChange(of: session.message) { _, _ in proxy.scrollTo("bottom", anchor: .bottom) }
-            .onChange(of: session.activity) { _, _ in if session.busy { proxy.scrollTo("bottom", anchor: .bottom) } }
         }
     }
     private var welcome: some View {
-        VStack(alignment: .leading, spacing: 18) {
-            Image(systemName: "bubble.left.and.text.bubble.right.fill")
-                .font(.system(size: 34)).foregroundStyle(Color.accentColor)
-            Text("一起安排好今天").font(.system(size: 28, weight: .semibold))
-            Text("查询课表、梳理进度，或把想调整的安排告诉我。")
-                .foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
-            VStack(spacing: 8) {
-                suggestion("今天安排了哪些课程？", icon: "calendar")
-                suggestion("帮我看看各门课程的学习进度", icon: "chart.bar")
-                suggestion("检查一下近期课表有没有时间冲突", icon: "clock")
-            }.padding(.vertical, 6)
-            Label("发送前确认数据范围，修改日程前预览并确认。", systemImage: "checkmark.shield")
-                .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
-        }.frame(maxWidth: 500, alignment: .leading).frame(maxWidth: .infinity).padding(.vertical, 36)
-    }
-    private func suggestion(_ text: String, icon: String) -> some View {
-        Button { session.question = text } label: {
-            HStack(spacing: 10) {
-                Image(systemName: icon).foregroundStyle(Color.accentColor).frame(width: 20)
-                Text(text).font(.callout).multilineTextAlignment(.leading)
-                Spacer(minLength: 4)
-                Image(systemName: "arrow.up.left").font(.caption).foregroundStyle(.tertiary)
-            }.padding(13).background(.primary.opacity(0.035), in: RoundedRectangle(cornerRadius: 12))
-        }.buttonStyle(.plain).disabled(!session.canManageConversations)
+        VStack(spacing: 18) {
+            Image(systemName: "book.closed.fill")
+                .font(.system(size: 37, weight: .medium)).foregroundStyle(blue)
+                .accessibilityHidden(true)
+            Text("嗨！今天想学些什么？").font(.system(size: 22, weight: .semibold))
+            Text("查课表、看进度，和我一起安排学习。")
+                .font(.system(size: 13)).foregroundStyle(.secondary)
+        }.multilineTextAlignment(.center).frame(maxWidth: .infinity).padding(.bottom, 28)
     }
     private func messageRow(_ entry: AssistantChatEntry) -> some View {
-        HStack(alignment: .top, spacing: 0) {
-            if entry.role == "你" { Spacer(minLength: 30) }
-            VStack(alignment: .leading, spacing: 9) {
-                HStack(spacing: 8) {
-                    Label(entry.role, systemImage: entry.role == "你" ? "person.crop.circle" : "sparkles")
-                        .font(.caption.bold()).foregroundStyle(.secondary)
-                    if let status = entry.status, status != "完成" {
-                        Text(status).font(.caption).foregroundStyle(.secondary)
-                    }
+        VStack(alignment: .leading, spacing: 12) {
+            if entry.role == "你" {
+                HStack {
+                    Spacer(minLength: 40)
+                    Text(entry.text).font(.system(size: 15)).lineSpacing(6).textSelection(.enabled)
+                        .padding(.horizontal, 17).padding(.vertical, 13)
+                        .background(surface, in: RoundedRectangle(cornerRadius: 20))
                 }
-                if entry.role == "助手" { AssistantMarkdownView(text: entry.text) }
-                else { Text(entry.text).font(.system(size: 15)).lineSpacing(5).textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading) }
-            }.padding(16)
-                .frame(maxWidth: entry.role == "你" ? 600 : .infinity, alignment: .leading)
-                .background(entry.role == "你" ? Color.accentColor.opacity(0.09) : Color(nsColor: .controlBackgroundColor),
-                            in: RoundedRectangle(cornerRadius: 16))
-            if entry.role != "你" { Spacer(minLength: 0) }
-        }
+            } else {
+                if entry.role == "助手" {
+                    AssistantMarkdownView(text: entry.text)
+                } else {
+                    Text(entry.text).font(.system(size: 14)).foregroundStyle(.secondary).textSelection(.enabled)
+                }
+                if let status = entry.status, status != "完成" {
+                    Text(status).font(.caption).foregroundStyle(.secondary)
+                }
+                if entry.role == "助手" {
+                    HStack(spacing: 18) {
+                        Button {
+                            NSPasteboard.general.clearContents()
+                            NSPasteboard.general.setString(AssistantMarkdown.answerText(entry.text), forType: .string)
+                        } label: { Image(systemName: "doc.on.doc") }
+                            .help("复制回答").accessibilityLabel("复制回答")
+                        if entry.id == session.visibleEntries.last?.id {
+                            Button { session.retry() } label: { Image(systemName: "arrow.clockwise") }
+                                .disabled(!session.canRetry).help("重新生成").accessibilityLabel("重新生成")
+                        }
+                    }.font(.system(size: 13)).foregroundStyle(.secondary).buttonStyle(.plain).padding(.top, 2)
+                }
+            }
+        }.frame(maxWidth: .infinity, alignment: .leading)
     }
     private func changeCard(_ change: AssistantChange) -> some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -391,34 +433,60 @@ struct AssistantView: View {
         }.padding(14).background(Color.accentColor.opacity(0.07), in: RoundedRectangle(cornerRadius: 12))
     }
     private var composer: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack(spacing: 8) {
-                if session.busy || session.applyingChange { ProgressView().controlSize(.mini) }
-                Text(session.isDeletingConversation ? "正在删除对话…" : session.activity).font(.caption).foregroundStyle(.secondary).lineLimit(2)
-                Spacer(minLength: 0)
+        VStack(spacing: 10) {
+            if session.busy || session.applyingChange || session.isDeletingConversation {
+                HStack(spacing: 8) {
+                    ProgressView().controlSize(.mini)
+                    Text(session.isDeletingConversation ? "正在删除对话…" : session.activity)
+                        .font(.system(size: 12)).foregroundStyle(.secondary).lineLimit(2)
+                    Spacer(minLength: 0)
+                }.padding(.horizontal, 12)
             }
-            HStack(alignment: .bottom, spacing: 10) {
-                TextField("询问课表，或描述要做的日程修改…", text: $session.question, axis: .vertical)
-                    .lineLimit(2...5).textFieldStyle(.plain).padding(12)
-                    .disabled(session.isDeletingConversation)
-                    .background(.primary.opacity(0.04), in: RoundedRectangle(cornerRadius: 12)).accessibilityLabel("助手问题")
-                if session.busy {
-                    Button { session.stop() } label: { Image(systemName: "stop.fill").padding(5) }.help("停止").accessibilityLabel("停止")
-                } else {
-                    Button { session.send() } label: { Image(systemName: "arrow.up").padding(5) }
-                        .buttonStyle(.borderedProminent).disabled(!session.canSend).keyboardShortcut(.return, modifiers: .command)
-                        .help("发送（⌘↩）").accessibilityLabel("发送")
+            VStack(alignment: .leading, spacing: 14) {
+                TextField("发消息，或描述你的学习安排", text: $session.question, axis: .vertical)
+                    .font(.system(size: 15)).lineSpacing(4).lineLimit(2...6).textFieldStyle(.plain)
+                    .focused($questionFocused).disabled(session.isDeletingConversation)
+                    .accessibilityLabel("助手问题")
+                    .padding(.horizontal, 4).padding(.top, 4)
+                HStack(spacing: 8) {
+                    Button { panel = .memories } label: {
+                        Label("本机记忆", systemImage: "brain")
+                    }.buttonStyle(AssistantChipStyle(selected: session.enabledMemoryCount > 0, blue: blue))
+                        .help("管理随问题发送的本机记忆（已启用 \(session.enabledMemoryCount) 条）")
+                    Button { panel = .settings } label: {
+                        Label("模型设置", systemImage: "slider.horizontal.3")
+                    }.buttonStyle(AssistantChipStyle(selected: false, blue: blue)).accessibilityLabel("API 设置")
+                    Spacer(minLength: 0)
+                    Menu {
+                        Button("今天安排了哪些课程？", systemImage: "calendar") { session.question = "今天安排了哪些课程？"; questionFocused = true }
+                        Button("查看各门课程的学习进度", systemImage: "chart.bar") { session.question = "帮我看看各门课程的学习进度"; questionFocused = true }
+                        Button("检查近期课表的时间冲突", systemImage: "clock") { session.question = "检查一下近期课表有没有时间冲突"; questionFocused = true }
+                    } label: {
+                        Image(systemName: "plus.circle").font(.system(size: 22, weight: .light)).frame(width: 26, height: 34)
+                    }.menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
+                        .disabled(session.busy || !session.canManageConversations).help("快捷提问").accessibilityLabel("快捷提问")
+                    if session.busy {
+                        Button { session.stop() } label: {
+                            Image(systemName: "stop.fill").font(.system(size: 12)).frame(width: 34, height: 34)
+                                .foregroundStyle(.white).background(blue, in: Circle())
+                        }.buttonStyle(.plain).help("停止回答").accessibilityLabel("停止")
+                    } else {
+                        Button { session.send() } label: {
+                            Image(systemName: "arrow.up").font(.system(size: 17, weight: .semibold)).frame(width: 34, height: 34)
+                                .foregroundStyle(session.canSend ? .white : Color.secondary.opacity(0.65))
+                                .background(session.canSend ? blue : Color.primary.opacity(0.06), in: Circle())
+                        }.buttonStyle(.plain).disabled(!session.canSend).keyboardShortcut(.return, modifiers: .command)
+                            .help("发送（⌘↩）").accessibilityLabel("发送")
+                    }
                 }
             }
-            HStack {
-                Button("记忆 \(session.enabledMemoryCount)") { panel = .memories }.buttonStyle(.borderless)
-                    .help("这些启用的记忆会随问题发送")
-                Spacer()
-                Text("⌘ ↩ 发送").foregroundStyle(.tertiary)
-                Button("重试上个问题") { session.retry() }.buttonStyle(.borderless).disabled(!session.canRetry)
-            }.font(.caption)
-        }.padding(14).frame(maxWidth: 820).frame(maxWidth: .infinity).background(Color(nsColor: .windowBackgroundColor))
+            .padding(14).background(surface, in: RoundedRectangle(cornerRadius: 24))
+            .overlay { RoundedRectangle(cornerRadius: 24).strokeBorder(Color.primary.opacity(0.035), lineWidth: 1) }
+            Text(session.simulated ? "合成验收 · 不会联网" : "内容由 AI 生成 · 日程修改须经你确认")
+                .font(.system(size: 10)).foregroundStyle(.tertiary)
+        }.frame(maxWidth: 744).frame(maxWidth: .infinity).padding(.horizontal, 16).padding(.bottom, 12).padding(.top, 8)
     }
+
 }
 
 private struct AssistantProgressView: View {
@@ -442,7 +510,24 @@ private struct AssistantProgressView: View {
             }.padding(.top, 8)
         } label: {
             Label("查询过程 · \(status == "处理中" ? "进行中" : status == "完成" ? "已完成" : "已停止")", systemImage: "list.bullet")
-        }.font(.caption).foregroundStyle(.secondary).padding(.horizontal, 16)
+        }.font(.system(size: 12)).foregroundStyle(.secondary)
+            .padding(.leading, 12).overlay(alignment: .leading) { Rectangle().fill(.primary.opacity(0.1)).frame(width: 2) }
+            .onAppear { expanded = status == "处理中" }
+            .onChange(of: status) { _, value in expanded = value == "处理中" }
+    }
+}
+
+private struct AssistantChipStyle: ButtonStyle {
+    let selected: Bool
+    let blue: Color
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .font(.system(size: 11, weight: .medium))
+            .padding(.horizontal, 10).padding(.vertical, 7)
+            .foregroundStyle(selected ? blue : .primary)
+            .background(selected ? blue.opacity(0.09) : Color.primary.opacity(configuration.isPressed ? 0.08 : 0.025), in: Capsule())
+            .overlay { Capsule().strokeBorder(selected ? blue.opacity(0.18) : Color.primary.opacity(0.08), lineWidth: 0.7) }
+            .opacity(configuration.isPressed ? 0.7 : 1)
     }
 }
 
@@ -464,14 +549,17 @@ private struct AssistantProgressView: View {
     func show(session: AssistantSession) {
         self.session = session
         if let window { window.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true); return }
-        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1080, height: 780),
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 860, height: 760),
                               styleMask: [.titled, .closable, .miniaturizable, .resizable], backing: .buffered, defer: false)
         window.title = session.simulated ? "智能助手 · 合成验收" : "智能助手 · 学习日程"
         window.collectionBehavior = [.fullScreenNone]
+        window.titlebarAppearsTransparent = true
+        window.titleVisibility = .hidden
+        window.backgroundColor = .controlBackgroundColor
         window.contentViewController = NSHostingController(rootView: AssistantView(session: session))
         window.minSize = NSSize(width: 390, height: 560); window.isReleasedWhenClosed = false; window.delegate = self
         // Hosting a GeometryReader initially uses its minimum fitting size; restore the desktop default explicitly.
-        window.setContentSize(NSSize(width: 1080, height: 780))
+        window.setContentSize(NSSize(width: 860, height: 760))
         if !session.simulated { window.setFrameAutosaveName("StudyAssistantSDKWindow") }
         window.center(); self.window = window
         window.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true)
