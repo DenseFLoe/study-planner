@@ -16,6 +16,12 @@ swift build --disable-sandbox -c "$configuration"
 app="${2:-$PWD/dist/学习日程.app}"
 mkdir -p "$app/Contents/MacOS"
 cp ".build/$configuration/StudyPlanner" "$app/Contents/MacOS/StudyPlanner"
+# Strip only the packaged release executable, before the final signature.
+# Keep the original executable and dSYM in .build for crash symbolication;
+# leave the fixed credential service byte-for-byte unchanged.
+if [[ "$configuration" == release ]]; then
+    xcrun strip -S -x "$app/Contents/MacOS/StudyPlanner"
+fi
 # SwiftPM resources must accompany the packaged executable.
 for resource in .build/"$configuration"/*.bundle; do
     [[ -d "$resource" ]] || continue
