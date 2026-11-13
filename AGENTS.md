@@ -56,3 +56,14 @@
 ### 每轮报告
 
 每轮结束报告：提交的简短 SHA、推送分支、测试结果、本地安装包路径。macOS 只列 DMG 和同名 `.dmg.sha256` 校验文件，不列 `.app`。
+
+## 本机 Android 开发环境（用户约定，2026-11-13）
+
+- 后续 Android 开发统一使用已安装的 Android Studio 及其共享 SDK。此 Mac 的 SDK 为 `$HOME/Library/Android/sdk`，用 `ANDROID_HOME` 指向该目录；兼容旧脚本需要 `ANDROID_SDK_ROOT` 时，两者必须一致。不要再在各项目内下载独立 SDK 副本。
+- 按项目实际要求，在 Android Studio 的 SDK Manager 中为共享 SDK 补齐对应版本的 SDK Platform、Build-Tools，以及确有需要的 NDK/CMake。不要因为本机只装有较新平台就擅自升级项目的 compileSdk、targetSdk 或工具版本。
+- JDK 优先检查 Android Studio 自带的 `/Applications/Android Studio.app/Contents/jbr/Contents/Home`；先确认与项目 Gradle、插件及脚本兼容，再设置 `JAVA_HOME`。不兼容时使用已有的兼容 JDK。
+- 默认不创建或启动 Android 模拟器，不下载 AVD 或系统镜像；需要设备验收时使用连接的安卓真机。未做真机验收必须如实说明。
+- 沿用项目现有构建和签名流程，把 SDK 路径接到共享安装。机器专属配置（如 Gradle 的 `local.properties`）须被 Git 忽略且确认未被跟踪；凭证仍从环境变量或密钥管理服务读取。
+- 以上路径约定针对本机；CI 和其他主机保持各自兼容的工具配置，不硬编码此 Mac 的绝对路径。
+
+本项目的 `Android/build.sh` 使用 `STUDYPLANNER_ANDROID_BUILD_TOOLS` 和 `STUDYPLANNER_ANDROID_PLATFORM_JAR`：分别指向共享 SDK 内匹配版本的 `build-tools/<版本>` 与 `platforms/android-<API>/android.jar`。旧的 `Android/tools/sdk*` 已清理，后续 Android 工作先接通共享 SDK 并验证，不恢复这些项目内副本。
