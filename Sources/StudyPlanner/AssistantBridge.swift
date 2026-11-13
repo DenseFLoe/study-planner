@@ -4,7 +4,7 @@ protocol AssistantTransport: Sendable {
     var simulated: Bool { get }
     func send(_ request: AssistantRequest, key: String) async throws -> String
 }
-private final class AssistantNoRedirect: NSObject, URLSessionTaskDelegate, Sendable {
+final class AssistantNoRedirect: NSObject, URLSessionTaskDelegate, Sendable {
     func urlSession(_ session: URLSession, task: URLSessionTask, willPerformHTTPRedirection response: HTTPURLResponse,
                     newRequest request: URLRequest, completionHandler: @escaping @Sendable (URLRequest?) -> Void) {
         completionHandler(nil)
@@ -65,7 +65,8 @@ actor AssistantRunner {
              approve: @escaping @MainActor (AssistantApproval) async throws -> Bool,
              activity: @escaping @MainActor (String) -> Void,
              evidence: @escaping @MainActor (AssistantToolEvidence) -> Void,
-             proposal: @escaping @MainActor (AssistantChange) -> Void = { _ in }) async throws -> String {
+             proposal: @escaping @MainActor (AssistantChange) -> Void = { _ in },
+             usage: @escaping @MainActor (AssistantUsageEvent) -> Void = { _ in }) async throws -> String {
         guard !started else { throw AssistantError.protocolError }
         started = true; deadline = .now.advanced(by: .seconds(1200))
         try check()
@@ -101,12 +102,20 @@ actor AssistantRunner {
             try check()
             guard try await currentSnapshotID() == snapshot.id else { throw AssistantError.snapshotChanged }
             await activity(sentRequests == 0 ? "正在分析问题…" : "正在整理查询结果…")
-            sentRequests += 1
-            let response = try await transport.send(request, key: key)
             try check()
-            guard try await currentSnapshotID() == snapshot.id else { throw AssistantError.snapshotChanged }
+            sentRequests += 1
+            let requestStart = Date(), clockStart = ContinuousClock.now
+            await usage(.requestStarted)
+            try check()
+            let response = try await transport.send(request, key: key)
             guard response.utf8.count <= 1_048_576 else { throw AssistantError.limit }
             try AssistantSecrets.check(response, key: key)
+            let elapsed = clockStart.duration(to: .now).components
+            await usage(.response(AssistantTokenUsage.parse(response, provider: configuration.provider),
+                start: requestStart, end: Date(), seconds: Double(elapsed.seconds) + Double(elapsed.attoseconds) / 1e18))
+            try check()
+            // Keep billed usage even when the schedule changed or the reply cannot be used.
+            guard try await currentSnapshotID() == snapshot.id else { throw AssistantError.snapshotChanged }
             let reply = try AssistantWire.reply(response, configuration: configuration)
             if reply.calls.isEmpty {
                 return AssistantCharts.materialize(reply.text, evidence: queriedEvidence,
@@ -125,6 +134,7 @@ actor AssistantRunner {
                 let name = call.name, arguments = call.input
                 await activity(AssistantTools.activity(for: name))
                 toolCount += 1
+                await usage(.tool)
                 let evidenceID = "E\(toolCount)"
                 let previous = queriedEvidence
                 let alreadyProposed = proposed

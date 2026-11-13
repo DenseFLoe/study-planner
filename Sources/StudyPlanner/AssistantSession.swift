@@ -40,6 +40,7 @@ import StudyCore
     @ObservationIgnored private var persistenceID = UUID()
     @ObservationIgnored private let snapshotProvider: @MainActor () -> AssistantSnapshot?
     @ObservationIgnored private let transportFactory: @MainActor () -> any AssistantTransport
+    @ObservationIgnored private let pricingProvider: @Sendable (AssistantConfiguration) async -> AssistantPricingResult
     @ObservationIgnored private let applyChange: @MainActor (PlannerState, PlannerState, Date?) async -> PlannerState?
     @ObservationIgnored private var historyWritable = true
     @ObservationIgnored private var historyLoadTask: Task<Void, Never>?
@@ -55,8 +56,12 @@ import StudyCore
     init(historyStore: (any AssistantHistoryPersistence)? = AssistantHistoryStore.local,
          simulated: Bool = false, snapshot: @escaping @MainActor () -> AssistantSnapshot?,
          transportFactory: @escaping @MainActor () -> any AssistantTransport = { AssistantHTTPTransport() },
+         pricingProvider: @escaping @Sendable (AssistantConfiguration) async -> AssistantPricingResult = {
+             await AssistantPriceStore.shared.quote(for: $0)
+         },
          applyChange: @escaping @MainActor (PlannerState, PlannerState, Date?) async -> PlannerState? = { _, _, _ in nil }) {
         self.snapshotProvider = snapshot; self.applyChange = applyChange
+        self.pricingProvider = pricingProvider
         self.historyWriter = AssistantHistoryWriter(store: historyStore)
         self.simulated = simulated; self.transportFactory = transportFactory
         configuration = .init(); memories = []
@@ -86,6 +91,7 @@ import StudyCore
     func waitUntilReady() async { await historyLoadTask?.value }
     var entries: [AssistantChatEntry] { conversations.first { $0.id == selectedID }?.entries ?? [] }
     var visibleEntries: [AssistantChatEntry] { entries.filter { $0.role != "本机证据" } }
+    var latestUsage: AssistantTurnUsage? { entries.last(where: { $0.role == "你" })?.usage }
     var canRetry: Bool { !busy && canManageConversations && entries.contains { $0.role == "你" } }
     var canManageConversations: Bool { historyWritable && !isLoadingHistory && !applyingChange && !isDeletingConversation }
     var canSend: Bool { !busy && canManageConversations && !question.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
@@ -196,7 +202,7 @@ import StudyCore
             _ = try configuration.endpoint()
             if !simulated { try AssistantSecrets.validateKey(key); knownKeys.insert(key) }
             let history = entries, memories = memories
-            append(.init(role: "你", text: text, status: "处理中"))
+            append(.init(role: "你", text: text, status: "处理中", usage: .init(simulated: simulated)))
             question = ""; evidence = []; message = nil
             let id = UUID(), conversationID = selectedID, config = configuration, secret = key
             let secrets = knownKeys.union([secret])
@@ -216,6 +222,12 @@ import StudyCore
                     guard self.runID == id else { return }
                     guard await self.persistInBackground() else { throw AssistantError.history }
                     guard self.runID == id else { return }
+                    let pricing = self.simulated ? .simulated : await self.pricingProvider(config)
+                    guard self.runID == id else { return }
+                    self.updateUsage {
+                        $0.priceCheckedAt = pricing.book?.checkedAt
+                        $0.priceNotice = pricing.notice
+                    }
                     var answer = "", scopeConfirmed = false, refreshes = 0
                     while true {
                         try Task.checkCancellation()
@@ -239,7 +251,11 @@ import StudyCore
                                     return allow
                                 }, activity: { [weak self] value in if self?.runID == id { self?.recordActivity(value) } },
                                 evidence: { [weak self] value in if self?.runID == id { self?.evidence.append(value) } },
-                                proposal: { [weak self] value in if self?.runID == id { self?.pendingChange = value } })
+                                proposal: { [weak self] value in if self?.runID == id { self?.pendingChange = value } },
+                                usage: { [weak self] event in
+                                    guard let self, self.runID == id else { return }
+                                    self.updateUsage { $0.record(event, pricing: pricing, model: config.model) }
+                                })
                             guard self.runID == id else { return }
                             guard try await self.freshSnapshot().id == snapshot.id else { throw AssistantError.snapshotChanged }
                             break
@@ -288,6 +304,15 @@ import StudyCore
         var steps = conversations[index].entries[entry].steps ?? []
         guard steps.last != value, steps.count < 120 else { return }
         steps.append(value); conversations[index].entries[entry].steps = steps
+    }
+    private func updateUsage(_ update: (inout AssistantTurnUsage) -> Void) {
+        guard let index = conversations.firstIndex(where: { $0.id == selectedID }),
+              let entry = conversations[index].entries.lastIndex(where: { $0.role == "你" && $0.status == "处理中" }),
+              var usage = conversations[index].entries[entry].usage else { return }
+        update(&usage)
+        conversations[index].entries[entry].usage = usage
+        // Persist with the turn's normal finish/stop path. Saving the entire history
+        // for every counter update would queue repeated scans of long conversations.
     }
     func dismissChange(_ id: UUID) {
         guard !busy, !applyingChange, pendingChange?.id == id else { return }

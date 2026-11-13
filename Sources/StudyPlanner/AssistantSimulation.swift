@@ -42,7 +42,7 @@ actor AssistantMockTransport: AssistantTransport {
                 ?? [["type": "text", "text": text]]
             response = ["id": "mock-\(step)", "type": "message", "role": "assistant", "model": request.configuration.model,
                 "content": content, "stop_reason": tool == nil ? "end_turn" : "tool_use", "stop_sequence": NSNull(),
-                "usage": ["input_tokens": 0, "output_tokens": 0]]
+                "usage": ["input_tokens": 200, "cache_read_input_tokens": 800, "output_tokens": 100]]
         } else {
             var message: [String: Any] = ["role": "assistant", "content": tool == nil ? text as Any : NSNull()]
             if let tool {
@@ -51,7 +51,7 @@ actor AssistantMockTransport: AssistantTransport {
             }
             response = ["id": "mock-\(step)", "object": "chat.completion", "created": 0, "model": request.configuration.model,
                 "choices": [["index": 0, "message": message, "finish_reason": tool == nil ? "stop" : "tool_calls"]],
-                "usage": ["prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0]]
+                "usage": ["prompt_tokens": 1000, "completion_tokens": 100, "total_tokens": 1100, "prompt_cache_hit_tokens": 800]]
         }
         return String(decoding: try JSONSerialization.data(withJSONObject: response, options: [.sortedKeys]), as: UTF8.self)
     }
@@ -198,14 +198,18 @@ enum AssistantSimulation {
             for provider in [AssistantProvider.openai, .anthropic, .deepseek] {
                 let runner = AssistantRunner(), transport = AssistantMockTransport()
                 var approvals: [AssistantApproval] = [], evidence: [AssistantToolEvidence] = []
+                var usage = AssistantTurnUsage(simulated: true)
                 _ = try await runner.run(configuration: configuration(provider: provider),
                     messages: [.init(role: "user", content: "合成查询")], snapshot: snapshot, key: "",
                     transport: transport, currentSnapshotID: { snapshot.id }, approve: { approval in
                         approvals.append(approval)
                         guard approvals.count == 1 || !approval.request.categories.isEmpty else { throw AssistantError.protocolError }
                         return true
-                    }, activity: { _ in }, evidence: { evidence.append($0) })
+                    }, activity: { _ in }, evidence: { evidence.append($0) },
+                    usage: { usage.record($0, pricing: .simulated, model: "synthetic-chat") })
                 guard approvals.count == 1, evidence.count == 6, await runner.toolCount == 6, await runner.sentRequests == 7,
+                      usage.requests == 7, usage.responses == 7, usage.tools == 6, usage.input == 7000,
+                      usage.output == 700, usage.cachedInput == 5600, usage.costLabel == "模拟 ¥0",
                       let summary = approvals.last?.summary,
                       summary.contains("课程/课节名称"), summary.contains("日期时间"),
                       summary.contains("冲突及余量"), summary.contains("相关编号") else { return false }
@@ -225,7 +229,7 @@ enum AssistantSimulation {
             try await actionProbe(move: true)
             try await focusProbe()
             try await AssistantChartSimulation.probe()
-            print("ASSISTANT_PACKAGE_PROBE_PASS protocols=3 queries=18 externalRequests=0 credentialsUsed=0 privacy=verified lessonLinks=verified timeCheck=verified readableDetails=verified actions=preview-confirm-undo move=preview-confirm-reopen-undo focus=compound-preview charts=3-native-verified")
+            print("ASSISTANT_PACKAGE_PROBE_PASS protocols=3 queries=18 externalRequests=0 credentialsUsed=0 privacy=verified lessonLinks=verified timeCheck=verified readableDetails=verified actions=preview-confirm-undo move=preview-confirm-reopen-undo focus=compound-preview charts=3-native-verified usage=per-turn-verified")
             return true
         } catch { print("ASSISTANT_PACKAGE_PROBE_FAIL: \(AssistantError.safe(error).rawValue)"); return false }
     }

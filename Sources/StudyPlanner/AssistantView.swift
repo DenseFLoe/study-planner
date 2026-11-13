@@ -511,6 +511,8 @@ struct AssistantView: View {
             }
             .padding(14).background(surface, in: RoundedRectangle(cornerRadius: 24))
             .overlay { RoundedRectangle(cornerRadius: 24).strokeBorder(Color.primary.opacity(0.035), lineWidth: 1) }
+            AssistantUsageBar(usage: session.latestUsage, busy: session.busy,
+                              hasHistory: session.entries.contains { $0.role == "你" })
             Text(session.simulated ? "合成验收 · 不会联网" : "内容由 AI 生成 · 日程修改须经你确认")
                 .font(.system(size: 10)).foregroundStyle(.tertiary)
         }.frame(maxWidth: 744).frame(maxWidth: .infinity).padding(.horizontal, 16).padding(.bottom, 12).padding(.top, 8)
