@@ -362,7 +362,18 @@ struct AssistantView: View {
                         Color.clear.frame(height: 1).id("bottom")
                     }.frame(maxWidth: 720).frame(maxWidth: .infinity).padding(.horizontal, 24).padding(.vertical, 18)
                 }
-                .onChange(of: session.entries.last?.id) { _, _ in proxy.scrollTo("bottom", anchor: .bottom) }
+                .onChange(of: session.entries.last?.id) { _, _ in
+                    if let entry = session.entries.last, entry.changeSummary != nil {
+                        proxy.scrollTo(entry.id, anchor: .top)
+                    } else { proxy.scrollTo("bottom", anchor: .bottom) }
+                }
+                .onChange(of: session.busy) { _, busy in
+                    // Finish after history persistence and the final activity update,
+                    // so the running-state scroll cannot hide a new card's overview.
+                    if !busy, let entry = session.entries.last, entry.changeSummary != nil {
+                        proxy.scrollTo(entry.id, anchor: .top)
+                    }
+                }
                 .onChange(of: session.selectedID) { _, _ in proxy.scrollTo("bottom", anchor: .bottom) }
                 .onChange(of: session.approval?.id) { _, _ in proxy.scrollTo("bottom", anchor: .bottom) }
                 .onChange(of: session.pendingChange?.id) { _, _ in proxy.scrollTo("bottom", anchor: .bottom) }
