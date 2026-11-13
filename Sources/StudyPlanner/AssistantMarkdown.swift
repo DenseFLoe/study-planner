@@ -7,7 +7,7 @@ enum AssistantMarkdown {
         text.replacingOccurrences(of: #"\[E[0-9]+(?:\s*[,，、]\s*E?[0-9]+)*\]"#, with: "", options: .regularExpression)
     }
     enum Block: Equatable {
-        case paragraph(String), heading(String, Int), item(String, String, Int), quote(String), code(String), table([[String]])
+        case paragraph(String), heading(String, Int), item(String, String, Int), quote(String), code(String), table([[String]]), chart(AssistantChart), unavailableChart
     }
     static func blocks(_ source: String) -> [Block] {
         let lines = source.replacingOccurrences(of: "\r\n", with: "\n").components(separatedBy: "\n")
@@ -25,11 +25,17 @@ enum AssistantMarkdown {
             if trimmed.isEmpty { flush(); continue }
             if trimmed.hasPrefix("```") {
                 flush(); var code: [String] = []
-                while index < lines.count && !lines[index].trimmingCharacters(in: .whitespaces).hasPrefix("```") {
+                while index < lines.count && lines[index].trimmingCharacters(in: .whitespaces) != "```" {
                     code.append(lines[index]); index += 1
                 }
-                if index < lines.count { index += 1 }
-                result.append(.code(code.joined(separator: "\n"))); continue
+                let closed = index < lines.count
+                if closed { index += 1 }
+                let body = code.joined(separator: "\n")
+                if trimmed == "```study-chart" {
+                    if closed, let chart = AssistantChart.decode(body) { result.append(.chart(chart)) }
+                    else { result.append(.unavailableChart) }
+                } else { result.append(.code(body)) }
+                continue
             }
             if trimmed.hasPrefix("#"), let space = trimmed.firstIndex(of: " ") {
                 let prefix = trimmed[..<space]
@@ -65,6 +71,17 @@ enum AssistantMarkdown {
         for run in value.runs where run.link != nil { value[run.range].link = nil }
         return value
     }
+    static func copyText(_ text: String) -> String {
+        blocks(answerText(text)).map { block in
+            switch block {
+            case .paragraph(let text), .heading(let text, _), .quote(let text), .code(let text): text
+            case .item(let marker, let text, _): marker + " " + text
+            case .table(let rows): rows.map { $0.joined(separator: "\t") }.joined(separator: "\n")
+            case .chart(let chart): chart.title + "\n" + chart.tableText + "\n生成时的数据快照 · " + chart.capturedAt
+            case .unavailableChart: AssistantCharts.unavailable
+            }
+        }.joined(separator: "\n\n")
+    }
 }
 
 struct AssistantMarkdownView: View {
@@ -82,6 +99,10 @@ struct AssistantMarkdownView: View {
                 case .code(let text):
                     ScrollView(.horizontal) { Text(text).font(.system(.callout, design: .monospaced)).padding(10) }
                         .background(.primary.opacity(0.04), in: RoundedRectangle(cornerRadius: 8))
+                case .chart(let chart): AssistantChartView(chart: chart)
+                case .unavailableChart:
+                    Label(AssistantCharts.unavailable, systemImage: "chart.bar.xaxis")
+                        .font(.callout).foregroundStyle(.secondary)
                 case .table(let rows):
                     ScrollView(.horizontal) {
                         Grid(alignment: .topLeading, horizontalSpacing: 18, verticalSpacing: 10) {

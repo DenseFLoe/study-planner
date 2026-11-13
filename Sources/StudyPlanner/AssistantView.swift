@@ -376,7 +376,7 @@ struct AssistantView: View {
                 .font(.system(size: 37, weight: .medium)).foregroundStyle(blue)
                 .accessibilityHidden(true)
             Text("嗨！今天想学些什么？").font(.system(size: 22, weight: .semibold))
-            Text("查课表、看进度，和我一起安排学习。")
+            Text("查课表、看进度，用图表一起看懂学习安排。")
                 .font(.system(size: 13)).foregroundStyle(.secondary)
         }.multilineTextAlignment(.center).frame(maxWidth: .infinity).padding(.bottom, 28)
     }
@@ -402,7 +402,7 @@ struct AssistantView: View {
                     HStack(spacing: 18) {
                         Button {
                             NSPasteboard.general.clearContents()
-                            NSPasteboard.general.setString(AssistantMarkdown.answerText(entry.text), forType: .string)
+                            NSPasteboard.general.setString(AssistantMarkdown.copyText(entry.text), forType: .string)
                         } label: { Image(systemName: "doc.on.doc") }
                             .help("复制回答").accessibilityLabel("复制回答")
                         if entry.id == session.visibleEntries.last?.id {
@@ -488,6 +488,7 @@ struct AssistantView: View {
                     Menu {
                         Button("今天安排了哪些课程？", systemImage: "calendar") { session.question = "今天安排了哪些课程？"; questionFocused = true }
                         Button("查看各门课程的学习进度", systemImage: "chart.bar") { session.question = "帮我看看各门课程的学习进度"; questionFocused = true }
+                        Button("生成近七天学习图表", systemImage: "chart.xyaxis.line") { session.question = "请用图表对比近七天每天的实际学习分钟和计划分钟，并简要说明。"; questionFocused = true }
                         Button("检查近期课表的时间冲突", systemImage: "clock") { session.question = "检查一下近期课表有没有时间冲突"; questionFocused = true }
                     } label: {
                         Image(systemName: "plus.circle").font(.system(size: 22, weight: .light)).frame(width: 26, height: 34)

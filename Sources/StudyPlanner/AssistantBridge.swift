@@ -73,7 +73,7 @@ actor AssistantRunner {
         try AssistantSecrets.check(String(decoding: assistantJSON(messages), as: UTF8.self), key: key)
         try AssistantSecrets.check(configuration.baseURL, key: key)
         try AssistantSecrets.check(configuration.model, key: key)
-        let instructions = AssistantTools.instructions + "\n" + AssistantActions.instructions + "\n" + AssistantActions.macInstructions + "\n本机日期：\(snapshot.stamp(snapshot.now))；当前时间：\(snapshot.stamp(snapshot.now, time: true))；时区：\(snapshot.calendar.timeZone.identifier)。"
+        let instructions = AssistantTools.instructions + "\n" + AssistantActions.instructions + "\n" + AssistantActions.macInstructions + "\n" + AssistantCharts.instructions + "\n本机日期：\(snapshot.stamp(snapshot.now))；当前时间：\(snapshot.stamp(snapshot.now, time: true))；时区：\(snapshot.calendar.timeZone.identifier)。"
         var conversation = AssistantWire.messages(messages, configuration: configuration, instructions: instructions)
         var gate = AssistantApprovalGate(), callIDs = Set<String>()
         var queriedEvidence: [AssistantToolEvidence] = []
@@ -108,7 +108,10 @@ actor AssistantRunner {
             guard response.utf8.count <= 1_048_576 else { throw AssistantError.limit }
             try AssistantSecrets.check(response, key: key)
             let reply = try AssistantWire.reply(response, configuration: configuration)
-            if reply.calls.isEmpty { return reply.text }
+            if reply.calls.isEmpty {
+                return AssistantCharts.materialize(reply.text, evidence: queriedEvidence,
+                    capturedAt: snapshot.stamp(snapshot.now, time: true) + " " + snapshot.calendar.timeZone.identifier)
+            }
             guard toolCount + reply.calls.count <= 24 else { throw AssistantError.limit }
             // Validate the whole batch before executing any tool or publishing a preview.
             for call in reply.calls {

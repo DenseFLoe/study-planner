@@ -11,8 +11,10 @@ actor AssistantMockTransport: AssistantTransport {
     let script: [(String, [String: String])]
     let delay: Duration
     let failAt: Int?
-    init(script: [(String, [String: String])] = AssistantSimulation.script, delay: Duration = .zero, failAt: Int? = nil) {
-        self.script = script; self.delay = delay; self.failAt = failAt
+    let answer: String?
+    init(script: [(String, [String: String])] = AssistantSimulation.script, delay: Duration = .zero, failAt: Int? = nil,
+         answer: String? = nil) {
+        self.script = script; self.delay = delay; self.failAt = failAt; self.answer = answer
     }
     func send(_ request: AssistantRequest, key: String) async throws -> String {
         guard key.isEmpty, URL(string: request.url)?.host == "assistant-simulator.invalid" else { throw AssistantError.protocolError }
@@ -20,7 +22,7 @@ actor AssistantMockTransport: AssistantTransport {
         if delay != .zero { try await Task.sleep(for: delay) }
         if requests.count == failAt { throw AssistantError.network }
         let step = requests.count, tool = step <= script.count ? script[step - 1] : nil
-        let text = """
+        let text = answer ?? """
         ## 合成演示完成
         已查询本机课程与证据。[E1][E2]
 
@@ -164,11 +166,11 @@ enum AssistantSimulation {
                   answer.contains("尚未保存"), await transport.requests.count == 2 else { throw AssistantError.protocolError }
         }
     }
-    @MainActor static func preview(actions: Bool = false) {
+    @MainActor static func preview(actions: Bool = false, charts: Bool = false) {
         let app = NSApplication.shared
         app.setActivationPolicy(.regular)
         let controller = AssistantWindowController()
-        controller.show(session: actions ? try! actionSession().0 : session())
+        controller.show(session: charts ? AssistantChartSimulation.session() : (actions ? try! actionSession().0 : session()))
         // Keep the same controller/session alive for closing/reopening via the menu.
         let menu = NSMenu(), appItem = NSMenuItem(), appMenu = NSMenu()
         menu.addItem(appItem); appItem.submenu = appMenu
@@ -222,7 +224,8 @@ enum AssistantSimulation {
             try await actionProbe()
             try await actionProbe(move: true)
             try await focusProbe()
-            print("ASSISTANT_PACKAGE_PROBE_PASS protocols=3 queries=18 externalRequests=0 credentialsUsed=0 privacy=verified lessonLinks=verified timeCheck=verified readableDetails=verified actions=preview-confirm-undo move=preview-confirm-reopen-undo focus=compound-preview")
+            try await AssistantChartSimulation.probe()
+            print("ASSISTANT_PACKAGE_PROBE_PASS protocols=3 queries=18 externalRequests=0 credentialsUsed=0 privacy=verified lessonLinks=verified timeCheck=verified readableDetails=verified actions=preview-confirm-undo move=preview-confirm-reopen-undo focus=compound-preview charts=3-native-verified")
             return true
         } catch { print("ASSISTANT_PACKAGE_PROBE_FAIL: \(AssistantError.safe(error).rawValue)"); return false }
     }
