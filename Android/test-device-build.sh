@@ -9,9 +9,9 @@ if [ -z "${STUDYPLANNER_KEYSTORE_PASSWORD:-}" ]; then
   echo '请先设置 STUDYPLANNER_KEYSTORE_PASSWORD，再构建设备测试 APK。' >&2
   exit 2
 fi
-JDK="$(/usr/libexec/java_home -v 11)"
-BT="$PWD/tools/sdk35/android-15"
-PLATFORM="$PWD/tools/sdk/android-35/android.jar"
+JDK="${JAVA_HOME:-$(/usr/libexec/java_home -v 11)}"
+BT="${STUDYPLANNER_ANDROID_BUILD_TOOLS:-$PWD/tools/sdk35/android-15}"
+PLATFORM="${STUDYPLANNER_ANDROID_PLATFORM_JAR:-$PWD/tools/sdk/android-35/android.jar}"
 KEYSTORE="${STUDYPLANNER_KEYSTORE_PATH:-$PWD/signing/release.jks}"
 mkdir -p build/device-tests/classes build/device-tests/dex
 "$BT/aapt2" link -o build/device-tests/base.apk -I "$PLATFORM" --manifest tests/device/AndroidManifest.xml

@@ -22,7 +22,8 @@ final class AssistantMarkdown {
         for(int i=0;i<lines.length;i++){
             String line=lines[i],trim=line.trim();
             if(trim.startsWith("```")){
-                flush(c,parent,paragraph);StringBuilder code=new StringBuilder();while(++i<lines.length&&!lines[i].trim().startsWith("```")){if(code.length()>0)code.append('\n');code.append(lines[i]);}
+                flush(c,parent,paragraph);StringBuilder code=new StringBuilder();while(++i<lines.length&&!lines[i].trim().equals("```")){if(code.length()>0)code.append('\n');code.append(lines[i]);}
+                if(trim.equals("```study-chart")){AssistantChart chart=i<lines.length?AssistantChart.decode(code.toString()):null;if(chart==null)parent.addView(text(c,AssistantChart.UNAVAILABLE,14));else AssistantChartView.render(c,parent,chart,true);continue;}
                 TextView t=text(c,"",14);t.setTypeface(Typeface.MONOSPACE);t.setText(code);t.setBackgroundColor(0xfff1f3f5);HorizontalScrollView scroll=new HorizontalScrollView(c);scroll.addView(t);parent.addView(scroll);continue;
             }
             if(i+1<lines.length&&line.contains("|")&&lines[i+1].trim().matches("\\|?\\s*:?-{3,}:?\\s*(?:\\|\\s*:?-{3,}:?\\s*)+\\|?")){

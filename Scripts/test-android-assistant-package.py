@@ -28,7 +28,7 @@ def main():
         assert all(state[name] == [] for name in ("courses", "tasks", "fixedEvents", "completions"))
         assert not any(re.search(r"(?:workspace|conversations|\.env|\.jks|\.pem|\.key)(?:\.|/|$)", n, re.I) for n in apk.namelist())
         dex = b"".join(apk.read(name) for name in apk.namelist() if re.fullmatch(r"classes\d*\.dex", name))
-        for name in ("Activity", "Protocol", "Tools", "Actions", "Runner", "History", "Session", "Vault", "Markdown"):
+        for name in ("Activity", "Protocol", "Tools", "Actions", "Runner", "History", "Session", "Vault", "Markdown", "Chart", "ChartView", "Insights", "InsightView", "ChangeSummary"):
             assert f"Llocal/studyplanner/Assistant{name};".encode() in dex, name
     aapt = Path(os.environ.get("STUDYPLANNER_ANDROID_BUILD_TOOLS", str(root / "Android/tools/sdk35/android-15"))) / "aapt2"
     badging = subprocess.check_output([str(aapt), "dump", "badging", str(args.apk)], text=True)

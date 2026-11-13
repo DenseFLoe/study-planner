@@ -32,8 +32,10 @@ mkdir -p Android/build/tests
 "$JDK/bin/java" -cp Android/tools/json.jar:Android/build/tests local.studyplanner.AppReviewRegressionTests
 "$JDK/bin/java" -cp Android/tools/json.jar:Android/build/tests local.studyplanner.StudySettingsTests
 "$JDK/bin/java" -cp Android/tools/json.jar:Android/build/tests local.studyplanner.DesktopParityTests
-"$JDK/bin/javac" --release 8 -cp Android/tools/json.jar:Android/build/tests -d Android/build/tests Android/src/local/studyplanner/AssistantProtocol.java Android/src/local/studyplanner/AssistantTools.java Android/src/local/studyplanner/AssistantActions.java Android/src/local/studyplanner/AssistantRunner.java Android/src/local/studyplanner/AssistantHistory.java Android/src/local/studyplanner/AssistantSession.java Android/tests/AssistantTests.java
+"$JDK/bin/javac" --release 8 -cp Android/tools/json.jar:Android/build/tests -d Android/build/tests Android/src/local/studyplanner/AssistantChart.java Android/src/local/studyplanner/AssistantInsights.java Android/src/local/studyplanner/AssistantChangeSummary.java Android/src/local/studyplanner/AssistantProtocol.java Android/src/local/studyplanner/AssistantTools.java Android/src/local/studyplanner/AssistantActions.java Android/src/local/studyplanner/AssistantRunner.java Android/src/local/studyplanner/AssistantHistory.java Android/src/local/studyplanner/AssistantSession.java Android/tests/AssistantTests.java
 "$JDK/bin/java" -cp Android/tools/json.jar:Android/build/tests local.studyplanner.AssistantTests
+"$JDK/bin/javac" --release 8 -cp Android/tools/json.jar:Android/build/tests -d Android/build/tests Android/tests/AssistantPresentationTests.java
+"$JDK/bin/java" -cp Android/tools/json.jar:Android/build/tests local.studyplanner.AssistantPresentationTests
 "$JDK/bin/java" -cp Android/tools/json.jar:Android/build/tests local.studyplanner.DailyTaskOrderingTests
 "$JDK/bin/javac" -cp Android/tools/json.jar:Android/build/tests -d Android/build/tests Android/tests/DailyTaskDateIntervalTests.java
 "$JDK/bin/java" -cp Android/tools/json.jar:Android/build/tests local.studyplanner.DailyTaskDateIntervalTests

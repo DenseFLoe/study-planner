@@ -68,7 +68,7 @@ public final class AssistantLayoutInstrumentation extends Instrumentation {
             await(()->find(activity.chat,"确认本轮发送")!=null);capture("approval");
             session.queue.submit(()->{session.stopInternal();session.message="";session.publish();}).get(10,TimeUnit.SECONDS);await(()->!activity.state.busy);
             session.queue.submit(()->{try{Snapshot shot=new Snapshot(empty,Planner.now());session.change=AssistantActions.execute("preview_add_course",object("name","合成课程","total_minutes","60","start_date",shot.today,"deadline",shot.today,"minimum_block","30"),shot,"E1",false).proposal;session.publish();}catch(Exception e){throw new RuntimeException(e);}}).get(10,TimeUnit.SECONDS);
-            await(()->find(activity.chat,"展开全部差异并确认")!=null);capture("proposal");runOnMainSync(()->find(activity.chat,"取消方案").performClick());await(()->activity.state.change==null);
+            await(()->find(activity.chat,"核对全部差异")!=null);capture("proposal");runOnMainSync(()->find(activity.chat,"取消方案").performClick());await(()->activity.state.change==null);
             runOnMainSync(()->{activity.question.setText("把明天的学习调整到下午，保留课程顺序。");activity.question.requestFocus();((InputMethodManager)activity.getSystemService(android.content.Context.INPUT_METHOD_SERVICE)).showSoftInput(activity.question,InputMethodManager.SHOW_IMPLICIT);});
             await(()->activity.getWindow().getDecorView().getRootWindowInsets().isVisible(WindowInsets.Type.ime()));capture("keyboard");
             result.putString("stream","PASS "+checks+" assistant layout/navigation checks; isolated synthetic content, no API or credentials\n");

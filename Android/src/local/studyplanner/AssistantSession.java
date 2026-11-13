@@ -72,7 +72,7 @@ final class AssistantSession {
             });runner=active;
             network.execute(()->{String answer=null;Exception failure=null;try{answer=active.run(config,messages,secret);}catch(Exception error){failure=error;}final String result=answer;final Exception error=failure;
                 queue.execute(()->{if(!id.equals(runID))return;busy=false;runID=null;runner=null;approval=null;decision=null;
-                    try{if(error==null)record("查询完成");mark(error==null?"完成":"未完成");if(error==null){append("助手",result,"完成");activity="回答完成 · 可继续追问";}else{change=null;message=safe(error);activity="本轮已结束 · 可重试";}persist();}catch(Exception saveError){message=safe(saveError);}publish();});
+                    try{if(error==null)record("查询完成");mark(error==null?"完成":"未完成");if(error==null){append("助手",result,"完成");JSONArray entries=AssistantHistory.selected(workspace).getJSONArray("entries");JSONObject reply=entries.getJSONObject(entries.length()-1);reply.put("insights",active.insights);if(active.changeSummary!=null)reply.put("changeSummary",active.changeSummary);activity="回答完成 · 可继续追问";}else{change=null;message=safe(error);activity="本轮已结束 · 可重试";}persist();}catch(Exception saveError){message=safe(saveError);}publish();});
             });
         }catch(Exception error){message=safe(error);try{mark("未完成");}catch(Exception ignored){}publish();}
     });}

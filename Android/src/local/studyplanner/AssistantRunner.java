@@ -42,7 +42,7 @@ final class AssistantRunner {
         }
     }
     final Contract contract;final Transport transport;final Source source;final Listener listener;final Token token=new Token();
-    int requests,queries,rechecks;boolean approved;
+    int requests,queries,rechecks;boolean approved;JSONArray insights=new JSONArray();JSONObject changeSummary;
     AssistantRunner(Contract contract,Transport transport,Source source,Listener listener){this.contract=contract;this.transport=transport;this.source=source;this.listener=listener;}
     static boolean reasoning(Configuration config){return !config.anthropic()&&config.model.toLowerCase(Locale.ROOT).matches("(?:o[1-9](?:-.*)?|gpt-(?:[5-9]|[1-9][0-9])(?:[.-].*)?)");}
     String run(Configuration config,JSONArray baseMessages,String key)throws Exception{
@@ -51,10 +51,11 @@ final class AssistantRunner {
         while(true){token.check();Snapshot shot=source.snapshot();try{return attempt(config,baseMessages,key,shot,deadline);}catch(Changed error){token.check();if(++rechecks>3)throw new Failure("课表仍在更新，稍后可重试查询。");listener.proposal(null);listener.activity(CHANGED);}}
     }
     private String attempt(Configuration config,JSONArray base,String key,Snapshot shot,long deadline)throws Exception{
-        String instructions=contract.instructions+"\n本机日期："+shot.today+"；时区："+shot.zone.getId()+"。";
+        insights=new JSONArray();changeSummary=null;
+        String instructions=contract.instructions+"\n"+AssistantChart.INSTRUCTIONS+"\n本机日期："+shot.today+"；时区："+shot.zone.getId()+"。";
         JSONArray messages=new JSONArray();if(!config.anthropic())messages.put(object("role",reasoning(config)?"developer":"system","content",instructions));
         for(int i=0;i<base.length();i++)messages.put(CourseTools.copy(base.getJSONObject(i)));
-        List<JSONObject> evidence=new ArrayList<>();Set<String> callIDs=new HashSet<>();boolean proposed=false;
+        List<JSONObject> evidence=new ArrayList<>();List<AssistantInsights.Query> displayQueries=new ArrayList<>();Set<String> callIDs=new HashSet<>();boolean proposed=false;
         while(true){
             token.check();source.current(shot);if(requests>=8||System.currentTimeMillis()>deadline)throw new Failure("本轮已到查询上限，请缩小问题范围后重试。");
             // OpenAI's o-series requires max_completion_tokens; compatible chat endpoints retain max_tokens.
@@ -85,7 +86,7 @@ final class AssistantRunner {
                 if(calls.length()>0){if(!reason.equals("tool_calls"))throw invalid();JSONObject retained=object("role","assistant","content",text.isEmpty()?null:text,"tool_calls",safe);if(message.opt("reasoning_content") instanceof String)retained.put("reasoning_content",message.getString("reasoning_content"));messages.put(retained);}
                 else if(!reason.equals("stop"))throw invalid();
             }
-            if(calls.length()==0){if(text.trim().isEmpty())throw invalid();limit(text,64000);return text.replaceAll("\\[E[0-9]+(?:\\s*[,，、]\\s*E?[0-9]+)*\\]","");}
+            if(calls.length()==0){if(text.trim().isEmpty())throw invalid();limit(text,64000);String answer=AssistantChart.materialize(text,evidence,shot.stamp(shot.now)+" "+shot.zone.getId()).replaceAll("\\[E[0-9]+(?:\\s*[,，、]\\s*E?[0-9]+)*\\]","");insights=AssistantInsights.build(displayQueries,answer);contract.check(insights.toString(),key);return answer;}
             // Validate the entire batch before executing any tool; no arbitrary model fields are forwarded.
             for(JSONObject call:Planner.list(calls)){String id=call.getString("id");if(id.isEmpty()||id.length()>128||!callIDs.add(id))throw invalid();contract.arguments(call.getString("name"),call.getJSONObject("input"));}
             JSONArray results=new JSONArray();for(JSONObject call:Planner.list(calls)){
@@ -93,9 +94,9 @@ final class AssistantRunner {
                 JSONObject result;
                 if(name.startsWith("preview_")||name.equals("list_events")){
                     AssistantActions.Result action=AssistantActions.execute(name,call.getJSONObject("input"),shot,"E"+queries,proposed);result=action.evidence;
-                    if(action.proposal!=null){contract.check(action.proposal.title+action.proposal.summary+String.join("\n",action.proposal.details),key);proposed=true;listener.proposal(action.proposal);}
+                    if(action.proposal!=null){contract.check(action.proposal.title+action.proposal.summary+String.join("\n",action.proposal.details),key);proposed=true;changeSummary=AssistantChangeSummary.build(action.proposal);contract.check(changeSummary.toString(),key);listener.proposal(action.proposal);}
                 }else{result=AssistantTools.query(name,call.getJSONObject("input"),shot,evidence);result.put("evidence_id","E"+queries);}
-                token.check();source.current(shot);limit(result.toString(),128000);contract.check(result.toString(),key);evidence.add(result);
+                token.check();source.current(shot);limit(result.toString(),128000);contract.check(result.toString(),key);evidence.add(result);displayQueries.add(new AssistantInsights.Query(name,call.getJSONObject("input"),result));
                 if(config.anthropic())results.put(object("type","tool_result","tool_use_id",call.getString("id"),"content",result.toString()));
                 else messages.put(object("role","tool","tool_call_id",call.getString("id"),"content",result.toString()));
             }

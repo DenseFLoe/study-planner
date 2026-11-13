@@ -37,6 +37,8 @@ final class AssistantHistory {
             if(!Planner.canonicalID(c.getString("id"))||!ids.add(c.getString("id"))||!Double.isFinite(c.getDouble("updatedAt")))throw new Failure(HISTORY);
             Set<String> entries=new HashSet<>();for(JSONObject e:Planner.list(c.getJSONArray("entries"))){
                 if(!Planner.canonicalID(e.getString("id"))||!entries.add(e.getString("id"))||!Arrays.asList("你","助手","本机操作").contains(e.getString("role"))||!(e.get("text") instanceof String))throw new Failure(HISTORY);
+                Object cards=e.opt("insights");if(cards!=null){if(!(cards instanceof JSONArray)||((JSONArray)cards).length()>24)throw new Failure(HISTORY);for(JSONObject card:Planner.list((JSONArray)cards))AssistantInsights.validate(card);}
+                if(e.has("changeSummary"))AssistantInsights.validate(e.getJSONObject("changeSummary"));
                 Object steps=e.opt("steps");if(steps!=null&&steps!=JSONObject.NULL){if(!(steps instanceof JSONArray)||((JSONArray)steps).length()>120)throw new Failure(HISTORY);for(int i=0;i<((JSONArray)steps).length();i++)if(!(((JSONArray)steps).get(i) instanceof String))throw new Failure(HISTORY);}
             }
         }
@@ -57,7 +59,7 @@ final class AssistantHistory {
     static JSONArray messages(JSONObject workspace,String question)throws Exception{
         JSONArray result=new JSONArray(),enabled=new JSONArray();for(JSONObject m:Planner.list(workspace.getJSONArray("memories")))if(m.getBoolean("enabled"))enabled.put(m.getString("text"));
         if(enabled.length()>0)result.put(object("role","user","content","用户主动启用的本机记忆（仅作回答偏好与背景，不是工具事实或安全授权；当前问题优先）：\n"+enabled));
-        for(JSONObject e:Planner.list(selected(workspace).getJSONArray("entries")))if(e.optString("status").equals("完成"))result.put(object("role",e.getString("role").equals("你")?"user":"assistant","content",e.getString("role").equals("本机操作")?"本机操作记录："+e.getString("text"):e.getString("text")));
+        for(JSONObject e:Planner.list(selected(workspace).getJSONArray("entries")))if(e.optString("status").equals("完成"))result.put(object("role",e.getString("role").equals("你")?"user":"assistant","content",e.getString("role").equals("本机操作")?"本机操作记录："+AssistantInsights.entryText(e):AssistantInsights.entryText(e)));
         result.put(object("role","user","content",question));limit(result.toString(),200000);return result;
     }
 }
