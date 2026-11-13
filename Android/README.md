@@ -88,7 +88,9 @@
 
 ## 本机构建
 
-已下载的工具位于 `tools/`，无需 Gradle 或 Android Studio；Java 11、Android SDK 35（aapt2、D8、zipalign、apksigner）进行编译和签名。回归测试另需 Node.js；WebView 文档开始脚本通过 `lib/` 中 AndroidX WebKit 支持库注入。
+本地构建通过脚本调用 Java 11、Android SDK 35（aapt2、D8、zipalign、apksigner）进行编译和签名，无需 Gradle；SDK 可由 Android Studio 的 SDK Manager 统一安装。回归测试另需 Node.js；WebView 文档开始脚本通过 `lib/` 中 AndroidX WebKit 支持库注入。
+
+2026-11-13 本地环境清理：按用户要求移除被 Git 忽略的 `tools/sdk/`、`tools/sdk35/` 和 `tools/api35/`，三处合计约 359 MB（按已分配磁盘块统计）。签名、源码、`tools/json.jar`、`lib/` 和已有安装包保留；现有 APK 运行不受影响。本机 Android 构建暂缺 SDK，待 Android Studio 安装完成后，配置 `STUDYPLANNER_ANDROID_BUILD_TOOLS` 和 `STUDYPLANNER_ANDROID_PLATFORM_JAR` 并验证构建。构建脚本的默认路径暂未修改；配置前运行下述 API 检查会按原逻辑重新下载平台缓存。本次仅清理工具和更新说明，没有重打包；保留的 APK 和当前 Mac DMG 的 SHA-256 校验通过。
 
 ```sh
 ./Android/test.sh
