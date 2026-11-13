@@ -154,11 +154,10 @@ actor AssistantRunner {
                     proposed = true; await proposal(change)
                 }
                 queriedEvidence.append(result); await evidence(result)
-                if name == "preview_focus_today", let change {
+                if name == "preview_focus_today", change != nil {
                     // The complete result is already computed locally. Deliver it
                     // immediately, without spending the review window on another API round.
-                    return "已生成完整安排，尚未保存。\n\n" + change.summary
-                        + "\n\n请在「核对日程修改」卡片查看整套差异，点击「确认应用」后才会保存。"
+                    return "已生成完整安排，尚未保存。请核对下方方案和全部差异，点击「确认应用」后才会保存。"
                 }
                 if configuration.provider == .anthropic {
                     results.append(["type": "tool_result", "tool_use_id": call.id, "content": result.json])

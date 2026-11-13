@@ -181,7 +181,8 @@ struct AssistantView: View {
         let query = historySearch.trimmingCharacters(in: .whitespacesAndNewlines)
         return session.conversations.filter { conversation in
             query.isEmpty || conversation.title.localizedStandardContains(query)
-                || conversation.entries.contains { ["你", "助手"].contains($0.role) && $0.text.localizedStandardContains(query) }
+                || conversation.entries.contains { ["你", "助手"].contains($0.role)
+                    && ($0.text.localizedStandardContains(query) || $0.changeSummary?.plainText.localizedStandardContains(query) == true) }
         }.sorted { $0.updatedAt > $1.updatedAt }
     }
     private var history: some View {
@@ -392,6 +393,7 @@ struct AssistantView: View {
             } else {
                 if entry.role == "助手" {
                     AssistantMarkdownView(text: entry.text)
+                    if let summary = entry.changeSummary { AssistantChangeSummaryView(summary: summary) }
                 } else {
                     Text(entry.text).font(.system(size: 14)).foregroundStyle(.secondary).textSelection(.enabled)
                 }
@@ -402,7 +404,7 @@ struct AssistantView: View {
                     HStack(spacing: 18) {
                         Button {
                             NSPasteboard.general.clearContents()
-                            NSPasteboard.general.setString(AssistantMarkdown.copyText(entry.text), forType: .string)
+                            NSPasteboard.general.setString(entry.copyText, forType: .string)
                         } label: { Image(systemName: "doc.on.doc") }
                             .help("复制回答").accessibilityLabel("复制回答")
                         if entry.id == session.visibleEntries.last?.id {
@@ -418,7 +420,6 @@ struct AssistantView: View {
         VStack(alignment: .leading, spacing: 12) {
             Label("核对日程修改", systemImage: "calendar.badge.exclamationmark").font(.headline)
             Text(change.title).font(.headline).textSelection(.enabled)
-            Text(change.summary).font(.callout).textSelection(.enabled)
             DisclosureGroup("查看全部差异（\(change.details.count) 条）") {
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 12) {
@@ -429,7 +430,11 @@ struct AssistantView: View {
                     }
                 }.frame(maxHeight: 300)
             }
-            Text("尚未保存。删除课程会连同其任务和学习记录一起删除；保存前自动备份。方案两分钟内有效，课表更新或任务开始后需重新生成。").font(.caption).foregroundStyle(.secondary)
+            if change.presentation.counts[0].removed > 0 {
+                Text("删除课程会连同其任务和学习记录一起删除。").font(.callout).foregroundStyle(.orange)
+            }
+            Text("尚未保存 · 确认前可展开核对全部差异。保存前自动备份；方案两分钟内有效，课表更新或任务开始后需重新生成。")
+                .font(.caption).foregroundStyle(.secondary)
             HStack {
                 Button("取消修改") { session.dismissChange(change.id) }
                 Spacer()

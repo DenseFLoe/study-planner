@@ -11,6 +11,7 @@ struct AssistantChange: Identifiable, Sendable {
     let title: String
     let details: [String]
     let summary: String
+    let presentation: AssistantChangeSummary
     let createdAt: Date
     let expiresAt: Date
     let calendar: Calendar
@@ -71,6 +72,7 @@ enum AssistantActions {
     static var allDefinitions: [AssistantToolDefinition] { definitions + macDefinitions }
     static let macInstructions = """
     用户要今天尽可能安排某门课、其他课另找时间时，查询课程ID后优先用preview_focus_today一次生成整体方案，不逐日尝试preview_move_task，不要求用户指定其他课搬到哪天，不用修改全局优先级或开始日期代替当天目标。允许本机自动选择现有约束内的时间；只有对象不明或需要改变截止日期、可学时段等额外取舍才追问。该操作重排未来未确认课表，预览会报告未排入量；未排入不代表已找到无解证明。之后再次整体重排可能改变这次安排。
+    修改预览成功后，本机会自动在回答中展示方案卡片、增删改统计、适用时的七天计划量对比图和排程提醒。正文只用一两句概括目标并说明尚未保存、需点击确认应用，不重复工具summary的长段文字或逐项统计，不另外生成重复的预览图表。没有预览成功时正常解释原因，不声称已有卡片。
     """
 
     static func evidence(id: String, data: [String: Any]) throws -> AssistantToolEvidence {
@@ -152,7 +154,7 @@ enum AssistantActions {
             guard let id = UUID(uuidString: input["event"] ?? ""), let e = next.fixedEvents.first(where: { $0.id == id }) else { throw AssistantError.protocolError }; return e
         }
         let title: String
-        var goalSummary: String? = nil
+        var highlights: [String] = []
         var replan = true
         switch name {
         case "preview_add_course":
@@ -220,7 +222,11 @@ enum AssistantActions {
             next = draft.preview; replan = false
             title = "今天集中学习：" + selected.name
             let minutes = draft.todayTasks.reduce(0) { $0 + $1.durationMinutes }
-            goalSummary = "今天从 \(snapshot.stamp(draft.todayTasks[0].start, time: true)) 起，为「\(selected.name)」安排 \(minutes) 分钟，已预留两分钟供核对。其他课程和剩余课节统一安排到之后的日期；课程设置、固定事项和学习记录保留。长课节可能分段学习。之后再次整体重排可能调整此安排。"
+            highlights = [
+                "今天从 \(snapshot.stamp(draft.todayTasks[0].start, time: true)) 起，安排 \(minutes) 分钟，已预留两分钟供核对。",
+                "其他课程和剩余课节安排到之后的可行日期；未排入部分见提醒。长课节可能分段学习。",
+                "之后再次整体重排可能调整此安排。"
+            ]
         case "preview_move_task":
             guard let taskID = UUID(uuidString: input["task"]!) else { throw AssistantError.protocolError }
             let target = try date(input["target_date"]!)
@@ -239,7 +245,7 @@ enum AssistantActions {
         guard next != snapshot.state else { throw AssistantActionError.unchanged }
         let before = snapshot.state
         var details: [String] = []
-        func diff<T: Identifiable & Equatable>(_ old: [T], _ new: [T], label: String, describe: (T) -> String) -> String where T.ID == UUID {
+        func diff<T: Identifiable & Equatable>(_ old: [T], _ new: [T], label: String, describe: (T) -> String) -> AssistantChangeSummary.Count where T.ID == UUID {
             let a = Dictionary(uniqueKeysWithValues: old.map { ($0.id, $0) }), b = Dictionary(uniqueKeysWithValues: new.map { ($0.id, $0) })
             var added = 0, removed = 0, changed = 0
             for item in old where b[item.id] != item {
@@ -248,7 +254,7 @@ enum AssistantActions {
                 } else { removed += 1; details.append("删除\(label)：\(describe(item))") }
             }
             for item in new where a[item.id] == nil { added += 1; details.append("新增\(label)：\(describe(item))") }
-            return "\(label)：新增 \(added)，修改 \(changed)，删除 \(removed)"
+            return .init(category: label, added: added, modified: changed, removed: removed)
         }
         let summaries = [
             diff(before.courses, next.courses, label: "课程") { c in
@@ -271,13 +277,30 @@ enum AssistantActions {
         for risk in assessment.risks where risk.unscheduledMinutes > 0 {
             details.append("预览排程提醒：截至 \(snapshot.stamp(risk.deadline))，软件报告未排入 \(risk.unscheduledMinutes) 分钟；这不代表无解。")
         }
-        let summary = (goalSummary.map { $0 + "\n" } ?? "") + summaries.joined(separator: "\n") + "\n预览排程冲突：\(assessment.conflicts.count) 项；有未排入量的截止日期：\(assessment.risks.filter { $0.unscheduledMinutes > 0 }.count) 个，见全部差异。未排入量不代表无解。"
+        for conflict in assessment.conflicts {
+            let reason: String
+            if let rest = conflict.restConflict {
+                reason = "学习需 \(rest.requiredStudyMinutes) 分钟，至少需休息 \(rest.minimumRestMinutes) 分钟，可用 \(rest.availableMinutes) 分钟。"
+            } else if let continuous = conflict.minimumContinuousMinutes {
+                reason = "需要至少 \(continuous) 分钟连续空档。"
+            } else {
+                reason = "需要 \(conflict.requiredMinutes) 分钟，可用 \(conflict.availableMinutes) 分钟。"
+            }
+            details.append("预览排程约束冲突：\(snapshot.stamp(conflict.windowStart)) 至 \(snapshot.stamp(conflict.deadline))\n" + reason)
+        }
+        let presentation = AssistantChangeSummary(title: title, highlights: highlights, counts: summaries,
+            conflictCount: assessment.conflicts.count,
+            unscheduledDeadlineCount: assessment.risks.filter { $0.unscheduledMinutes > 0 }.count,
+            workload: AssistantChangeSummary.workload(before: before, after: next, snapshot: snapshot),
+            capturedAt: snapshot.stamp(now, time: true) + " " + calendar.timeZone.identifier)
+        try presentation.validate()
+        let summary = (highlights + summaries.map(\.text) + [presentation.warnings]).joined(separator: "\n")
         if before.settings.actualStudyStart != next.settings.actualStudyStart {
             details.append("本次安排从新的起点开始：" + (next.settings.actualStudyStart.map { snapshot.stamp($0, time: true) } ?? "未设置"))
         }
         guard details.count <= 10_000 else { throw AssistantError.limit }
         try AssistantSecrets.check(title + summary + details.joined(separator: "\n"))
-        return .init(snapshotID: snapshot.id, before: before, after: next, title: title, details: details, summary: summary,
+        return .init(snapshotID: snapshot.id, before: before, after: next, title: title, details: details, summary: summary, presentation: presentation,
                      createdAt: now, expiresAt: Date().addingTimeInterval(120), calendar: calendar)
     }
 }

@@ -7,7 +7,8 @@ enum AssistantConversationContext {
         for entry in history {
             if entry.status == "完成", ["你", "助手", "本机操作"].contains(entry.role) {
                 messages.append(.init(role: entry.role == "你" ? "user" : "assistant",
-                    content: entry.role == "本机操作" ? "本机操作记录：" + entry.text : entry.text))
+                    content: entry.role == "本机操作" ? "本机操作记录：" + entry.text
+                        : entry.text + (entry.changeSummary.map { "\n\n历史方案快照（不是当前课表）：\n" + $0.plainText } ?? "")))
             } else if entry.role == "你", entry.status == "未完成" || entry.status == "上次已中断 · 未续传" {
                 // Retain the request, never failed tool outputs or a fabricated answer.
                 // Legacy records remain local-only, as before.

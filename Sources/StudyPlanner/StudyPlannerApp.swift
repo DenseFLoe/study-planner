@@ -112,6 +112,10 @@ struct StudyPlannerApp: App {
             AssistantSimulation.preview(actions: true)
             return
         }
+        if arguments.contains("--assistant-focus-preview") {
+            AssistantSimulation.preview(focus: true)
+            return
+        }
         if arguments.contains("--assistant-charts-preview") {
             AssistantSimulation.preview(charts: true)
             return

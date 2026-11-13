@@ -272,7 +272,8 @@ import StudyCore
                     guard self.runID == id, self.selectedID == conversationID else { return }
                     self.recordActivity("查询完成")
                     self.markPending("完成")
-                    self.append(.init(role: "助手", text: AssistantMarkdown.answerText(answer), status: "完成"))
+                    self.append(.init(role: "助手", text: AssistantMarkdown.answerText(answer), status: "完成",
+                                      changeSummary: self.pendingChange?.presentation))
                     self.activity = "回答完成 · 可继续追问"
                 } catch {
                     guard self.runID == id else { return }

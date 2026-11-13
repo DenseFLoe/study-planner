@@ -138,7 +138,8 @@ enum AssistantSimulation {
             if let approval = session.approval { approvals += 1; session.decide(approval.id, allow: true) }
             try await Task.sleep(for: .milliseconds(10))
         }
-        guard approvals == 1, let pending = session.pendingChange, store.state == before else { throw AssistantError.protocolError }
+        guard approvals == 1, let pending = session.pendingChange, store.state == before,
+              session.entries.last?.changeSummary == pending.presentation else { throw AssistantError.protocolError }
         await session.confirmChange(pending.id)
         guard normalized(store.state) == normalized(pending.after), session.undoChange != nil, !store.backupEntries.isEmpty else { throw AssistantError.protocolError }
         if move {
@@ -163,14 +164,19 @@ enum AssistantSimulation {
             guard let change, change.after.courses == snapshot.state.courses,
                   change.after.completions == snapshot.state.completions,
                   change.after.tasks.allSatisfy({ $0.start >= snapshot.now }),
-                  answer.contains("尚未保存"), await transport.requests.count == 2 else { throw AssistantError.protocolError }
+                  answer.contains("尚未保存"), !answer.contains("新增"),
+                  change.presentation.workload != nil, await transport.requests.count == 2 else { throw AssistantError.protocolError }
         }
     }
-    @MainActor static func preview(actions: Bool = false, charts: Bool = false) {
+    @MainActor static func preview(actions: Bool = false, charts: Bool = false, focus: Bool = false) {
         let app = NSApplication.shared
         app.setActivationPolicy(.regular)
         let controller = AssistantWindowController()
-        controller.show(session: charts ? AssistantChartSimulation.session() : (actions ? try! actionSession().0 : session()))
+        let focusSession = AssistantSession(historyStore: nil, simulated: true, snapshot: { snapshot() }, transportFactory: {
+            AssistantMockTransport(script: [("list_courses", ["offset": "0"]), ("preview_focus_today", ["course": courseID.uuidString])])
+        })
+        focusSession.configuration = configuration(); focusSession.question = "今天集中学习合成课程，其他课自动另找时间。"
+        controller.show(session: focus ? focusSession : (charts ? AssistantChartSimulation.session() : (actions ? try! actionSession().0 : session())))
         // Keep the same controller/session alive for closing/reopening via the menu.
         let menu = NSMenu(), appItem = NSMenuItem(), appMenu = NSMenu()
         menu.addItem(appItem); appItem.submenu = appMenu

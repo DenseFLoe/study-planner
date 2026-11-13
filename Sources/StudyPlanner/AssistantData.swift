@@ -127,6 +127,7 @@ struct AssistantChatEntry: Codable, Identifiable, Sendable {
     var steps: [String]?
     var failureReason: AssistantError?
     var usage: AssistantTurnUsage?
+    var changeSummary: AssistantChangeSummary?
 }
 struct AssistantConversation: Codable, Identifiable, Sendable {
     var id = UUID()
@@ -210,6 +211,9 @@ struct AssistantHistoryStore: AssistantHistoryPersistence {
               value.memories.count <= 50, Set(value.memories.map(\.id)).count == value.memories.count,
               value.memories.allSatisfy({ !$0.text.isEmpty && $0.text.utf8.count <= 2000 }) else { throw AssistantError.history }
         guard value.conversations.allSatisfy({ $0.entries.allSatisfy { $0.usage?.valid ?? true } }) else { throw AssistantError.history }
+        for conversation in value.conversations {
+            for entry in conversation.entries { try entry.changeSummary?.validate() }
+        }
         try AssistantSecrets.check(String(decoding: assistantJSON(value), as: UTF8.self))
     }
     func save(_ value: AssistantWorkspace) throws {
