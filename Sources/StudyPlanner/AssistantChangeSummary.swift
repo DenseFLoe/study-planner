@@ -68,5 +68,6 @@ struct AssistantChangeSummary: Codable, Equatable, Sendable {
 extension AssistantChatEntry {
     var copyText: String {
         AssistantMarkdown.copyText(text) + (changeSummary.map { "\n\n" + $0.plainText } ?? "")
+            + (insights ?? []).map { "\n\n" + $0.plainText }.joined()
     }
 }

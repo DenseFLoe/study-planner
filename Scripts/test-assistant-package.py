@@ -35,6 +35,7 @@ def main():
             assert "move=preview-confirm-reopen-undo" in result.stdout
             assert "focus=compound-preview" in result.stdout
             assert "charts=3-native-verified" in result.stdout
+            assert "ASSISTANT_INSIGHTS_PROBE_PASS cards=5 history=verified externalRequests=0" in result.stdout
             assert "usage=per-turn-verified" in result.stdout
             print(result.stdout.strip())
             if args.windows:

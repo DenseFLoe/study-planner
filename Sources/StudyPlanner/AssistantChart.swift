@@ -43,6 +43,21 @@ struct AssistantChart: Codable, Equatable, Sendable {
         return value
     }
     func valueText(_ value: Double) -> String { value.formatted(.number.precision(.fractionLength(0...2))) }
+    /// Compact axis captions only; selection, copied data and tables retain full dates.
+    func axisLabel(_ label: String) -> String {
+        if label.count == 10 {
+            let parts = label.split(separator: "-")
+            if parts.count == 3, parts[0].count == 4, Int(parts[0]) != nil,
+               let month = Int(parts[1]), let day = Int(parts[2]), (1...12).contains(month), (1...31).contains(day) {
+                return "\(month)/\(day)"
+            }
+        }
+        let parts = label.components(separatedBy: " · ")
+        if parts.count == 2, let index = Int(parts[0]), parts[1].count == 10, axisLabel(parts[1]) != parts[1] {
+            return "窗口\(index)"
+        }
+        return label
+    }
     var tableText: String {
         ([(["项目"] + series.map { $0.name + (unit.isEmpty ? "" : "（\(unit)）") }).joined(separator: "\t")]
             + labels.indices.map { row in ([labels[row]] + series.map { valueText($0.values[row]) }).joined(separator: "\t") })

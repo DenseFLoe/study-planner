@@ -66,6 +66,7 @@ actor AssistantRunner {
              activity: @escaping @MainActor (String) -> Void,
              evidence: @escaping @MainActor (AssistantToolEvidence) -> Void,
              proposal: @escaping @MainActor (AssistantChange) -> Void = { _ in },
+             insights: @escaping @MainActor ([AssistantInsight]) -> Void = { _ in },
              usage: @escaping @MainActor (AssistantUsageEvent) -> Void = { _ in }) async throws -> String {
         guard !started else { throw AssistantError.protocolError }
         started = true; deadline = .now.advanced(by: .seconds(1200))
@@ -74,10 +75,11 @@ actor AssistantRunner {
         try AssistantSecrets.check(String(decoding: assistantJSON(messages), as: UTF8.self), key: key)
         try AssistantSecrets.check(configuration.baseURL, key: key)
         try AssistantSecrets.check(configuration.model, key: key)
-        let instructions = AssistantTools.instructions + "\n" + AssistantActions.instructions + "\n" + AssistantActions.macInstructions + "\n" + AssistantCharts.instructions + "\n本机日期：\(snapshot.stamp(snapshot.now))；当前时间：\(snapshot.stamp(snapshot.now, time: true))；时区：\(snapshot.calendar.timeZone.identifier)。"
+        let instructions = AssistantTools.instructions + "\n" + AssistantActions.instructions + "\n" + AssistantActions.macInstructions + "\n" + AssistantCharts.instructions + "\n" + AssistantInsights.instructions + "\n本机日期：\(snapshot.stamp(snapshot.now))；当前时间：\(snapshot.stamp(snapshot.now, time: true))；时区：\(snapshot.calendar.timeZone.identifier)。"
         var conversation = AssistantWire.messages(messages, configuration: configuration, instructions: instructions)
         var gate = AssistantApprovalGate(), callIDs = Set<String>()
         var queriedEvidence: [AssistantToolEvidence] = []
+        var insightQueries: [AssistantInsightQuery] = []
         var scopeConfirmed = scopeAlreadyConfirmed, proposed = false
         while true {
             try check()
@@ -118,8 +120,10 @@ actor AssistantRunner {
             guard try await currentSnapshotID() == snapshot.id else { throw AssistantError.snapshotChanged }
             let reply = try AssistantWire.reply(response, configuration: configuration)
             if reply.calls.isEmpty {
-                return AssistantCharts.materialize(reply.text, evidence: queriedEvidence,
+                let answer = AssistantCharts.materialize(reply.text, evidence: queriedEvidence,
                     capturedAt: snapshot.stamp(snapshot.now, time: true) + " " + snapshot.calendar.timeZone.identifier)
+                if !proposed { await insights(AssistantInsights.build(insightQueries, answer: answer)) }
+                return answer
             }
             guard toolCount + reply.calls.count <= 24 else { throw AssistantError.limit }
             // Validate the whole batch before executing any tool or publishing a preview.
@@ -154,6 +158,7 @@ actor AssistantRunner {
                     proposed = true; await proposal(change)
                 }
                 queriedEvidence.append(result); await evidence(result)
+                insightQueries.append(.init(name: name, input: arguments, evidence: result))
                 if name == "preview_focus_today", change != nil {
                     // The complete result is already computed locally. Deliver it
                     // immediately, without spending the review window on another API round.

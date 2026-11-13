@@ -97,7 +97,12 @@ struct AssistantChartView: View {
         .chartXScale(domain: chart.labels)
         .chartYScale(domain: .automatic(includesZero: true))
         .chartXAxis {
-            AxisMarks(values: axisLabels) { _ in AxisTick(); AxisValueLabel() }
+            AxisMarks(values: axisLabels) { value in
+                AxisTick()
+                AxisValueLabel {
+                    if let label = value.as(String.self) { Text(chart.axisLabel(label)) }
+                }
+            }
         }
         .chartYAxisLabel(chart.unit)
         .chartXSelection(value: $selectedLabel)

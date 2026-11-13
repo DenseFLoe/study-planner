@@ -168,7 +168,7 @@ enum AssistantSimulation {
                   change.presentation.workload != nil, await transport.requests.count == 2 else { throw AssistantError.protocolError }
         }
     }
-    @MainActor static func preview(actions: Bool = false, charts: Bool = false, focus: Bool = false) {
+    @MainActor static func preview(actions: Bool = false, charts: Bool = false, focus: Bool = false, insights: Bool = false) {
         let app = NSApplication.shared
         app.setActivationPolicy(.regular)
         let controller = AssistantWindowController()
@@ -176,7 +176,7 @@ enum AssistantSimulation {
             AssistantMockTransport(script: [("list_courses", ["offset": "0"]), ("preview_focus_today", ["course": courseID.uuidString])])
         })
         focusSession.configuration = configuration(); focusSession.question = "今天集中学习合成课程，其他课自动另找时间。"
-        controller.show(session: focus ? focusSession : (charts ? AssistantChartSimulation.session() : (actions ? try! actionSession().0 : session())))
+        controller.show(session: insights ? AssistantInsightSimulation.session() : (focus ? focusSession : (charts ? AssistantChartSimulation.session() : (actions ? try! actionSession().0 : session()))))
         // Keep the same controller/session alive for closing/reopening via the menu.
         let menu = NSMenu(), appItem = NSMenuItem(), appMenu = NSMenu()
         menu.addItem(appItem); appItem.submenu = appMenu
@@ -235,6 +235,8 @@ enum AssistantSimulation {
             try await actionProbe(move: true)
             try await focusProbe()
             try await AssistantChartSimulation.probe()
+            try await AssistantInsightSimulation.probe()
+            print("ASSISTANT_INSIGHTS_PROBE_PASS cards=5 history=verified externalRequests=0")
             print("ASSISTANT_PACKAGE_PROBE_PASS protocols=3 queries=18 externalRequests=0 credentialsUsed=0 privacy=verified lessonLinks=verified timeCheck=verified readableDetails=verified actions=preview-confirm-undo move=preview-confirm-reopen-undo focus=compound-preview charts=3-native-verified usage=per-turn-verified")
             return true
         } catch { print("ASSISTANT_PACKAGE_PROBE_FAIL: \(AssistantError.safe(error).rawValue)"); return false }

@@ -229,6 +229,7 @@ import StudyCore
                         $0.priceNotice = pricing.notice
                     }
                     var answer = "", scopeConfirmed = false, refreshes = 0
+                    var insights: [AssistantInsight] = []
                     while true {
                         try Task.checkCancellation()
                         guard self.runID == id else { return }
@@ -252,6 +253,7 @@ import StudyCore
                                 }, activity: { [weak self] value in if self?.runID == id { self?.recordActivity(value) } },
                                 evidence: { [weak self] value in if self?.runID == id { self?.evidence.append(value) } },
                                 proposal: { [weak self] value in if self?.runID == id { self?.pendingChange = value } },
+                                insights: { value in insights = value },
                                 usage: { [weak self] event in
                                     guard let self, self.runID == id else { return }
                                     self.updateUsage { $0.record(event, pricing: pricing, model: config.model) }
@@ -262,6 +264,7 @@ import StudyCore
                         } catch AssistantError.snapshotChanged {
                             guard self.runID == id else { return }
                             self.evidence = []; self.pendingChange = nil
+                            insights = []
                             // Bound automatic re-queries so continuous edits cannot incur unlimited requests.
                             guard refreshes < 3 else { throw AssistantError.snapshotChanged }
                             refreshes += 1
@@ -273,7 +276,7 @@ import StudyCore
                     self.recordActivity("查询完成")
                     self.markPending("完成")
                     self.append(.init(role: "助手", text: AssistantMarkdown.answerText(answer), status: "完成",
-                                      changeSummary: self.pendingChange?.presentation))
+                                      changeSummary: self.pendingChange?.presentation, insights: insights.isEmpty ? nil : insights))
                     self.activity = "回答完成 · 可继续追问"
                 } catch {
                     guard self.runID == id else { return }

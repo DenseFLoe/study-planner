@@ -128,6 +128,8 @@ struct AssistantChatEntry: Codable, Identifiable, Sendable {
     var failureReason: AssistantError?
     var usage: AssistantTurnUsage?
     var changeSummary: AssistantChangeSummary?
+    var insights: [AssistantInsight]?
+    var hasVisualOverview: Bool { changeSummary != nil || !(insights ?? []).isEmpty }
 }
 struct AssistantConversation: Codable, Identifiable, Sendable {
     var id = UUID()
@@ -212,7 +214,11 @@ struct AssistantHistoryStore: AssistantHistoryPersistence {
               value.memories.allSatisfy({ !$0.text.isEmpty && $0.text.utf8.count <= 2000 }) else { throw AssistantError.history }
         guard value.conversations.allSatisfy({ $0.entries.allSatisfy { $0.usage?.valid ?? true } }) else { throw AssistantError.history }
         for conversation in value.conversations {
-            for entry in conversation.entries { try entry.changeSummary?.validate() }
+            for entry in conversation.entries {
+                try entry.changeSummary?.validate()
+                guard (entry.insights?.count ?? 0) <= 24 else { throw AssistantError.history }
+                for insight in entry.insights ?? [] { try insight.validate() }
+            }
         }
         try AssistantSecrets.check(String(decoding: assistantJSON(value), as: UTF8.self))
     }

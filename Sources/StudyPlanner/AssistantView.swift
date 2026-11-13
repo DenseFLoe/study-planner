@@ -182,7 +182,8 @@ struct AssistantView: View {
         return session.conversations.filter { conversation in
             query.isEmpty || conversation.title.localizedStandardContains(query)
                 || conversation.entries.contains { ["你", "助手"].contains($0.role)
-                    && ($0.text.localizedStandardContains(query) || $0.changeSummary?.plainText.localizedStandardContains(query) == true) }
+                    && ($0.text.localizedStandardContains(query) || $0.changeSummary?.plainText.localizedStandardContains(query) == true
+                        || ($0.insights ?? []).contains { $0.plainText.localizedStandardContains(query) }) }
         }.sorted { $0.updatedAt > $1.updatedAt }
     }
     private var history: some View {
@@ -363,14 +364,14 @@ struct AssistantView: View {
                     }.frame(maxWidth: 720).frame(maxWidth: .infinity).padding(.horizontal, 24).padding(.vertical, 18)
                 }
                 .onChange(of: session.entries.last?.id) { _, _ in
-                    if let entry = session.entries.last, entry.changeSummary != nil {
+                    if let entry = session.entries.last, entry.hasVisualOverview {
                         proxy.scrollTo(entry.id, anchor: .top)
                     } else { proxy.scrollTo("bottom", anchor: .bottom) }
                 }
                 .onChange(of: session.busy) { _, busy in
                     // Finish after history persistence and the final activity update,
                     // so the running-state scroll cannot hide a new card's overview.
-                    if !busy, let entry = session.entries.last, entry.changeSummary != nil {
+                    if !busy, let entry = session.entries.last, entry.hasVisualOverview {
                         proxy.scrollTo(entry.id, anchor: .top)
                     }
                 }
@@ -403,6 +404,18 @@ struct AssistantView: View {
                 }
             } else {
                 if entry.role == "助手" {
+                    if let insights = entry.insights {
+                        ForEach(insights.indices.prefix(3), id: \.self) { index in
+                            AssistantInsightView(insight: insights[index])
+                        }
+                        if insights.count > 3 {
+                            DisclosureGroup("更多查询卡片（\(insights.count - 3)）") {
+                                ForEach(insights.indices.dropFirst(3), id: \.self) { index in
+                                    AssistantInsightView(insight: insights[index]).padding(.top, 10)
+                                }
+                            }
+                        }
+                    }
                     AssistantMarkdownView(text: entry.text)
                     if let summary = entry.changeSummary { AssistantChangeSummaryView(summary: summary) }
                 } else {

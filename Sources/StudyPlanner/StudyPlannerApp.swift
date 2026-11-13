@@ -120,6 +120,10 @@ struct StudyPlannerApp: App {
             AssistantSimulation.preview(charts: true)
             return
         }
+        if arguments.contains("--assistant-insights-preview") {
+            AssistantSimulation.preview(insights: true)
+            return
+        }
         if arguments.contains("--assistant-preview") {
             AssistantSimulation.preview()
             return
